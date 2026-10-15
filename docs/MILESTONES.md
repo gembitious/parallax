@@ -42,7 +42,7 @@ baseline 표가 `bench/results.md`에 있다.
 ## M2 — 히스토리
 - [x] 파일 히스토리: `git log -- <path>`를 스트리밍하고, 파일이 rename으로 생긴 커밋에서 옛 이름의 `git log` 구간을 이어 붙인다
       (두 방식을 측정해 `--follow`는 쓰지 않기로 확정: CLAUDE.md 결정 기록, bench/results.md) — Windows·macOS 실기 확인 필요
-- [ ] 라인/범위 히스토리 (`git log -L`), 코드 뷰 선택 영역에서 바로 진입
+- [x] 라인/범위 히스토리 (`git log -L`), 코드 뷰 선택 영역에서 바로 진입(`L`, `J`/`K`로 선택) — Windows·macOS 실기 확인 필요
 - [x] 커밋 상세: gix 트리 diff + `@codemirror/merge` (분할/통합 전환), 히스토리에서 열면 해당 파일 diff만
       — Windows·macOS 실기 확인 필요
 - [ ] Bloom 필터 감지 → 없으면 "가속 설정" 버튼

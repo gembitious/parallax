@@ -1,4 +1,5 @@
 // 파일 히스토리: 파일을 바꾼 커밋 목록(가상 스크롤). 이름을 바꾸기 전 구간은 옛 이름으로 이어진다.
+// 라인 히스토리(`lines`)면 그 줄 범위를 바꾼 커밋 목록과, 고른 커밋이 그 범위를 어떻게 바꿨는지(hunk)를 아래에 보인다.
 // 키: j/k 이동, Enter 커밋 상세(이 파일 diff만), b 그 리비전 blame, , 바꾸기 전 리비전 blame, y sha 복사,
 //     / 검색, n/N 다음·이전 결과, q 뒤로, ? 도움말.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -10,10 +11,20 @@ import type { Navigation } from "../nav";
 import { afterPaint, nowMs, record } from "../perf";
 import { findMatch, formerPaths, matches, scrollToRow, visibleRange } from "./list";
 import { openHistory } from "./session";
-import { PAGE, type HistoryMeta, type HistoryStats, type HistoryTarget, type LogEntry } from "./types";
+import {
+  PAGE,
+  type HistoryMeta,
+  type HistoryStats,
+  type HistoryTarget,
+  type Hunk,
+  type LineRange,
+  type LogEntry,
+} from "./types";
 
 type Props = {
   target: HistoryTarget;
+  /** 있으면 그 줄 범위의 라인 히스토리 */
+  lines?: LineRange | null;
   /** 탐색 스택 맨 위(보이는 화면)인가 */
   active: boolean;
   depth: number;
@@ -37,7 +48,7 @@ const TOAST_MS = 1800;
 const PAGE_SLACK_MS = 30;
 const CACHE_HIT_BUDGET_MS = 16;
 
-export function HistoryView({ target, active, depth, cold = false, onShown, onBack, onNavigate }: Props) {
+export function HistoryView({ target, lines = null, active, depth, cold = false, onShown, onBack, onNavigate }: Props) {
   const [meta, setMeta] = useState<HistoryMeta | null>(null);
   /** 받은 커밋. 수천 개가 쌓이므로 배열은 고치고 길이만 상태로 둔다. */
   const entries = useRef<LogEntry[]>([]);
@@ -72,7 +83,7 @@ export function HistoryView({ target, active, depth, cold = false, onShown, onBa
 
   // 히스토리를 받는다.
   useEffect(() => {
-    const handle = openHistory(target, (event) => {
+    const handle = openHistory(target, lines, (event) => {
       switch (event.kind) {
         case "meta": {
           const { kind: _kind, ...m } = event;
@@ -134,9 +145,13 @@ export function HistoryView({ target, active, depth, cold = false, onShown, onBa
         { label: "표시", ms: end - t.t0 },
         { label: "끝", ms: stats.totalMs },
       ].filter((p) => Number.isFinite(p.ms));
+      const range = latest.current.meta?.lines ?? lines;
+      const what = range
+        ? `라인 히스토리 ${latest.current.meta?.path ?? target.path}:${range.start}-${range.end}`
+        : `히스토리 ${latest.current.meta?.path ?? target.path}`;
       record({
         kind: "history",
-        label: `히스토리 ${latest.current.meta?.path ?? target.path}${stats.cached ? " (캐시)" : ""}${cold ? " (콜드 스타트)" : ""}`,
+        label: `${what}${stats.cached ? " (캐시)" : ""}${cold ? " (콜드 스타트)" : ""}`,
         totalMs: end - t.t0,
         budgetMs,
         phases,
@@ -206,7 +221,7 @@ export function HistoryView({ target, active, depth, cold = false, onShown, onBa
     onNavigate({ kind: "commit", repo: at.m.repo, rev: at.e.sha, path: file ? at.e.path : null, only: file });
   };
 
-  /** 그 리비전(`parent`면 바꾸기 전 리비전)의 파일 blame */
+  /** 그 리비전(`parent`면 바꾸기 전 리비전)의 파일 blame. 라인 히스토리면 그 범위가 시작하는 줄로 간다. */
   const openBlame = (parent: boolean) => {
     const at = current();
     if (!at) return;
@@ -216,18 +231,21 @@ export function HistoryView({ target, active, depth, cold = false, onShown, onBa
       return;
     }
     const first = e.parents[0];
+    const hunk = e.hunks?.[0];
     if (parent) {
       if (e.status === "added" || !first) {
         showToast("이 커밋에서 생긴 파일이라 앞 버전이 없다");
         return;
       }
       // 이름을 바꾼 커밋의 앞 버전은 옛 이름이다.
-      onNavigate({ kind: "file", target: { repo: m.repo, path: e.oldPath ?? e.path, rev: first }, line: null });
+      const line = hunk ? Math.max(1, hunk.oldStart) : null;
+      onNavigate({ kind: "file", target: { repo: m.repo, path: e.oldPath ?? e.path, rev: first }, line });
     } else if (e.status === "deleted") {
       // 지운 커밋에는 파일이 없다. 지우기 전 버전을 연다.
       if (first) onNavigate({ kind: "file", target: { repo: m.repo, path: e.path, rev: first }, line: null });
     } else {
-      onNavigate({ kind: "file", target: { repo: m.repo, path: e.path, rev: e.sha }, line: null });
+      const line = hunk ? Math.max(1, hunk.newStart) : (m.lines?.start ?? null);
+      onNavigate({ kind: "file", target: { repo: m.repo, path: e.path, rev: e.sha }, line });
     }
   };
 
@@ -321,15 +339,21 @@ export function HistoryView({ target, active, depth, cold = false, onShown, onBa
   const all = entries.current;
   const { start, end } = visibleRange(viewport.top, viewport.height, ROW_HEIGHT, count);
   const path = meta?.path ?? target.path;
+  const range = meta?.lines ?? lines;
   const former = progress.kind === "done" ? formerPaths(all, path) : [];
   const chosen = all[selected];
   const query = search.query.trim();
 
   return (
-    <section className="history">
+    <section className={lines ? "history line-history" : "history"}>
       <header className="blame-header">
-        <span className="badge">히스토리</span>
+        <span className="badge">{lines ? "라인 히스토리" : "히스토리"}</span>
         <FilePath path={path} />
+        {range && (
+          <span className="badge mono" title={meta?.rev || !meta ? undefined : "작업트리 줄 번호를 HEAD 버전의 줄로 옮긴 범위"}>
+            {range.start === range.end ? `${range.start}줄` : `${range.start}–${range.end}줄`}
+          </span>
+        )}
         {former.length > 0 && (
           <span className="badge" title={`이전 이름: ${former.join(" ← ")}`}>
             이름 바뀜 {former.length}번
@@ -416,7 +440,7 @@ export function HistoryView({ target, active, depth, cold = false, onShown, onBa
         </div>
         {progress.kind === "done" && count === 0 && (
           <div className="blame-message">
-            <p>이 경로를 바꾼 커밋이 없다.</p>
+            <p>{lines ? "이 줄들을 바꾼 커밋이 없다." : "이 경로를 바꾼 커밋이 없다."}</p>
           </div>
         )}
         {progress.kind === "failed" && (
@@ -425,6 +449,7 @@ export function HistoryView({ target, active, depth, cold = false, onShown, onBa
           </div>
         )}
       </div>
+      {lines && chosen && <Hunks key={chosen.sha} entry={chosen} />}
       {chosen && (
         <footer className="history-detail">
           <span className="mono" title="y로 복사">
@@ -481,6 +506,59 @@ function Row({ entry, path, nowMs }: { entry: LogEntry; path: string; nowMs: num
         {relativeTime(entry.authorTime, nowMs)}
       </span>
     </>
+  );
+}
+
+/** 라인 히스토리: 고른 커밋이 그 줄 범위를 어떻게 바꿨는지(옛·새 줄 번호와 함께) */
+function Hunks({ entry }: { entry: LogEntry }) {
+  const hunks = entry.hunks ?? [];
+  return (
+    <div className="history-hunks" aria-label="바뀐 줄">
+      {hunks.length === 0 ? (
+        <p className="muted">이 커밋(merge)은 이 줄들을 직접 바꾸지 않았다. Enter로 커밋 상세를 본다.</p>
+      ) : (
+        hunks.map((hunk, i) => <HunkTable key={i} hunk={hunk} />)
+      )}
+    </div>
+  );
+}
+
+function HunkTable({ hunk }: { hunk: Hunk }) {
+  let oldLine = hunk.oldStart;
+  let newLine = hunk.newStart;
+  return (
+    <table className="hunk">
+      <thead>
+        <tr>
+          <td colSpan={3} className="hunk-header mono">
+            @@ −{hunk.oldStart},{hunk.oldLines} +{hunk.newStart},{hunk.newLines} @@
+          </td>
+        </tr>
+      </thead>
+      <tbody>
+        {hunk.lines.map((line, i) => {
+          const kind = line[0];
+          let before = "";
+          let after = "";
+          if (kind === " ") {
+            before = String(oldLine++);
+            after = String(newLine++);
+          } else if (kind === "-") {
+            before = String(oldLine++);
+          } else if (kind === "+") {
+            after = String(newLine++);
+          }
+          const className = kind === "+" ? "add" : kind === "-" ? "del" : kind === "\\" ? "note" : "ctx";
+          return (
+            <tr key={i} className={className}>
+              <td className="ln">{before}</td>
+              <td className="ln">{after}</td>
+              <td className="code">{kind === "\\" ? line.slice(1).trim() : line.slice(1)}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
   );
 }
 

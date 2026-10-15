@@ -28,7 +28,7 @@ const VIEW_NAMES: Record<ViewRequest["kind"], string> = {
   graph: "커밋 그래프 (M3)",
   blame: "blame",
   log: "파일 히스토리",
-  lineLog: "라인 히스토리 (M2)",
+  lineLog: "라인 히스토리",
   show: "커밋 상세",
 };
 
@@ -226,7 +226,12 @@ export default function App() {
                       cold={entry.via === "request" && request.cold}
                     />
                   ) : entry.view === "history" ? (
-                    <HistoryView {...common} target={entry.target} cold={entry.via === "request" && request.cold} />
+                    <HistoryView
+                      {...common}
+                      target={entry.target}
+                      lines={entry.lines}
+                      cold={entry.via === "request" && request.cold}
+                    />
                   ) : (
                     <CommitView {...common} repo={entry.repo} rev={entry.rev} path={entry.path} only={entry.only} />
                   )}

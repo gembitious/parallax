@@ -130,6 +130,9 @@ linux-container는 클라우드 VM(4코어, git 2.43.0)에서 잰 참고값이�
   - rename 원본 찾기는 gix의 rename 추적(짝 1,000개 한도라 문서 906개를 옮긴 커밋에서 놓쳤다) 대신 파일 하나만
     git과 같은 유사도로 본다. 그 커밋에서 3ms다.
   - 화면으로 보내는 JSON은 git 출력의 약 3배(`Makefile` 1.0MB)다. 커밋마다 부모 sha, 메일, 경로가 들어 있다.
+- **라인 히스토리 구현(M2-c):** 앱 요청(`plx-line-log`: `git log -L` + hunk 해석 + 줄 내용 디코드)의 첫 커밋은
+  git의 첫 출력과 측정 잡음 안에서 같다(2026-10-15 linux-container, 3회 중앙값, Bloom 있음: `diff.c` 258 → 194ms,
+  `textModel.ts` 294 → 283ms, commit-graph 없음: 1463 → 1399, 2887 → 2965ms). 걸리는 시간은 거의 다 git이다.
 - **blame:** 첫 블록은 Bloom 필터와 관계없이 11~26ms지만 전체는 0.4~3.9초다. incremental 스트리밍과 커밋 고정 캐시가 필요하다.
 - **blame 세션 오버헤드(M1):** 앱의 blame 요청(`plx-blame`: 저장소 찾기·git 실행·파일 읽기·파싱·JSON 직렬화)은
   내용(meta)을 1~2ms에 내고, 첫 묶음은 git의 첫 블록과 측정 잡음 안에서 같다(−4~+0.5ms, 2026-10-15 linux-container,

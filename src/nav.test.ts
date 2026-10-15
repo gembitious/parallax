@@ -47,7 +47,16 @@ describe("viewReducer", () => {
     const show = viewReducer(state, { type: "request", request: request(2, { kind: "show", rev: "HEAD~1" }), receivedMs: 0 });
     expect(show.stack).toMatchObject([{ view: "commit", repo: "/repo", rev: "HEAD~1", path: null, only: false, via: "request" }]);
     const log = viewReducer(show, { type: "request", request: request(3, { kind: "log", path: "/repo/a.rs" }), receivedMs: 0 });
-    expect(log.stack).toMatchObject([{ view: "history", target: { repo: null, path: "/repo/a.rs", rev: null }, via: "request" }]);
+    expect(log.stack).toMatchObject([
+      { view: "history", target: { repo: null, path: "/repo/a.rs", rev: null }, lines: null, via: "request" },
+    ]);
+    const lineLog = viewReducer(log, {
+      type: "request",
+      request: request(4, { kind: "lineLog", path: "/repo/a.rs", start: 3, end: 9 }),
+      receivedMs: 0,
+    });
+    expect(lineLog.stack).toMatchObject([{ view: "history", lines: { start: 3, end: 9 }, via: "request" }]);
+    expect(titleOf(lineLog.stack[0])).toBe("라인 히스토리 /repo/a.rs:3-9");
   });
 
   it("blame → 히스토리 → 커밋 상세(그 파일만) → 그 리비전 blame", () => {
@@ -71,7 +80,13 @@ describe("viewReducer", () => {
       ["blame", "file"],
     ]);
     expect(state.stack[2]).toMatchObject({ only: true, path: "a.rs" });
+    expect(state.stack[1]).toMatchObject({ lines: null });
     expect(titleOf(state.stack[1])).toBe("히스토리 a.rs @r1");
+    state = viewReducer(state, {
+      type: "navigate",
+      navigation: { kind: "history", target: { repo: "/repo", path: "a.rs", rev: null }, lines: { start: 2, end: 2 } },
+    });
+    expect(state.stack[4]).toMatchObject({ view: "history", lines: { start: 2, end: 2 }, via: "history" });
   });
 
   it("blame → 커밋 상세 → 파일 blame", () => {

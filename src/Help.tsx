@@ -15,6 +15,7 @@ const TITLES: Record<HelpView, string> = { blame: "blame", commit: "커밋 상�
 const KEYS: Record<HelpView, Key[]> = {
   blame: [
     { keys: "j / k", what: "아래·위 줄" },
+    { keys: "J / K", what: "줄 선택 넓히기 (라인 히스토리 범위)" },
     { keys: "Enter", what: "이 줄 커밋의 상세" },
     { keys: ",", what: "부모 리비전 blame (이 줄을 바꾸기 전)" },
     { keys: "< / >", what: "이전·다음 리비전 (파일을 바꾼 커밋 단위)" },
@@ -23,7 +24,7 @@ const KEYS: Record<HelpView, Key[]> = {
     { keys: "n / N", what: "다음·이전 검색 결과" },
     { keys: "거터 클릭", what: "커밋 카드 고정" },
     { keys: "H", what: "파일 히스토리 (이 리비전부터)" },
-    { keys: "L", what: "라인 히스토리", note: "M2", planned: true },
+    { keys: "L", what: "라인 히스토리 (선택한 줄, 없으면 커서 줄)" },
     { keys: "G", what: "커밋 그래프", note: "M3", planned: true },
   ],
   commit: [
@@ -39,7 +40,7 @@ const KEYS: Record<HelpView, Key[]> = {
     { keys: "PageDown / PageUp", what: "한 화면씩" },
     { keys: "Home / End", what: "처음·끝" },
     { keys: "Enter", what: "커밋 상세 (이 파일 diff)" },
-    { keys: "b", what: "이 리비전의 파일 blame" },
+    { keys: "b", what: "이 리비전의 파일 blame", note: "라인 히스토리면 그 범위의 줄로" },
     { keys: ",", what: "바꾸기 전 리비전의 파일 blame" },
     { keys: "y", what: "커밋 sha 복사" },
     { keys: "/", what: "검색 (요약·작성자·sha·경로)" },

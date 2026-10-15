@@ -1,5 +1,5 @@
 // 읽기 전용 코드 뷰(CodeMirror 6). blame 거터, 줄 번호, 검색, 구문 강조(언어는 필요할 때 불러온다).
-import { cursorLineDown, cursorLineUp, defaultKeymap } from "@codemirror/commands";
+import { cursorLineDown, cursorLineUp, defaultKeymap, selectLineDown, selectLineUp } from "@codemirror/commands";
 import { findNext, findPrevious, highlightSelectionMatches, openSearchPanel, search, searchKeymap } from "@codemirror/search";
 import { EditorState, Prec } from "@codemirror/state";
 import {
@@ -26,6 +26,8 @@ export type EditorKeys = {
   newer(): boolean;
   /** `H` 파일 히스토리 */
   history(): boolean;
+  /** `L` 라인 히스토리(선택한 줄들, 없으면 커서 줄) */
+  lineHistory(): boolean;
   back(): boolean;
   help(): boolean;
   escape(): boolean;
@@ -66,6 +68,9 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
         keymap.of([
           { key: "j", run: cursorLineDown },
           { key: "k", run: cursorLineUp },
+          // Shift: 줄 선택을 넓힌다(라인 히스토리 범위)
+          { key: "J", run: selectLineDown },
+          { key: "K", run: selectLineUp },
           { key: "y", run: run(keys.copySha) },
           { key: "/", run: openSearchPanel },
           { key: "n", run: findNext },
@@ -75,6 +80,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
           { key: "<", run: run(keys.older) },
           { key: ">", run: run(keys.newer) },
           { key: "H", run: run(keys.history) },
+          { key: "L", run: run(keys.lineHistory) },
           { key: "q", run: run(keys.back) },
           { key: "?", run: run(keys.help) },
           { key: "Escape", run: run(keys.escape) },

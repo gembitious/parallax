@@ -48,6 +48,7 @@ fn git_log(repo: &Path, starts: &[&str], path: &str) -> Vec<LogEntry> {
                 status: None,
                 path: path.to_owned(),
                 old_path: None,
+                hunks: None,
             };
             for line in lines {
                 let mut fields = line.split('\t');

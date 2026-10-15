@@ -11,6 +11,7 @@ pub mod commit;
 pub mod git;
 pub mod history;
 pub mod instance;
+pub mod line_log;
 pub mod linemap;
 pub mod log;
 pub mod navigate;
