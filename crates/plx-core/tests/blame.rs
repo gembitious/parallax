@@ -486,11 +486,33 @@ fn session_errors() {
     // 그 리비전에 없는 파일
     let not_there = events(&history().join("src/new_name.rs"), Some("v0.1"));
     assert!(error_of(&not_there).contains("src/new_name.rs"));
+}
 
-    // 추적하지 않는 파일: 내용은 보여 주고 blame은 실패로 끝난다
-    let untracked = events(&history().join("untracked.txt"), None);
-    assert!(matches!(untracked[0], SessionEvent::Meta(_)));
-    assert!(error_of(&untracked).contains("git blame 실패"));
+#[test]
+fn session_file_not_in_head_is_all_uncommitted() {
+    // 추적하지 않는 파일(git blame은 "no such path in HEAD"로 실패한다): 모든 줄이 커밋 안 됨
+    let (meta, lines) = session(&history().join("untracked.txt"), None);
+    let content = meta.content.unwrap();
+    assert!(content.line_count > 0);
+    assert_eq!(lines, content.line_count);
+    let events = events(&history().join("untracked.txt"), None);
+    let SessionEvent::Chunk(chunk) = &events[1] else {
+        panic!("{events:?}");
+    };
+    assert!(chunk.blocks.iter().all(|b| is_uncommitted(&b.sha)));
+    assert!(chunk.commits.iter().all(|c| is_uncommitted(&c.sha)));
+
+    // 커밋이 없는 저장소의 새 파일, 빈 새 파일
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("unborn-repo");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    git(&dir, &["init", "-q"]);
+    std::fs::write(dir.join("새 파일.txt"), "하나\n둘\n").unwrap();
+    std::fs::write(dir.join("empty.txt"), "").unwrap();
+    let (meta, lines) = session(&dir.join("새 파일.txt"), None);
+    assert_eq!((meta.path.as_str(), lines), ("새 파일.txt", 2));
+    let (_, lines) = session(&dir.join("empty.txt"), None);
+    assert_eq!(lines, 0);
 }
 
 #[test]

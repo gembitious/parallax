@@ -40,6 +40,7 @@ pub fn run() {
             git::commit_info,
             instance::current_request,
             window::app_ready,
+            window::hide_window,
             perf::perf_info,
             perf::perf_record,
             perf::perf_ping,

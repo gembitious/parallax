@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 앱 지연 측정: 콜드 스타트 1회 + 상주 인스턴스에 plx 호출 N회.
+# 앱 지연 측정: 콜드 스타트 1회 + 상주 인스턴스에 plx 호출 N회, 그 호출들의 blame 첫 줄 표시.
 #
 # 릴리스 빌드로 잰다. 개발 빌드 수치는 성능 예산 판단에 쓰지 않는다.
 #   npm run tauri build -- --no-bundle
@@ -63,6 +63,16 @@ wait_for() {
 
 total_of() { sed -n 's/.*"totalMs":\([0-9.]*\).*/\1/p'; }
 
+# 기록에 문자열이 든 줄이 n개가 될 때까지 기다린다(최대 약 15초).
+wait_lines() { # wait_lines <문자열> <개수>
+  local i=0
+  while [ "$(LC_ALL=C grep -cF "$1" "$log" 2>/dev/null || true)" -lt "$2" ]; do
+    i=$((i + 1))
+    if [ "$i" -gt 1500 ]; then return 1; fi
+    sleep 0.01
+  done
+}
+
 # 숫자 목록(한 줄에 하나) → "중앙값 p90 최대"
 summary() {
   sort -n | awk '{ v[NR] = $1 } END {
@@ -106,9 +116,17 @@ for i in $(seq 1 "$runs"); do
     echo "${i}번째 호출 기록이 나오지 않았다." >&2
     exit 1
   fi
+  # 다음 호출은 이 호출의 blame이 끝난 뒤에 보낸다(먼저 보내면 앞 blame이 취소되어 기록이 없다).
+  if ! wait_lines '"kind":"blame"' $((i + 1)); then
+    echo "${i}번째 호출의 blame 기록이 나오지 않았다." >&2
+    exit 1
+  fi
 done
 read -r warm_med warm_p90 warm_max <<<"$(grep '"kind":"plx"' "$log" | total_of | summary)"
 read -r shell_med shell_p90 shell_max <<<"$(printf '%s' "$shell_ms" | summary)"
+warm_blame="$(LC_ALL=C grep -F '"kind":"blame"' "$log" | LC_ALL=C grep -vF '(콜드 스타트)' || true)"
+read -r blame_med blame_p90 blame_max <<<"$(printf '%s\n' "$warm_blame" | total_of | summary)"
+git_first="$(printf '%s\n' "$warm_blame" | sed -n 's/.*git 첫 출력 \([0-9.]*\).*/\1/p' | summary | awk '{ print $1 }')"
 
 unpainted="$(LC_ALL=C grep -c '"ok":false' "$log" || true)"
 echo "- 환경: $(uname -srm), $(date '+%Y-%m-%d'), $("$bin" --version 2>/dev/null || echo plx)"
@@ -121,3 +139,4 @@ echo "|---|---|---|"
 echo "| 콜드 스타트 → 첫 페인트 | $cold | ≤ 1000 |"
 echo "| 상주 인스턴스에 plx 호출 → 대상 뷰 첫 페인트 (중앙값 / p90 / 최대, n=$runs) | $warm_med / $warm_p90 / $warm_max | ≤ 100 |"
 echo "| 두 번째 plx 프로세스, 셸에서 본 시간 (중앙값 / p90 / 최대) | $shell_med / $shell_p90 / $shell_max | — |"
+echo "| 같은 호출의 blame 첫 줄 표시 (중앙값 / p90 / 최대) | $blame_med / $blame_p90 / $blame_max | ≤ git 첫 출력 + 30 (git 첫 출력 중앙값 $git_first) |"

@@ -1,5 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { BlameView } from "./blame/BlameView";
 import { Hud } from "./Hud";
 import { call } from "./ipc";
 import { afterPaint, getPerfInfo, initPerf, nowMs, phasesBetween, record } from "./perf";
@@ -35,7 +37,7 @@ const PLX_BUDGET_MS = 100;
 
 const VIEW_NAMES: Record<ViewRequest["kind"], string> = {
   graph: "커밋 그래프 (M3)",
-  blame: "blame (M1)",
+  blame: "blame",
   log: "파일 히스토리 (M2)",
   lineLog: "라인 히스토리 (M2)",
   show: "커밋 상세 (M2)",
@@ -44,16 +46,8 @@ const VIEW_NAMES: Record<ViewRequest["kind"], string> = {
 function ViewDetails({ request }: { request: ViewRequest }) {
   switch (request.kind) {
     case "graph":
-      return null;
     case "blame":
-      return (
-        <>
-          <dt>파일</dt>
-          <dd className="mono">{request.path}</dd>
-          <dt>줄</dt>
-          <dd className="mono">{request.line ?? "—"}</dd>
-        </>
-      );
+      return null;
     case "log":
       return (
         <>
@@ -82,7 +76,27 @@ function ViewDetails({ request }: { request: ViewRequest }) {
   }
 }
 
-/** plx 호출(또는 콜드 스타트)부터 대상 뷰가 화면에 그려지기까지를 구간별로 남긴다. */
+/** 아직 만들지 않은 뷰. 받은 요청만 보여 준다. */
+function Placeholder({ request, onShown }: { request: PlxRequest; onShown(committedMs: number): void }) {
+  // 요청마다 새 컴포넌트다(key). 처음 그렸을 때 한 번만 알린다.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => onShown(nowMs()), []);
+  return (
+    <div className="placeholder">
+      <dl className="request">
+        <dt>뷰</dt>
+        <dd>{VIEW_NAMES[request.request.kind]}</dd>
+        <ViewDetails request={request.request} />
+        <dt>호출</dt>
+        <dd className="mono">plx {request.args.join(" ")}</dd>
+        <dt>위치</dt>
+        <dd className="mono">{request.cwd}</dd>
+      </dl>
+    </div>
+  );
+}
+
+/** plx 호출(또는 콜드 스타트)부터 대상 뷰의 첫 화면(내용 또는 오류)이 그려지기까지를 구간별로 남긴다. */
 function recordShown({ request, receivedMs }: Shown, committedMs: number, paintedMs: number | null) {
   const end = paintedMs ?? committedMs;
   const paint = paintedMs === null ? "페인트(측정 못 함)" : "페인트";
@@ -96,6 +110,7 @@ function recordShown({ request, receivedMs }: Shown, committedMs: number, painte
         ["프로세스", request.t0Ms],
         ["Tauri·WebView", getPerfInfo().mainStartMs],
         ["JS·첫 렌더", performance.timeOrigin],
+        ["내용", receivedMs],
         [paint, committedMs],
         ["", end],
       ]),
@@ -110,7 +125,7 @@ function recordShown({ request, receivedMs }: Shown, committedMs: number, painte
       phases: phasesBetween([
         ["plx 실행·전달", request.t0Ms],
         ["이벤트", request.recvMs],
-        ["렌더", receivedMs],
+        ["내용", receivedMs],
         [paint, committedMs],
         ["", end],
       ]),
@@ -119,9 +134,13 @@ function recordShown({ request, receivedMs }: Shown, committedMs: number, painte
   }
 }
 
+const hideWindow = () => invoke("hide_window").catch((e) => console.error("창 숨기기 실패", e));
+
 export default function App() {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [shown, setShown] = useState<Shown | null>(null);
+  const shownRef = useRef<Shown | null>(null);
+  shownRef.current = shown;
   const readySent = useRef(false);
 
   // 콜드 스타트에서 창은 첫 화면을 그린 뒤에 보인다(빈 화면 깜빡임 방지).
@@ -167,37 +186,45 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 요청을 DOM에 반영한 직후(페인트 전) 시각을 잡고, 다음 페인트까지 기다려 기록한다.
-  useLayoutEffect(() => {
-    if (!shown) return;
-    const committedMs = nowMs();
+  // 뷰가 첫 화면을 DOM에 넣은 직후(페인트 전) 시각을 받아, 다음 페인트까지 기다려 기록한다.
+  // 창이 숨겨져 있으면 페인트가 없으므로 먼저 창을 보인다.
+  const onShown = useCallback((requestId: number, committedMs: number) => {
     markReady();
-    afterPaint().then((paintedMs) => recordShown(shown, committedMs, paintedMs));
+    afterPaint().then((paintedMs) => {
+      const current = shownRef.current;
+      if (current?.request.id === requestId) recordShown(current, committedMs, paintedMs);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shown]);
+  }, []);
 
   const request = shown?.request;
   return (
     <div className="app">
-      <header className="titlebar">
-        <span className="brand">parallax</span>
-        {info && <span className="muted">v{info.version}</span>}
-      </header>
-      <main className="placeholder">
-        {request ? (
-          <dl className="request">
-            <dt>뷰</dt>
-            <dd>{VIEW_NAMES[request.request.kind]}</dd>
-            <ViewDetails request={request.request} />
-            <dt>호출</dt>
-            <dd className="mono">plx {request.args.join(" ")}</dd>
-            <dt>위치</dt>
-            <dd className="mono">{request.cwd}</dd>
-          </dl>
-        ) : (
+      {request ? (
+        <main className="view">
+          {request.request.kind === "blame" ? (
+            <BlameView
+              key={request.id}
+              path={request.request.path}
+              rev={null}
+              line={request.request.line}
+              cold={request.cold}
+              onShown={(ms) => onShown(request.id, ms)}
+              onBack={hideWindow}
+            />
+          ) : (
+            <Placeholder key={request.id} request={request} onShown={(ms) => onShown(request.id, ms)} />
+          )}
+        </main>
+      ) : (
+        <main className="empty">
+          <p>
+            <span className="brand">parallax</span>
+            {info && <span className="muted"> v{info.version}</span>}
+          </p>
           <p className="muted">터미널에서 plx를 실행하면 이 창에 대상 뷰가 열린다.</p>
-        )}
-      </main>
+        </main>
+      )}
       <Hud />
     </div>
   );

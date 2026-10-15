@@ -1,6 +1,6 @@
 # parallax 마일스톤
 
-**진행 중: M0** — 마일스톤을 끝낼 때마다 이 줄과 체크박스를 갱신한다.
+**진행 중: M1** (M0은 Windows·macOS 화면 확인 대기) — 마일스톤을 끝낼 때마다 이 줄과 체크박스를 갱신한다.
 
 ## 성능 예산
 baseline은 M0에서 같은 머신·같은 저장소로 git CLI를 직접 잰 값이다. 이력 질의 목표는 "baseline + 우리 오버헤드"로 정의한다.
@@ -28,10 +28,10 @@ baseline은 M0에서 같은 머신·같은 저장소로 git CLI를 직접 잰 �
 baseline 표가 `bench/results.md`에 있다.
 
 ## M1 — Blame 뷰 (핵심)
-- [ ] CodeMirror 6 읽기 전용 뷰 + blame 거터: 작성자·상대 시간·요약, 커밋 나이 히트맵
-- [ ] `git blame --incremental` 스트리밍 파서 → Channel 청크 → 거터 점진 채움
-- [ ] 미커밋 줄 표시 (zero sha)
-- [ ] hover 카드: 전체 메시지, 날짜, 변경 파일 수, sha 복사
+- [x] CodeMirror 6 읽기 전용 뷰 + blame 거터: 작성자·상대 시간·요약, 커밋 나이 히트맵 — Windows·macOS 실기 확인 필요
+- [x] `git blame --incremental` 스트리밍 파서 → Channel 청크 → 거터 점진 채움 — Windows·macOS 실기 확인 필요
+- [x] 미커밋 줄 표시 (zero sha) — Windows·macOS 실기 확인 필요
+- [x] hover 카드: 전체 메시지, 날짜, 변경 파일 수, sha 복사 — Windows·macOS 실기 확인 필요
 - [ ] `,` 부모 리비전 blame: porcelain의 `previous <sha> <path>` 사용, 커밋 diff로 줄 위치 매핑
       (그 커밋에서 추가된 줄은 해당 hunk 시작으로)
 - [ ] `<`/`>` 리비전 이동, 탐색 스택(`q`로 뒤로)
