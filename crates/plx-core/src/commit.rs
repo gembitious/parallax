@@ -7,12 +7,12 @@ use gix::ObjectId;
 use gix::bstr::ByteSlice;
 use gix::diff::blob::{Algorithm, Diff, InternedInput};
 use gix::object::tree::EntryKind;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::repo::{CommitInfo, Error, Repo, Result, TreeChange};
 use crate::text::{self, Decoded};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum FileStatus {
     Added,
@@ -68,8 +68,15 @@ pub struct CommitDetail {
 }
 
 /// 커밋 상세. `id`는 커밋이어야 한다.
-pub fn commit_detail(repo: &Repo, id: ObjectId) -> Result<CommitDetail> {
-    let (info, changes) = repo.commit_changes(id)?;
+///
+/// `focus`(저장소 기준 경로)는 화면이 보려는 파일이다. 그 파일이 이 커밋에서 새로 생겼는데 rename으로
+/// 짝지어지지 않았으면(파일을 많이 옮긴 커밋은 gix가 유사도 비교를 건너뛴다) 그 파일 하나만 git처럼
+/// 원본을 찾아([`Repo::rename_source`]) rename으로 보인다. 파일 히스토리의 rename 지점과 맞춘다.
+pub fn commit_detail(repo: &Repo, id: ObjectId, focus: Option<&str>) -> Result<CommitDetail> {
+    let (info, mut changes) = repo.commit_changes(id)?;
+    if let Some(focus) = focus {
+        pair_rename(repo, id, focus, &mut changes)?;
+    }
     let local = repo.local();
     let mut files = changes
         .into_iter()
@@ -82,6 +89,58 @@ pub fn commit_detail(repo: &Repo, id: ObjectId) -> Result<CommitDetail> {
         info,
         files,
     })
+}
+
+/// `focus`의 추가와 그 rename 원본의 삭제를 rename 하나로 합친다.
+fn pair_rename(
+    repo: &Repo,
+    id: ObjectId,
+    focus: &str,
+    changes: &mut Vec<TreeChange>,
+) -> Result<()> {
+    let is_added = |c: &TreeChange| matches!(c, TreeChange::Addition { location, .. } if location.as_slice() == focus.as_bytes());
+    let Some(added) = changes.iter().position(is_added) else {
+        return Ok(());
+    };
+    let Some(source) = repo.rename_source(id, focus)? else {
+        return Ok(());
+    };
+    let Some(deleted) = changes.iter().position(|c| {
+        matches!(c, TreeChange::Deletion { location, .. } if location.as_slice() == source.as_bytes())
+    }) else {
+        return Ok(());
+    };
+    let (
+        TreeChange::Deletion {
+            location: source_location,
+            entry_mode: source_entry_mode,
+            relation: source_relation,
+            id: source_id,
+        },
+        TreeChange::Addition {
+            location,
+            entry_mode,
+            relation,
+            id,
+        },
+    ) = (changes[deleted].clone(), changes[added].clone())
+    else {
+        return Ok(());
+    };
+    changes[added] = TreeChange::Rewrite {
+        source_location,
+        source_entry_mode,
+        source_relation,
+        source_id,
+        diff: None,
+        entry_mode,
+        id,
+        location,
+        relation,
+        copy: false,
+    };
+    changes.remove(deleted);
+    Ok(())
 }
 
 fn file_change(repo: &gix::Repository, change: TreeChange) -> Result<FileChange> {

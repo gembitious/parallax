@@ -1,6 +1,8 @@
 // 커밋 상세: 머리(요약·작성자·날짜·sha·메시지), 바뀐 파일 목록, 고른 파일의 diff(분할·통합).
-// 키: j/k 파일 이동, n/N 다음·이전 바뀐 부분, u 분할↔통합, Enter 그 리비전의 파일 blame, y sha 복사, q 뒤로, ? 도움말.
-import { useEffect, useRef, useState } from "react";
+// 파일 히스토리에서 열면 그 파일만 보인다(a로 모든 파일).
+// 키: j/k 파일 이동, n/N 다음·이전 바뀐 부분, u 분할↔통합, Enter 그 리비전의 파일 blame, a 이 파일만↔모든 파일,
+//     y sha 복사, q 뒤로, ? 도움말.
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Help } from "../Help";
 import { copyText } from "../clipboard";
 import { displayText } from "../blame/BlameView";
@@ -17,6 +19,8 @@ type Props = {
   rev: string;
   /** 처음 고를 파일(저장소 기준 경로) */
   path: string | null;
+  /** `path` 파일만 보인다(파일 히스토리에서 열었다). */
+  only?: boolean;
   active: boolean;
   depth: number;
   onShown?(committedMs: number): void;
@@ -47,8 +51,10 @@ function writeMode(mode: DiffMode) {
 
 type VersionsState = FileVersions | "loading" | { error: string };
 
-export function CommitView({ repo, rev, path, active, depth, onShown, onBack, onNavigate }: Props) {
-  const [detail, setDetail] = useState<CommitDetail | null>(null);
+export function CommitView({ repo, rev, path, only = false, active, depth, onShown, onBack, onNavigate }: Props) {
+  const [full, setFull] = useState<CommitDetail | null>(null);
+  /** 이 파일만 보는 중(히스토리에서 열었고 그 파일이 이 커밋에 있다) */
+  const [narrow, setNarrow] = useState(only);
   const [fatal, setFatal] = useState<string | null>(null);
   const [selected, setSelected] = useState(0);
   const [mode, setMode] = useState<DiffMode>(readMode);
@@ -61,8 +67,9 @@ export function CommitView({ repo, rev, path, active, depth, onShown, onBack, on
   const toastTimer = useRef(0);
   /** 첫 diff까지의 측정: 상세 도착 → 목록 표시 → diff 도착 → diff 표시 */
   const timing = useRef({ t0: nowMs(), detailMs: NaN, listPainted: null as Promise<number | null> | null, reported: false });
-  const latest = useRef({ active, detail, selected, help, mode });
-  latest.current = { active, detail, selected, help, mode };
+  const detail = useMemo(() => narrowed(full, narrow ? path : null), [full, narrow, path]);
+  const latest = useRef({ active, detail, selected, help, mode, narrow });
+  latest.current = { active, detail, selected, help, mode, narrow };
 
   const showToast = (message: string) => {
     setToast(message);
@@ -73,13 +80,15 @@ export function CommitView({ repo, rev, path, active, depth, onShown, onBack, on
   // 상세를 받는다.
   useEffect(() => {
     let disposed = false;
-    call<CommitDetail>("commit_detail", { repo, rev }).then(
+    call<CommitDetail>("commit_detail", { repo, rev, focus: path }).then(
       (d) => {
         if (disposed) return;
         timing.current.detailMs = nowMs();
-        setDetail(d);
-        const focus = path === null ? -1 : d.files.findIndex((f) => f.path === path || f.oldPath === path);
-        setSelected(Math.max(0, focus));
+        setFull(d);
+        const focus = path === null ? -1 : d.files.findIndex((f) => isPath(f, path));
+        // 그 파일이 없으면(merge의 첫 부모 비교 등) 모든 파일을 보인다.
+        if (focus < 0) setNarrow(false);
+        setSelected(only ? 0 : Math.max(0, focus));
       },
       (e: unknown) => {
         if (disposed) return;
@@ -97,11 +106,11 @@ export function CommitView({ repo, rev, path, active, depth, onShown, onBack, on
 
   // 목록을 그린 시각(첫 화면)
   useEffect(() => {
-    if (!detail) return;
+    if (!full) return;
     onShown?.(nowMs());
     timing.current.listPainted = afterPaint();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detail]);
+  }, [full]);
 
   const file: FileChange | undefined = detail?.files[selected];
   const fileKey = file ? `${file.oldId ?? ""}:${file.newId ?? ""}` : "";
@@ -186,6 +195,20 @@ export function CommitView({ repo, rev, path, active, depth, onShown, onBack, on
     onNavigate({ kind: "file", target: { repo, path: f.path, rev: d.info.sha }, line: diff.current?.firstChangedLine() ?? null });
   };
 
+  /** 이 파일만 ↔ 모든 파일. 고른 파일은 그대로 둔다. */
+  const toggleNarrow = () => {
+    const { detail: shown, selected: at, narrow: isNarrow } = latest.current;
+    if (!full || path === null) return;
+    const chosen = shown?.files[at];
+    if (isNarrow) {
+      setNarrow(false);
+      setSelected(Math.max(0, full.files.findIndex((f) => f === chosen)));
+    } else if (full.files.some((f) => isPath(f, path))) {
+      setNarrow(true);
+      setSelected(0);
+    }
+  };
+
   const copySha = () => {
     const sha = latest.current.detail?.info.sha ?? rev;
     copyText(sha).then(
@@ -223,6 +246,9 @@ export function CommitView({ repo, rev, path, active, depth, onShown, onBack, on
           break;
         case "Enter":
           openBlame();
+          break;
+        case "a":
+          toggleNarrow();
           break;
         case "y":
           copySha();
@@ -274,13 +300,18 @@ export function CommitView({ repo, rev, path, active, depth, onShown, onBack, on
           </span>
         )}
         <span className="blame-status">
-          {detail && (
+          {full && (
             <>
-              파일 {detail.files.length}개 <span className="added">+{detail.additions}</span>{" "}
-              <span className="deleted">−{detail.deletions}</span>
+              파일 {full.files.length}개 <span className="added">+{full.additions}</span>{" "}
+              <span className="deleted">−{full.deletions}</span>
             </>
           )}
         </span>
+        {full && path !== null && full.files.some((f) => isPath(f, path)) && (only || narrow) && (
+          <button type="button" className="toggle" onClick={toggleNarrow} title="이 파일만 ↔ 모든 파일 (a)">
+            {narrow ? "이 파일만" : "모든 파일"}
+          </button>
+        )}
         <button
           type="button"
           className="toggle"
@@ -362,6 +393,15 @@ export function CommitView({ repo, rev, path, active, depth, onShown, onBack, on
       )}
     </section>
   );
+}
+
+const isPath = (f: FileChange, path: string) => f.path === path || f.oldPath === path;
+
+/** `path`가 있으면 그 파일만 남긴 상세. 줄 수 합계는 커밋 전체 그대로다. */
+function narrowed(detail: CommitDetail | null, path: string | null): CommitDetail | null {
+  if (!detail || path === null) return detail;
+  const files = detail.files.filter((f) => isPath(f, path));
+  return files.length > 0 ? { ...detail, files } : detail;
 }
 
 /** 파일 이름을 먼저, 디렉터리는 흐리게 뒤에(좁은 목록에서도 이름이 보이게). rename은 원래 경로를 함께 보인다. */

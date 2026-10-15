@@ -79,7 +79,7 @@ fn reference(dir: &Path, sha: &str) -> Vec<Row> {
 }
 
 fn ours(repo: &Repo, sha: &str) -> Vec<Row> {
-    let detail = commit::commit_detail(repo, repo.resolve_commit(sha).unwrap()).unwrap();
+    let detail = commit::commit_detail(repo, repo.resolve_commit(sha).unwrap(), None).unwrap();
     assert_eq!(detail.info.sha, sha);
     assert_eq!(detail.info.changed_files, detail.files.len());
     assert_eq!(
@@ -133,7 +133,7 @@ fn rename_and_binary_details() {
         &dir,
         &["log", "-1", "--format=%H", "--grep=rename old_name"],
     );
-    let detail = commit::commit_detail(&repo, repo.resolve_commit(&rename).unwrap()).unwrap();
+    let detail = commit::commit_detail(&repo, repo.resolve_commit(&rename).unwrap(), None).unwrap();
     let file = detail
         .files
         .iter()
@@ -156,7 +156,7 @@ fn rename_and_binary_details() {
     );
 
     let binary = git_text(&dir, &["log", "-1", "--format=%H", "--", "assets/logo.bin"]);
-    let detail = commit::commit_detail(&repo, repo.resolve_commit(&binary).unwrap()).unwrap();
+    let detail = commit::commit_detail(&repo, repo.resolve_commit(&binary).unwrap(), None).unwrap();
     let file = detail
         .files
         .iter()
@@ -193,8 +193,96 @@ fn shallow_clone_boundary_is_a_root_commit() {
         ],
     );
     let repo = Repo::discover(&shallow).unwrap();
-    let detail = commit::commit_detail(&repo, repo.resolve_commit("HEAD").unwrap()).unwrap();
+    let detail = commit::commit_detail(&repo, repo.resolve_commit("HEAD").unwrap(), None).unwrap();
     let tracked = git_text(&shallow, &["ls-tree", "-r", "--name-only", "HEAD"]);
     assert_eq!(detail.files.len(), tracked.lines().count());
     assert!(detail.files.iter().all(|f| f.status == FileStatus::Added));
+}
+
+#[test]
+fn focused_file_keeps_its_rename_in_a_commit_that_moved_many_files() {
+    // 비슷하지만 같지 않은 파일 40개를 옮긴다. gix는 짝이 너무 많아(40×40) 유사도 비교를 건너뛴다.
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("many-renames");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("old")).unwrap();
+    let body = |i: usize, edited: bool| -> String {
+        (0..20)
+            .map(|line| {
+                if edited && line == 0 {
+                    format!("edited header of file {i}\n")
+                } else {
+                    format!("file {i} line {line}: the quick brown fox jumps over the lazy dog\n")
+                }
+            })
+            .collect()
+    };
+    for i in 0..40 {
+        std::fs::write(dir.join(format!("old/f{i}.txt")), body(i, false)).unwrap();
+    }
+    let commit = |message: &str| {
+        git(&dir, &["add", "-A"]);
+        git(
+            &dir,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@e",
+                "commit",
+                "-q",
+                "-m",
+                message,
+            ],
+        );
+    };
+    git(&dir, &["init", "-q"]);
+    commit("add");
+    std::fs::remove_dir_all(dir.join("old")).unwrap();
+    std::fs::create_dir_all(dir.join("new")).unwrap();
+    for i in 0..40 {
+        std::fs::write(dir.join(format!("new/f{i}.txt")), body(i, true)).unwrap();
+    }
+    commit("move and edit");
+
+    let repo = Repo::discover(&dir).unwrap();
+    let head = repo.resolve_commit("HEAD").unwrap();
+    let plain = commit::commit_detail(&repo, head, None).unwrap();
+    assert_eq!(plain.files.len(), 80, "rename 없이 추가 40 + 삭제 40");
+    let focused = commit::commit_detail(&repo, head, Some("new/f7.txt")).unwrap();
+    assert_eq!(focused.files.len(), 79);
+    let file = focused
+        .files
+        .iter()
+        .find(|f| f.path == "new/f7.txt")
+        .unwrap();
+    assert_eq!(file.status, FileStatus::Renamed);
+    assert_eq!(file.old_path.as_deref(), Some("old/f7.txt"));
+    assert_eq!((file.additions, file.deletions), (1, 1));
+    // git도 같은 원본을 찾는다.
+    let reference = git_text(
+        &dir,
+        &[
+            "diff-tree",
+            "-r",
+            "-M",
+            "--name-status",
+            "HEAD~1",
+            "HEAD",
+            "--",
+            "old/f7.txt",
+            "new/f7.txt",
+        ],
+    );
+    assert!(
+        reference.starts_with('R') && reference.ends_with("old/f7.txt\tnew/f7.txt"),
+        "{reference}"
+    );
+    // 이미 짝지어진 파일이나 이 커밋에 없는 파일은 그대로다.
+    assert_eq!(
+        commit::commit_detail(&repo, head, Some("no/such"))
+            .unwrap()
+            .files
+            .len(),
+        80
+    );
 }

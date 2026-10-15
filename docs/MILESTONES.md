@@ -1,6 +1,6 @@
 # parallax 마일스톤
 
-**진행 중: M1** (M0은 Windows·macOS 화면 확인 대기) — 마일스톤을 끝낼 때마다 이 줄과 체크박스를 갱신한다.
+**진행 중: M2** (M0·M1은 Windows·macOS 화면 확인 대기) — 마일스톤을 끝낼 때마다 이 줄과 체크박스를 갱신한다.
 
 ## 성능 예산
 baseline은 M0에서 같은 머신·같은 저장소로 git CLI를 직접 잰 값이다. 이력 질의 목표는 "baseline + 우리 오버헤드"로 정의한다.
@@ -40,11 +40,11 @@ baseline 표가 `bench/results.md`에 있다.
 **완료 기준:** blame 성능 예산 충족. 부모 이동 줄 매핑이 fixtures(이동·rename·merge 포함) 골든 테스트를 통과한다.
 
 ## M2 — 히스토리
-- [ ] 파일 히스토리: 먼저 `git log -- <path>`로 첫 페이지를 띄우고, rename 이전 구간은 `--follow`로 이어 붙인다
-      (`--follow`는 Bloom 필터 혜택이 제한적일 수 있으니 두 방식을 측정해 확정)
+- [x] 파일 히스토리: `git log -- <path>`를 스트리밍하고, 파일이 rename으로 생긴 커밋에서 옛 이름의 `git log` 구간을 이어 붙인다
+      (두 방식을 측정해 `--follow`는 쓰지 않기로 확정: CLAUDE.md 결정 기록, bench/results.md) — Windows·macOS 실기 확인 필요
 - [ ] 라인/범위 히스토리 (`git log -L`), 코드 뷰 선택 영역에서 바로 진입
 - [x] 커밋 상세: gix 트리 diff + `@codemirror/merge` (분할/통합 전환), 히스토리에서 열면 해당 파일 diff만
-      — Windows·macOS 실기 확인 필요 (히스토리 뷰에서 여는 것은 파일 히스토리와 함께)
+      — Windows·macOS 실기 확인 필요
 - [ ] Bloom 필터 감지 → 없으면 "가속 설정" 버튼
       (사용자 확인 후 `git commit-graph write --reachable --changed-paths`, `commitGraph.changedPaths=true`)
 

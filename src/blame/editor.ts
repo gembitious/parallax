@@ -24,6 +24,8 @@ export type EditorKeys = {
   older(): boolean;
   /** `>` 다음 리비전 */
   newer(): boolean;
+  /** `H` 파일 히스토리 */
+  history(): boolean;
   back(): boolean;
   help(): boolean;
   escape(): boolean;
@@ -72,6 +74,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
           { key: ",", run: run(keys.parent) },
           { key: "<", run: run(keys.older) },
           { key: ">", run: run(keys.newer) },
+          { key: "H", run: run(keys.history) },
           { key: "q", run: run(keys.back) },
           { key: "?", run: run(keys.help) },
           { key: "Escape", run: run(keys.escape) },

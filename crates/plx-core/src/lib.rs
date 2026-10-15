@@ -9,10 +9,14 @@ pub mod cache;
 pub mod cli;
 pub mod commit;
 pub mod git;
+pub mod history;
 pub mod instance;
 pub mod linemap;
+pub mod log;
 pub mod navigate;
 pub mod repo;
+pub mod requests;
+pub mod similarity;
 pub mod text;
 pub mod time;
 
