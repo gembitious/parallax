@@ -24,4 +24,4 @@ tauri-build = { version = "2.7.3", features = [] }
 plx-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tauri = { version = "2.12.4", features = [] }
+tauri = { version = "2.12.4", features = ["tray-icon"] }

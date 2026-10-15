@@ -41,8 +41,8 @@ GitLens의 핵심 흐름(줄 → 커밋 → 부모 리비전 blame → 파일·�
 
 ## 디렉터리
 ```
-crates/plx-core/   gix·git CLI 래퍼, 출력 파서, 캐시, 그래프 레인 레이아웃 (UI 무관, 단위 테스트 필수)
-src-tauri/         Tauri 명령·채널, 단일 인스턴스, 트레이, CLI 인자 처리
+crates/plx-core/   gix·git CLI 래퍼, 출력 파서, 캐시, 그래프 레인 레이아웃, 인스턴스 간 전달(로컬 소켓) (UI 무관, 단위 테스트 필수)
+src-tauri/         Tauri 명령·채널, 단일 인스턴스 연결(창·트레이), CLI 인자 처리
 src/               React UI
 bench/             참조 저장소 준비 스크립트와 측정 결과(results.md)
 fixtures/          테스트 저장소 생성 스크립트 (rename, 이동, merge, CRLF, 한글 경로·내용)
@@ -76,6 +76,10 @@ plx show <rev>               커밋 상세
 ```
 macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다.
 
+인스턴스가 없을 때 릴리스 빌드를 셸에서 실행하면 스스로 분리 실행하고 셸을 바로 돌려준다.
+- `PLX_DETACH=0|1`: 분리 실행 끄기·강제 (개발 빌드는 기본적으로 분리하지 않는다. `tauri dev`가 자식 프로세스로 잡고 있어야 한다)
+- `PLX_T0`: 호출 시작 시각(epoch ms). 지연 측정 기준점으로, 벤치 스크립트가 넘긴다.
+
 ## 키맵
 - 탐색은 tig와 같게: `j`/`k` 이동, `Enter` 커밋 상세, `,` 부모 리비전 blame, `/` 검색, `q` 뒤로
 - 추가 키: `<`/`>` 이전·다음 리비전, `H` 파일 히스토리, `L` 라인 히스토리, `G` 그래프, `y` sha 복사, `o` 에디터로 열기, `?` 도움말
@@ -84,3 +88,7 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다.
 - 2026-10-15: 범위를 읽기 전용 git 뷰어로 한정. 편집·터미널·LSP는 제외.
 - 2026-10-15: blame·라인 히스토리는 git CLI로 시작. gix-blame은 골든 테스트 통과 시 전환 검토.
 - 2026-10-15: 코드 뷰는 Monaco 대신 CodeMirror 6.
+- 2026-10-15: 단일 인스턴스는 `tauri-plugin-single-instance` 대신 직접 구현한다(`plx_core::instance`).
+  `main()` 맨 앞, Tauri 초기화 전에 로컬 소켓(Windows named pipe, Unix 소켓)으로 argv·cwd·t0를 넘기고 끝낸다.
+  primary 판정은 락 파일(`File::try_lock`). 이유: 두 번째 호출이 WebView 초기화를 거치지 않는다,
+  터미널에서 처음 실행할 때 셸을 돌려주려면(분리 재실행) Tauri 전에 판정해야 한다, 측정용 t0를 함께 넘길 수 있다.

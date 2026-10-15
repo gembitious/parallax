@@ -64,6 +64,22 @@ body {
   padding: 24px;
 }
 
+.request {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0;
+}
+
+.request dt {
+  color: var(--muted);
+}
+
+.request dd {
+  margin: 0;
+  word-break: break-all;
+}
+
 code,
 pre,
 .mono {
