@@ -46,7 +46,7 @@ crates/plx-core/   gix·git CLI 래퍼, 출력 파서, 캐시, 그래프 레인 
 src-tauri/         Tauri 명령·채널, 단일 인스턴스·CLI 호출을 창·트레이에 연결
 scripts/           설치 보조 스크립트 (macOS shim)
 src/               React UI
-bench/             참조 저장소 준비 스크립트와 측정 결과(results.md)
+bench/             참조 저장소 준비 스크립트, git 측정 하네스(plx-bench), 앱 지연 측정, 측정 결과(results.md)
 fixtures/          테스트 저장소 생성 스크립트 (rename, 이동, merge, CRLF, 한글 경로·내용)
 docs/              MILESTONES.md
 ```
@@ -67,7 +67,7 @@ docs/              MILESTONES.md
 - 프런트 타입 검사 + 빌드: `npm run build`
 - 코어 테스트: `cargo test -p plx-core` / 전체: `cargo test --workspace`
 - 앱 지연 측정(릴리스 빌드 후): `bench/app-latency.sh [실행 파일] [반복 횟수]` → 콜드 스타트, plx 호출 → 첫 페인트
-- 벤치: `bench/` 스크립트 (M0에서 작성)
+- git baseline: `bench/setup.sh`(참조 저장소 준비, 한 번) → `bench/run.sh [이름]`(측정 → `bench/results.md`)
 
 ## CLI 인터페이스 (목표)
 ```

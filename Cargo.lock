@@ -2250,6 +2250,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "plx-bench"
+version = "0.1.0"
+
+[[package]]
 name = "plx-core"
 version = "0.1.0"
 dependencies = [

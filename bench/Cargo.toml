@@ -1,0 +1,9 @@
+[package]
+name = "plx-bench"
+description = "git baseline 측정: 앱이 git을 띄우는 방식 그대로 첫 출력·첫 N개·전체 시간을 잰다"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]

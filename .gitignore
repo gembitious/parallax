@@ -14,3 +14,6 @@ dist-ssr/
 .idea/
 .DS_Store
 *.sw?
+
+# 벤치 참조 저장소 (bench/setup.sh)
+/bench/repos/

@@ -1,0 +1,27 @@
+# 측정 항목: 저장소 종류 대상
+# 종류: spawn | blame | log | follow | line-log | show | graph (bench/src/main.rs의 Kind)
+# 대상을 바꾸면 results.md의 기존 수치와 비교할 수 없으니 모든 플랫폼에서 다시 잰다.
+
+# 프로세스 생성 비용 (Windows에서 특히 중요)
+git     spawn     -
+
+# git/git v2.56.0
+git     blame     diff.c                       # 7,860줄, 커밋 1,701개
+git     blame     builtin/blame.c              # 1,334줄, builtin-blame.c에서 rename
+git     log       Makefile                     # 커밋 3,276개 (가장 자주 바뀐 파일)
+git     log       diff.c
+git     follow    Documentation/git-log.adoc   # 2025년 .txt → .adoc rename: log 5개, --follow 120개
+git     follow    builtin/blame.c
+git     line-log  1000,1060:diff.c
+git     show      HEAD
+git     graph     -
+
+# microsoft/vscode 1.142.0
+vscode  blame     src/vs/editor/common/config/editorOptions.ts                    # 6,989줄, 커밋 880개
+vscode  blame     src/vs/workbench/contrib/terminal/browser/terminalInstance.ts   # 3,021줄, 이동 이력 있음
+vscode  log       package.json                                                    # 커밋 5,127개
+vscode  log       src/vs/workbench/browser/layout.ts
+vscode  follow    src/vs/workbench/contrib/terminal/browser/terminalInstance.ts   # log 1,342개, --follow 1,760개
+vscode  line-log  100,160:src/vs/editor/common/model/textModel.ts
+vscode  show      HEAD
+vscode  graph     -
