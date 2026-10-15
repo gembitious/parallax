@@ -88,7 +88,9 @@ export type ViewState = { shown: Shown | null; stack: StackEntry[] };
 export type ViewAction =
   | { type: "request"; request: PlxRequest; receivedMs: number }
   | { type: "navigate"; navigation: Navigation }
-  | { type: "back" };
+  | { type: "back" }
+  /** 저장소가 바뀌어(HEAD 이동) `key` 화면을 새로 연다. blame은 `line` 줄로. 스택 자리는 그대로다. */
+  | { type: "reload"; key: number; line?: number | null };
 
 /** 탐색 스택이 이보다 깊어지면 가장 아래 화면부터 버린다. */
 export const MAX_STACK = 30;
@@ -141,6 +143,16 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
     }
     case "back":
       return state.stack.length > 1 ? { ...state, stack: state.stack.slice(0, -1) } : state;
+    case "reload": {
+      const index = state.stack.findIndex((entry) => entry.key === action.key);
+      if (index < 0) return state;
+      const entry = state.stack[index];
+      const key = nextEntryKey++;
+      const stack = state.stack.slice();
+      stack[index] =
+        entry.view === "blame" && action.line !== undefined ? { ...entry, key, line: action.line } : { ...entry, key };
+      return { ...state, stack };
+    }
   }
 }
 

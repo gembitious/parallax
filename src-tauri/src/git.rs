@@ -11,6 +11,7 @@ use plx_core::graph::{GraphEvent, GraphOptions, GraphSessions, GraphWindow};
 use plx_core::history::{HistoryEvent, HistorySessions, LineRange};
 use plx_core::navigate::{self, Direction, Version};
 use plx_core::repo::{CommitInfo, RepoCache};
+use plx_core::watch::{Change, Watchers};
 use serde::Serialize;
 use tauri::State;
 use tauri::ipc::Channel;
@@ -24,12 +25,17 @@ pub struct GitState {
     blames: Sessions,
     histories: HistorySessions,
     graphs: GraphSessions,
+    watchers: Watchers,
     cache: Option<Arc<DiskCache>>,
 }
 
 impl GitState {
     /// `cache_dir`가 있으면 blame·히스토리 결과를 그 아래 `results/`에 캐시한다.
-    pub fn new(cache_dir: Option<PathBuf>) -> GitState {
+    /// 지켜보는 저장소의 HEAD·참조나 파일이 바뀌면 `on_change`를 부른다(다른 스레드에서).
+    pub fn new(
+        cache_dir: Option<PathBuf>,
+        on_change: impl Fn(Change) + Send + 'static,
+    ) -> GitState {
         let cache =
             cache_dir.map(|dir| Arc::new(DiskCache::new(dir.join("results"), CACHE_MAX_BYTES)));
         let (blames, histories, graphs) = match &cache {
@@ -49,6 +55,7 @@ impl GitState {
             blames,
             histories,
             graphs,
+            watchers: Watchers::new(on_change),
             cache,
         }
     }
@@ -238,6 +245,47 @@ pub async fn graph_search_path(
     tauri::async_runtime::spawn_blocking(move || git.graphs.search_path(id, &path))
         .await
         .map_err(|e| e.to_string())?
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Watching {
+    id: u64,
+    /// 작업트리 경로(`repo-changed` 이벤트의 `repo`와 같다) 또는 파일 경로(`file-changed`의 `path`와 같다)
+    target: String,
+}
+
+/// `repo`(저장소 안의 아무 경로)의 HEAD·참조 변화를 지켜본다. 바뀌면 `repo-changed` 이벤트가 온다.
+/// 화면을 떠나면 `unwatch_repo`로 끝낸다.
+#[tauri::command]
+pub async fn watch_repo(git: State<'_, Arc<GitState>>, repo: String) -> Result<Watching, String> {
+    let git = git.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        git.watchers
+            .watch(&git.repos, Path::new(&repo))
+            .map(|(id, target)| Watching { id, target })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 파일(작업트리 blame으로 연 파일)이 바뀌면 `file-changed` 이벤트가 온다. `unwatch_repo`로 끝낸다.
+#[tauri::command]
+pub async fn watch_file(git: State<'_, Arc<GitState>>, path: String) -> Result<Watching, String> {
+    let git = git.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        git.watchers
+            .watch_file(Path::new(&path))
+            .map(|(id, target)| Watching { id, target })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 감시 구독(저장소·파일)을 끝낸다. 이미 끝났으면 `false`.
+#[tauri::command]
+pub fn unwatch_repo(git: State<'_, Arc<GitState>>, id: u64) -> bool {
+    git.watchers.unwatch(id)
 }
 
 /// 그래프를 닫는다. 이미 닫혔으면 `false`.

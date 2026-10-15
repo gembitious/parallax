@@ -45,7 +45,8 @@ GitLens의 핵심 흐름(줄 → 커밋 → 부모 리비전 blame → 파일·�
     `@lezer/highlight` 1.2.5. `codemirror` 묶음 패키지(basicSetup)는 쓰지 않는다(편집 기능이 필요 없다).
   - 프런트 테스트: `vitest` 5.0.3 (순수 로직만, `vitest.config.ts`가 `src/**/*.test.ts`만 본다)
   - diff 뷰(M2): `@codemirror/merge` 6.12.2 (분할 MergeView, 통합 unifiedMergeView)
-  - 도입 예정 (그 마일스톤에서 다시 확인): `notify` 8.2.0 (M4, 9.0은 RC)
+  - 감시(M4): `notify` 8.2.0 (`default-features = false`, `macos_fsevent`. 9.0은 RC라 보류). Windows에서 `windows-sys`
+    0.60을 따로 끌어온다(선언뿐인 크레이트라 크기 영향은 작다). 2026-10-15 확인.
 
 ## 디렉터리
 ```
@@ -154,6 +155,11 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
   첫 화면이 0.3~0.45초였다. 커밋 표는 commit-graph가 없는 저장소를 위해 한 번 푼 (sha, 부모, 시각)을 저장소 밖에
   둔다(얕은 클론은 넣지 않는다). 기본 범위는 HEAD + 로컬 브랜치 + 그 upstream이고 원격 브랜치 모두·HEAD만은 화면에서 고른다.
   레인은 같은 커밋을 기다리면 왼쪽으로 합치고(git의 graph.c와 같은 열 수) 빈 레인은 당기지 않는다(선이 옆으로 밀리지 않는다).
+- 2026-10-15: 라이브 갱신은 `notify`로 `.git`의 HEAD(워크트리별)·`refs/`·`packed-refs`와 작업트리 blame으로 연 파일만
+  본다(`plx_core::watch`). objects/·index 쓰기는 이름으로 거르고, 120ms 조용해지면 HEAD·참조 지문(파일은 크기·수정 시각)을
+  비교해 달라졌을 때만 화면에 알린다. 그래프는 새 세션의 첫 화면이 오면 바꿔 끼워 깜빡이지 않는다(맨 위를 보고 있었으면
+  새 커밋을, 아니면 고른 커밋을 화면의 같은 자리에). 결과 캐시는 커밋 sha·HEAD·파일 크기·수정 시각을 열쇠로 써서
+  따로 지울 것이 없다.
 - 2026-10-15: 단일 인스턴스는 `tauri-plugin-single-instance` 대신 직접 구현한다(`plx_core::instance`).
   `main()` 맨 앞, Tauri 초기화 전에 로컬 소켓(Windows named pipe, Unix 소켓)으로 argv·cwd·t0를 넘기고 끝낸다.
   primary 판정은 락 파일(`File::try_lock`). 이유: 두 번째 호출이 WebView 초기화를 거치지 않는다,

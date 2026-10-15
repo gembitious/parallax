@@ -165,3 +165,22 @@ describe("lastName", () => {
     expect(lastName("/")).toBe("/");
   });
 });
+
+describe("reload", () => {
+  it("replaces the entry in place with a new key (blame keeps the given line)", () => {
+    let state = viewReducer(empty, { type: "request", request: blame(1), receivedMs: 0 });
+    state = viewReducer(state, {
+      type: "navigate",
+      navigation: { kind: "history", target: { repo: "/repo", path: "a.rs", rev: null } },
+    });
+    const [root, history] = state.stack;
+    const reloaded = viewReducer(state, { type: "reload", key: root.key, line: 42 });
+    expect(reloaded.stack[0]).toMatchObject({ view: "blame", line: 42, via: "request" });
+    expect(reloaded.stack[0].key).not.toBe(root.key);
+    expect(reloaded.stack[1]).toBe(history);
+    const again = viewReducer(reloaded, { type: "reload", key: history.key });
+    expect(again.stack[1]).toMatchObject({ view: "history", via: "history" });
+    expect(again.stack[1].key).not.toBe(history.key);
+    expect(viewReducer(again, { type: "reload", key: 9999 })).toBe(again);
+  });
+});

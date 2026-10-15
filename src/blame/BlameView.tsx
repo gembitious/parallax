@@ -11,6 +11,7 @@ import { formatCount, isUncommitted, shortSha } from "./format";
 import { blameChanged } from "./gutter";
 import { BlameModel } from "./model";
 import type { Navigation } from "../nav";
+import { watchFile, watchRepo } from "../watch";
 import { openBlame, type BlameTarget } from "./session";
 import type { BlameMeta, BlameStats, CommitInfo, Neighbor, Version } from "./types";
 
@@ -33,6 +34,8 @@ type Props = {
   /** `q`: 뒤로. 더 돌아갈 곳이 없으면 창을 숨긴다. */
   onBack(): void;
   onNavigate(navigation: Navigation): void;
+  /** 저장소가 바뀌었다(작업트리 blame의 HEAD 이동): 이 화면을 `line` 줄로 새로 연다. */
+  onReload?(line: number | null): void;
 };
 
 type Progress =
@@ -75,7 +78,18 @@ export function displayText(text: string): { text: string; crlf: boolean } {
   return { text: out, crlf };
 }
 
-export function BlameView({ target, line, active, depth, backDirection, cold = false, onShown, onBack, onNavigate }: Props) {
+export function BlameView({
+  target,
+  line,
+  active,
+  depth,
+  backDirection,
+  cold = false,
+  onShown,
+  onBack,
+  onNavigate,
+  onReload,
+}: Props) {
   const { path, rev } = target;
   const container = useRef<HTMLDivElement>(null);
   const editor = useRef<Editor | null>(null);
@@ -125,6 +139,25 @@ export function BlameView({ target, line, active, depth, backDirection, cold = f
     const view = editor.current?.view;
     return view ? view.state.doc.lineAt(view.state.selection.main.head).number : 1;
   };
+
+  // 작업트리 blame: HEAD가 바뀌거나(이 파일을 커밋하는 등) 파일을 고치면(에이전트·편집기) 커서 줄을 지켜 다시 연다.
+  // 고정 리비전은 바뀌지 않는다.
+  const watched = meta && meta.rev === null ? meta.repo : null;
+  const watchedFile = watched && meta ? `${watched}/${meta.path}` : null;
+  useEffect(() => {
+    if (!watched || !watchedFile || !onReload) return;
+    const reload = () => onReload(editor.current ? cursorLine() : line);
+    const stopRepo = watchRepo(watched, (change) => {
+      if (change.headChanged) reload();
+    });
+    const stopFile = watchFile(watchedFile, reload);
+    return () => {
+      stopRepo();
+      stopFile();
+    };
+    // cursorLine은 ref만 읽는다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watched, watchedFile]);
 
   const openCard = (n: number, anchor: DOMRect, pinned: boolean) => {
     const sha = model.current?.sha(n);

@@ -13,6 +13,8 @@ gix = { version = "0.89.0", default-features = false, features = ["basic", "sha1
 encoding_rs = "0.8.42"
 # Windows에서 canonicalize 결과의 `\\?\`를 안전할 때만 뗀다(git 작업 디렉터리·화면 표시용)
 dunce = "1.0.5"
+# .git(HEAD, refs, packed-refs) 변화 감시: 외부 커밋을 화면에 반영한다(M4)
+notify = { version = "8.2.0", default-features = false, features = ["macos_fsevent"] }
 serde.workspace = true
 serde_json.workspace = true
 

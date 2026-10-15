@@ -8,6 +8,7 @@ import { copyText } from "../clipboard";
 import { formatCount, formatDate, parseTz, relativeTime, shortSha } from "../blame/format";
 import { STATUS_LETTER, STATUS_NAME } from "../commit/types";
 import type { Navigation } from "../nav";
+import { watchRepo } from "../watch";
 import { afterPaint, nowMs, record } from "../perf";
 import { Acceleration } from "./Acceleration";
 import { findMatch, formerPaths, matches, scrollToRow, visibleRange } from "./list";
@@ -35,6 +36,8 @@ type Props = {
   onShown?(committedMs: number): void;
   onBack(): void;
   onNavigate(navigation: Navigation): void;
+  /** 저장소가 바뀌었다(HEAD부터 거슬러 오르는 히스토리의 HEAD 이동): 이 화면을 새로 연다. */
+  onReload?(): void;
 };
 
 type Progress =
@@ -49,7 +52,17 @@ const TOAST_MS = 1800;
 const PAGE_SLACK_MS = 30;
 const CACHE_HIT_BUDGET_MS = 16;
 
-export function HistoryView({ target, lines = null, active, depth, cold = false, onShown, onBack, onNavigate }: Props) {
+export function HistoryView({
+  target,
+  lines = null,
+  active,
+  depth,
+  cold = false,
+  onShown,
+  onBack,
+  onNavigate,
+  onReload,
+}: Props) {
   const [meta, setMeta] = useState<HistoryMeta | null>(null);
   /** 받은 커밋. 수천 개가 쌓이므로 배열은 고치고 길이만 상태로 둔다. */
   const entries = useRef<LogEntry[]>([]);
@@ -113,6 +126,16 @@ export function HistoryView({ target, lines = null, active, depth, cold = false,
     // 요청마다 새 컴포넌트다(App이 key를 준다).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // HEAD부터 거슬러 오르는 히스토리: HEAD가 바뀌면(새 커밋 등) 다시 연다. 고정 리비전은 바뀌지 않는다.
+  const watched = meta && meta.rev === null ? meta.repo : null;
+  useEffect(() => {
+    if (!watched || !onReload) return;
+    return watchRepo(watched, (change) => {
+      if (change.headChanged) onReload();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watched]);
 
   // 첫 화면과 첫 50개(적으면 전부)를 그린 시각
   useLayoutEffect(() => {
