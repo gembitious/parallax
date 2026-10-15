@@ -38,7 +38,9 @@ GitLens의 핵심 흐름(줄 → 커밋 → 부모 리비전 blame → 파일·�
   - 프런트: React 19.3.1, Vite 8.3.4, `@vitejs/plugin-react` 6.1.2, TypeScript 6.0.3 (7.0은 Go 포트라 도구 호환성 확인 전까지 보류)
   - Rust 공통: `serde` 1.0.229, `serde_json` 1.0.154, `libc` 0.2.190(Unix), `windows-sys` 0.61.2(Windows, Tauri와 같은 버전),
     `tempfile` 3.27.0(테스트)
-  - 도입 예정 (그 마일스톤에서 다시 확인): `gix` 0.89.0 (M1), `codemirror` 6.0.2·`@codemirror/view` 6.43.14·`@codemirror/merge` 6.12.2 (M1·M2), `notify` 8.2.0 (M4, 9.0은 RC)
+  - git·텍스트(M1): `gix` 0.89.0 (`default-features = false`, `basic`·`sha1`·`max-performance-safe`. diff는 gix에 든 imara-diff),
+    `encoding_rs` 0.8.42 (EUC-KR 커밋 메시지·파일 내용), `dunce` 1.0.5 (Windows `\\?\` 경로 정리, Tauri가 이미 쓰는 버전)
+  - 도입 예정 (그 마일스톤에서 다시 확인): `codemirror` 6.0.2·`@codemirror/view` 6.43.14·`@codemirror/merge` 6.12.2 (M1·M2), `notify` 8.2.0 (M4, 9.0은 RC)
 
 ## 디렉터리
 ```

@@ -3,8 +3,14 @@
 //! gix·git CLI 래퍼, git 출력 파서, 캐시, 그래프 레인 레이아웃, 인스턴스 간 전달을 둔다.
 //! UI(Tauri)에 의존하지 않으며, 모든 모듈은 단위 테스트를 가진다.
 
+pub mod blame;
+pub mod blame_session;
 pub mod cli;
+pub mod git;
 pub mod instance;
+pub mod linemap;
+pub mod repo;
+pub mod text;
 pub mod time;
 
 /// 코어 크레이트 버전. 앱 정보 표시와 캐시 키 버전에 쓴다.

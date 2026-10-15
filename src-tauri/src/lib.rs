@@ -1,3 +1,4 @@
+mod git;
 mod instance;
 mod perf;
 mod tray;
@@ -31,8 +32,12 @@ pub fn run() {
     let app = tauri::Builder::default()
         .manage(requests.clone())
         .manage(perf::Perf::from_env(t_main_ms))
+        .manage(Arc::new(git::GitState::default()))
         .invoke_handler(tauri::generate_handler![
             app_info,
+            git::blame_open,
+            git::blame_cancel,
+            git::commit_info,
             instance::current_request,
             window::app_ready,
             perf::perf_info,

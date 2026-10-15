@@ -3,6 +3,7 @@
 //! 앱이 git을 띄우는 방식 그대로(`-c core.quotepath=false`, Windows는 `CREATE_NO_WINDOW`) 스폰해
 //! 첫 출력, 첫 N개 레코드, 전체 시간을 잰다. hyperfine 같은 도구는 전체 시간만 재므로 직접 잰다.
 //! 조건은 두 가지다: commit-graph 없음(`-c core.commitGraph=false`), commit-graph + changed-path Bloom 필터 있음.
+//! `plx-blame`은 git이 아니라 앱의 blame 요청(`plx_core::blame_session`)을 그대로 돌려 우리 오버헤드를 잰다.
 //!
 //! 사용법: plx-bench --repos <디렉터리> --cases <파일> [--runs 5] [--warmup 1]
 //! 결과는 Markdown으로 표준 출력에 쓴다. bench/run.sh가 bench/results.md에 넣는다.
@@ -11,6 +12,9 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::time::Instant;
+
+use plx_core::blame_session::{SessionEvent, Sessions};
+use plx_core::repo::RepoCache;
 
 struct Options {
     repos: PathBuf,
@@ -43,6 +47,9 @@ enum Kind {
     /// `git log --topo-order HEAD`: 그래프 첫 화면 100개까지.
     /// 브랜치 목록은 클론 시점마다 달라지므로 고정 태그(HEAD)의 이력만 잰다.
     Graph,
+    /// 앱의 작업트리 blame 요청: 저장소 찾기·git blame·파일 읽기·파싱·JSON 직렬화(채널로 보낼 모양).
+    /// 첫 출력은 내용(meta), 첫 N은 첫 묶음(거터 첫 줄), 전체는 끝(done) 시각이다. 저장소 캐시는 매번 비운다.
+    PlxBlame,
 }
 
 impl Kind {
@@ -55,6 +62,7 @@ impl Kind {
             "line-log" => Kind::LineLog,
             "show" => Kind::Show,
             "graph" => Kind::Graph,
+            "plx-blame" => Kind::PlxBlame,
             _ => return None,
         })
     }
@@ -68,6 +76,7 @@ impl Kind {
             Kind::LineLog => "log -L",
             Kind::Show => "show",
             Kind::Graph => "log --topo-order",
+            Kind::PlxBlame => "plx blame 세션",
         }
     }
 
@@ -75,6 +84,7 @@ impl Kind {
     fn first_n(self) -> Option<(usize, &'static str)> {
         match self {
             Kind::Blame => Some((1, "첫 블록")),
+            Kind::PlxBlame => Some((1, "첫 묶음")),
             Kind::Log | Kind::Follow => Some((50, "첫 50개")),
             Kind::Graph => Some((100, "첫 100개")),
             Kind::Spawn | Kind::LineLog | Kind::Show => None,
@@ -106,6 +116,7 @@ impl Kind {
                 "--format=%H%x1f%P%x1f%an%x1f%at%x1f%s",
                 "HEAD",
             ],
+            Kind::PlxBlame => unreachable!("git을 직접 띄우지 않는다"),
         };
         v.into_iter().map(String::from).collect()
     }
@@ -125,7 +136,7 @@ fn count_records(kind: Kind, chunk: &[u8], carry: &mut Vec<u8>) -> usize {
             count
         }
         Kind::Log | Kind::Follow | Kind::Graph => chunk.iter().filter(|&&b| b == 0).count(),
-        Kind::Spawn | Kind::LineLog | Kind::Show => 0,
+        Kind::Spawn | Kind::LineLog | Kind::Show | Kind::PlxBlame => 0,
     }
 }
 
@@ -138,6 +149,12 @@ enum Condition {
 }
 
 impl Condition {
+    /// 앱 코드가 띄우는 git에는 `-c`를 붙일 수 없어 환경 변수(`GIT_CONFIG_COUNT` 등)로 넘긴다.
+    fn env(self) -> [(&'static str, &'static str); 2] {
+        let [_, a, _, b] = self.config();
+        [a, b].map(|kv| kv.split_once('=').expect("key=value"))
+    }
+
     fn config(self) -> [&'static str; 4] {
         match self {
             Condition::NoGraph => [
@@ -237,6 +254,55 @@ fn run_once(repo: &Path, kind: Kind, target: &str, condition: Condition) -> io::
     })
 }
 
+fn run_session_once(repo: &Path, target: &str, condition: Condition) -> io::Result<Sample> {
+    let vars = condition.env();
+    // SAFETY: plx-bench는 측정 사이에 다른 스레드를 두지 않는다. blame의 stderr 스레드는
+    // 끝까지 읽고 join하므로 여기서는 이 스레드만 환경을 읽고 쓴다.
+    unsafe {
+        std::env::set_var("GIT_CONFIG_COUNT", vars.len().to_string());
+        for (i, (key, value)) in vars.iter().enumerate() {
+            std::env::set_var(format!("GIT_CONFIG_KEY_{i}"), key);
+            std::env::set_var(format!("GIT_CONFIG_VALUE_{i}"), value);
+        }
+    }
+    let sessions = Sessions::new();
+    let repos = RepoCache::new();
+    let id = sessions.register();
+    let path = repo.join(target);
+
+    let start = Instant::now();
+    let ms = |t: Instant| t.duration_since(start).as_secs_f64() * 1000.0;
+    let (mut first_byte, mut first_n) = (None, None);
+    let (mut records, mut bytes) = (0usize, 0usize);
+    let mut end = None;
+    sessions.run(id, &repos, &path, None, |event| {
+        // 앱의 Channel::send처럼 JSON으로 만든다. 출력 열은 화면으로 보내는 양이다.
+        bytes += serde_json::to_vec(&event).map_or(0, |json| json.len());
+        let now = Instant::now();
+        match event {
+            SessionEvent::Meta(_) => first_byte = Some(ms(now)),
+            SessionEvent::Chunk(chunk) => {
+                first_n.get_or_insert_with(|| ms(now));
+                records += chunk.blocks.len();
+            }
+            other => end = Some(other),
+        }
+        true
+    });
+    let total = ms(Instant::now());
+    match end {
+        Some(SessionEvent::Done { .. }) => Ok(Sample {
+            first_byte,
+            first_n,
+            total,
+            records,
+            bytes,
+        }),
+        Some(SessionEvent::Error { message }) => Err(io::Error::other(message)),
+        other => Err(io::Error::other(format!("예상하지 못한 끝: {other:?}"))),
+    }
+}
+
 fn median(mut values: Vec<f64>) -> Option<f64> {
     if values.is_empty() {
         return None;
@@ -254,12 +320,16 @@ struct Summary {
 }
 
 fn measure(opts: &Options, repo: &Path, case: &Case, condition: Condition) -> io::Result<Summary> {
+    let run = || match case.kind {
+        Kind::PlxBlame => run_session_once(repo, &case.target, condition),
+        kind => run_once(repo, kind, &case.target, condition),
+    };
     for _ in 0..opts.warmup {
-        run_once(repo, case.kind, &case.target, condition)?;
+        run()?;
     }
     let mut samples = Vec::with_capacity(opts.runs);
     for _ in 0..opts.runs {
-        samples.push(run_once(repo, case.kind, &case.target, condition)?);
+        samples.push(run()?);
     }
     let last = samples.last().expect("runs >= 1");
     Ok(Summary {
@@ -452,6 +522,9 @@ fn report(opts: &Options, cases: &[Case]) -> io::Result<()> {
     println!();
     println!(
         "셀은 `첫 출력 / 첫 N / 전체` (ms). 첫 N은 항목 이름의 괄호 안 기준이고, 해당 없으면 —."
+    );
+    println!(
+        "`plx blame 세션`의 첫 출력은 내용(meta), 레코드는 블록 수, 출력은 화면으로 보내는 JSON 양이다."
     );
     Ok(())
 }
