@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::cache::{CacheKey, DiskCache};
 use crate::commit_table::CommitTable;
+use crate::git::{self, Canceller, Streaming};
 use crate::repo::{Repo, RepoCache, decode_text, person};
 
 /// 레인 색 수(화면 팔레트와 같다)
@@ -609,6 +610,33 @@ fn build(
     )))
 }
 
+/// 검색을 새 검색이 멈췄을 때의 오류(화면은 무시한다)
+pub const CANCELLED: &str = "취소했다";
+
+/// 커밋 메시지(모든 줄, 커밋 인코딩대로)·작성자 이름·메일에 `query`(소문자)가 들어 있는가.
+fn commit_matches(repo: &gix::Repository, id: ObjectId, query: &str, buf: &mut Vec<u8>) -> bool {
+    let Ok(Some(data)) = repo.objects.try_find(&id, buf) else {
+        return false;
+    };
+    let Ok(gix::objs::ObjectRef::Commit(commit)) = data.decode() else {
+        return false;
+    };
+    let encoding = commit.encoding;
+    if let Ok(author) = commit.author()
+        && (decode_text(author.name, encoding)
+            .to_lowercase()
+            .contains(query)
+            || decode_text(author.email, encoding)
+                .to_lowercase()
+                .contains(query))
+    {
+        return true;
+    }
+    decode_text(commit.message, encoding)
+        .to_lowercase()
+        .contains(query)
+}
+
 fn ms(since: Instant) -> f64 {
     since.elapsed().as_secs_f64() * 1000.0
 }
@@ -671,6 +699,8 @@ struct Refs {
     /// 시작점으로 쓰지 않은 로컬·원격 브랜치 수
     hidden_branches: usize,
     hidden_remotes: usize,
+    /// 같은 시작점을 git log에 주는 인자(경로 검색용)
+    revs: Vec<String>,
 }
 
 fn read_refs(repo: &Repo, options: GraphOptions) -> Result<Refs, String> {
@@ -768,6 +798,23 @@ fn read_refs(repo: &Repo, options: GraphOptions) -> Result<Refs, String> {
             hidden_remotes += 1;
         }
     }
+    let mut revs: Vec<String> = Vec::new();
+    if head.is_some() {
+        revs.push("HEAD".to_owned());
+    }
+    match scope {
+        GraphScope::Head => {}
+        GraphScope::Branches => {
+            revs.push("--branches".to_owned());
+            revs.extend(
+                remotes
+                    .iter()
+                    .filter(|(short, _)| upstreams.contains(short))
+                    .map(|(short, _)| format!("refs/remotes/{}", short.to_str_lossy())),
+            );
+        }
+        GraphScope::All => revs.extend(["--branches".to_owned(), "--remotes".to_owned()]),
+    }
 
     let mut labels: HashMap<ObjectId, Vec<Label>> = HashMap::new();
     let mut label = |id: ObjectId, name: &BString, kind: LabelKind| {
@@ -809,6 +856,7 @@ fn read_refs(repo: &Repo, options: GraphOptions) -> Result<Refs, String> {
         branch,
         hidden_branches,
         hidden_remotes,
+        revs,
     })
 }
 
@@ -949,11 +997,39 @@ struct State {
 struct Session {
     repo: Arc<Repo>,
     labels: HashMap<ObjectId, Vec<Label>>,
+    /// 시작점을 git log에 주는 인자
+    revs: Vec<String>,
     state: Mutex<State>,
     cancelled: AtomicBool,
+    /// 검색할 때마다 올린다. 진행 중인 검색은 값이 바뀌면 멈춘다.
+    search_generation: AtomicU64,
+    /// 진행 중인 경로 검색의 (세대 번호, git)
+    search_git: Mutex<Option<(u64, Canceller)>>,
 }
 
 impl Session {
+    fn built(&self) -> Result<Arc<Built>, String> {
+        self.state
+            .lock()
+            .unwrap()
+            .built
+            .clone()
+            .ok_or_else(|| "아직 그래프를 읽는 중이다".to_owned())
+    }
+
+    /// 새 검색을 시작한다: 진행 중인 검색(경로 검색의 git 포함)을 멈추고 이 검색의 세대 번호를 돌려준다.
+    fn start_search(&self) -> u64 {
+        if let Some((_, git)) = self.search_git.lock().unwrap().take() {
+            git.cancel();
+        }
+        self.search_generation.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    fn search_stale(&self, generation: u64) -> bool {
+        self.search_generation.load(Ordering::SeqCst) != generation
+            || self.cancelled.load(Ordering::Relaxed)
+    }
+
     /// `start`..`end` 행(레이아웃을 정한 데까지)
     fn window(&self, start: usize, end: usize) -> GraphWindow {
         let (built, checkpoint, available, width, done) = {
@@ -1141,8 +1217,11 @@ impl GraphSessions {
         let session = Arc::new(Session {
             repo,
             labels: refs.labels,
+            revs: refs.revs,
             state: Mutex::new(State::default()),
             cancelled: AtomicBool::new(false),
+            search_generation: AtomicU64::new(0),
+            search_git: Mutex::new(None),
         });
         self.sessions.lock().unwrap().insert(id, session.clone());
         let tips = refs.tips;
@@ -1176,11 +1255,115 @@ impl GraphSessions {
         Ok(built.and_then(|built| built.row_of_id(commit)))
     }
 
-    /// 그래프를 닫는다(워크를 멈추고 행을 버린다). 모르는 id면 `false`.
+    /// 메시지(모든 줄)·작성자 이름·메일에 `query`가 들어 있거나(대소문자 무시) sha가 `query`로 시작하는 커밋의 행.
+    /// `from` 다음 행부터(`forward`가 아니면 앞 행부터) 차례로 커밋을 풀어 보고, 끝에 닿으면 반대쪽 끝에서 이어
+    /// 찾는다. 없으면 `None`. 같은 그래프에서 새 검색을 시작하면 이 검색은 멈추고 오류(취소)를 돌려준다.
+    pub fn search(
+        &self,
+        id: u64,
+        query: &str,
+        from: usize,
+        forward: bool,
+    ) -> Result<Option<usize>, String> {
+        let session = self.session(id)?;
+        let generation = session.start_search();
+        let built = session.built()?;
+        let query = query.trim().to_lowercase();
+        let n = built.order.len();
+        if query.is_empty() || n == 0 {
+            return Ok(None);
+        }
+        let hex = query.len() >= 4 && query.bytes().all(|b| b.is_ascii_hexdigit());
+        let mut repo = session.repo.local();
+        repo.object_cache_size_if_unset(OBJECT_CACHE_BYTES);
+        let mut buf = Vec::new();
+        let from = from.min(n - 1);
+        for step in 1..=n {
+            if step % 256 == 0 && session.search_stale(generation) {
+                return Err(CANCELLED.to_owned());
+            }
+            let row = if forward {
+                (from + step) % n
+            } else {
+                (from + n - step % n) % n
+            };
+            let id = built.dag.id(built.order[row]);
+            if (hex && id.to_hex().to_string().starts_with(&query))
+                || commit_matches(&repo, id, &query, &mut buf)
+            {
+                return Ok(Some(row));
+            }
+        }
+        Ok(None)
+    }
+
+    /// `path`(파일·디렉터리, git pathspec)를 바꾼 커밋의 행들(오름차순). 그래프와 같은 시작점으로
+    /// `git log --full-history --no-merges -- <path>`를 돌린다(Bloom 필터가 있으면 빠르다). merge는 넣지 않는다:
+    /// 양쪽 가지가 바꾼 경로면 merge마다 걸려 정작 바꾼 커밋이 묻힌다. 새 검색을 시작하면 git을 끝내고 취소한다.
+    pub fn search_path(&self, id: u64, path: &str) -> Result<Vec<usize>, String> {
+        let session = self.session(id)?;
+        let generation = session.start_search();
+        let built = session.built()?;
+        if built.order.is_empty() || session.revs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut command = git::command(session.repo.workdir());
+        command
+            .args([
+                "log",
+                "--format=%H",
+                "--full-history",
+                "--no-merges",
+                "--no-color",
+            ])
+            .args(&session.revs)
+            .arg("--")
+            .arg(path);
+        let mut git = Streaming::spawn(command, "git log").map_err(|e| e.to_string())?;
+        *session.search_git.lock().unwrap() = Some((generation, git.canceller()));
+        if session.search_stale(generation) {
+            git.abort();
+            return Err(CANCELLED.to_owned());
+        }
+        let mut rows = Vec::new();
+        let mut pending: Vec<u8> = Vec::new();
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            let n = git.read(&mut buf).map_err(|e| e.to_string())?;
+            if n == 0 {
+                break;
+            }
+            pending.extend_from_slice(&buf[..n]);
+            let complete = pending
+                .iter()
+                .rposition(|&b| b == b'\n')
+                .map_or(0, |i| i + 1);
+            for line in pending[..complete].split(|&b| b == b'\n') {
+                if let Ok(id) = ObjectId::from_hex(line.trim_ascii())
+                    && let Some(row) = built.row_of_id(id)
+                {
+                    rows.push(row);
+                }
+            }
+            pending.drain(..complete);
+        }
+        git.finish().map_err(|e| e.to_string())?;
+        let mut current = session.search_git.lock().unwrap();
+        if current.as_ref().is_some_and(|(g, _)| *g == generation) {
+            current.take();
+        }
+        drop(current);
+        rows.sort_unstable();
+        rows.dedup();
+        Ok(rows)
+    }
+
+    /// 그래프를 닫는다(워크와 검색을 멈추고 행을 버린다). 모르는 id면 `false`.
     pub fn close(&self, id: u64) -> bool {
         match self.sessions.lock().unwrap().remove(&id) {
             Some(session) => {
                 session.cancelled.store(true, Ordering::SeqCst);
+                session.start_search();
                 true
             }
             None => false,

@@ -1,6 +1,7 @@
 // 커밋 그래프: 시작점(HEAD, 로컬 브랜치와 그 upstream)에서 닿는 커밋을 `git log --topo-order` 순으로 보인다.
 // 행은 화면이 보는 범위만 묶음으로 백엔드에서 읽고(가상 스크롤), 레인은 캔버스 하나에 그린다.
-// 키: j/k 이동, Enter 커밋 상세, y sha 복사, R 원격 브랜치 모두 ↔ 브랜치만, q 뒤로, ? 도움말.
+// 키: j/k 이동, Enter 커밋 상세, y sha 복사, R 원격 브랜치 모두 ↔ 브랜치만, / 검색(메시지·작성자·sha, path:경로),
+//     n/N 다음·이전 결과, q 뒤로, ? 도움말.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Help } from "../Help";
 import { copyText } from "../clipboard";
@@ -11,7 +12,8 @@ import { lastName, type Navigation } from "../nav";
 import { afterPaint, nowMs, record } from "../perf";
 import { drawRows, graphWidth, readPalette, ROW_HEIGHT, type Palette, type Visible } from "./draw";
 import { CHUNK, RowCache, rowWidth } from "./rows";
-import { openGraph, type GraphHandle } from "./session";
+import { nextRow, parseQuery, rowMatches, type Query } from "./search";
+import { CANCELLED, openGraph, type GraphHandle } from "./session";
 import type { GraphMeta, GraphRow, GraphScope, GraphStats, Label } from "./types";
 
 type Props = {
@@ -100,6 +102,9 @@ const OVERSCAN = 60;
 /** 한 행에 보이는 이름표 수(나머지는 +N) */
 const MAX_LABELS = 3;
 
+/** 마지막으로 한 검색(n/N이 되풀이한다). 경로 검색은 일치 행들을 한 번 구해 둔다. */
+type Found = { kind: "text"; text: string } | { kind: "path"; path: string; rows: number[]; set: ReadonlySet<number> };
+
 function GraphPane({
   repo,
   focus = null,
@@ -133,6 +138,12 @@ function GraphPane({
   const [palette, setPalette] = useState<Palette | null>(null);
   const [help, setHelp] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [search, setSearch] = useState({ open: false, input: "" });
+  const [found, setFound] = useState<Found | null>(null);
+  const [searching, setSearching] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
+  /** 검색마다 올린다. 늦게 온 앞 검색의 결과는 버린다. */
+  const searchSeq = useRef(0);
   const cache = useRef(new RowCache());
   const handle = useRef<GraphHandle | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -149,8 +160,8 @@ function GraphPane({
     painted: null as Promise<number | null> | null,
     reported: false,
   });
-  const latest = useRef({ active, meta, selected, help, total });
-  latest.current = { active, meta, selected, help, total };
+  const latest = useRef({ active, meta, selected, help, total, found });
+  latest.current = { active, meta, selected, help, total, found };
 
   const showToast = (message: string) => {
     setToast(message);
@@ -342,6 +353,67 @@ function GraphPane({
 
   const changeScope = (next: GraphScope) => onScope(next, current()?.sha ?? null);
 
+  /**
+   * 고른 행 다음(`forward`가 아니면 앞)의 일치로 간다. `input`을 주면 그 입력으로 찾고, 없으면 마지막 검색을 되풀이한다.
+   * 메시지·작성자·sha는 백엔드가 행 순서대로 커밋을 풀어 보고, 경로는 일치 행을 한 번 구해 그 사이를 오간다.
+   */
+  const runSearch = (forward: boolean, input?: string) => {
+    const graph = handle.current;
+    const { found: last, selected: from, total: rows } = latest.current;
+    if (!graph || rows === null) return;
+    const query: Query | null =
+      input !== undefined
+        ? parseQuery(input)
+        : last?.kind === "path"
+          ? { kind: "path", path: last.path }
+          : last
+            ? { kind: "text", text: last.text }
+            : null;
+    if (!query) return;
+    const seq = ++searchSeq.current;
+    const failed = (e: unknown) => {
+      if (seq === searchSeq.current && String(e) !== CANCELLED) showToast(String(e));
+    };
+    const finished = () => {
+      if (seq === searchSeq.current) setSearching(false);
+    };
+    if (query.kind === "path") {
+      if (last?.kind === "path" && last.path === query.path) {
+        const row = nextRow(last.rows, from, forward);
+        if (row === null) showToast(`이 경로를 바꾼 커밋이 없다: ${query.path}`);
+        else select(row, true);
+        return;
+      }
+      setSearching(true);
+      graph
+        .searchPath(query.path)
+        .then((matched) => {
+          if (seq !== searchSeq.current) return;
+          setFound({ kind: "path", path: query.path, rows: matched, set: new Set(matched) });
+          const row = nextRow(matched, latest.current.selected, forward);
+          if (row === null) showToast(`이 경로를 바꾼 커밋이 없다: ${query.path}`);
+          else select(row, true);
+        }, failed)
+        .finally(finished);
+    } else {
+      setFound({ kind: "text", text: query.text });
+      setSearching(true);
+      graph
+        .search(query.text, from, forward)
+        .then((row) => {
+          if (seq !== searchSeq.current) return;
+          if (row === null) showToast(`찾지 못했다: ${query.text}`);
+          else select(row, true);
+        }, failed)
+        .finally(finished);
+    }
+  };
+
+  useEffect(() => {
+    if (search.open) searchRef.current?.focus();
+    else if (latest.current.active) listRef.current?.focus({ preventScroll: true });
+  }, [search.open]);
+
   // 키: 화면이 맨 위일 때만.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -380,6 +452,15 @@ function GraphPane({
         case "y":
           copySha();
           break;
+        case "/":
+          setSearch((s) => ({ ...s, open: true }));
+          break;
+        case "n":
+          runSearch(true);
+          break;
+        case "N":
+          runSearch(false);
+          break;
         case "R":
           changeScope(scope === "all" ? "branches" : "all");
           break;
@@ -390,8 +471,10 @@ function GraphPane({
           setHelp(true);
           break;
         case "Escape":
-          handled = helpOpen;
-          setHelp(false);
+          // 도움말을 닫고, 없으면 검색 강조를 지운다.
+          if (helpOpen) setHelp(false);
+          else if (latest.current.found) setFound(null);
+          else handled = false;
           break;
         default:
           handled = false;
@@ -441,6 +524,15 @@ function GraphPane({
   });
 
   const chosen = current();
+  const matchText = found?.kind === "text" ? found.text : null;
+  const rowClass = (i: number, row: GraphRow | undefined) => {
+    const classes = ["graph-row"];
+    if (i === selected) classes.push("selected");
+    if (found?.kind === "path" ? found.set.has(i) : matchText !== null && row && rowMatches(row, matchText)) {
+      classes.push("match");
+    }
+    return classes.join(" ");
+  };
   const hidden =
     meta && scope === "branches" && meta.hiddenRemotes > 0
       ? `원격 브랜치 ${formatCount(meta.hiddenRemotes)}개 숨김`
@@ -501,6 +593,30 @@ function GraphPane({
           ?
         </button>
       </header>
+      {search.open && (
+        <div className="history-search graph-search">
+          <input
+            ref={searchRef}
+            type="search"
+            value={search.input}
+            placeholder="메시지·작성자·sha, 경로는 path:경로 (Enter 다음, Shift+Enter 이전, Esc 닫기)"
+            aria-label="그래프 검색"
+            onChange={(e) => setSearch({ open: true, input: e.target.value })}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                runSearch(!e.shiftKey, search.input);
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                setSearch((s) => ({ ...s, open: false }));
+              }
+            }}
+          />
+          <span className="search-status" role="status">
+            {searching ? "찾는 중…" : found?.kind === "path" ? `경로 일치 ${formatCount(found.rows.length)}개` : null}
+          </span>
+        </div>
+      )}
       <div className="graph-body">
         <div
           className="graph-list"
@@ -525,7 +641,7 @@ function GraphPane({
                   id={`graph-row-${i}`}
                   role="option"
                   aria-selected={i === selected}
-                  className={i === selected ? "graph-row selected" : "graph-row"}
+                  className={rowClass(i, row)}
                   style={{
                     top: i * ROW_HEIGHT,
                     height: ROW_HEIGHT,

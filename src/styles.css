@@ -1001,8 +1001,32 @@ kbd {
   cursor: default;
 }
 
+.graph-row.match {
+  background: var(--search-match);
+}
+
 .graph-row.selected {
   background: var(--selection);
+}
+
+.graph-search {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.graph-search input {
+  flex: 1;
+}
+
+.search-status {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.search-status:empty {
+  display: none;
 }
 
 /* 레인은 목록 위에 겹친 캔버스 하나에 그린다(클릭은 목록이 받는다). */

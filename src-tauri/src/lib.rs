@@ -45,6 +45,8 @@ pub fn run() {
             git::graph_open,
             git::graph_rows,
             git::graph_find,
+            git::graph_search,
+            git::graph_search_path,
             git::graph_close,
             git::repo_acceleration,
             git::accelerate,
