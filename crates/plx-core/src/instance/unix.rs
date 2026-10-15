@@ -71,11 +71,13 @@ pub fn connect(socket: &SocketName) -> io::Result<UnixStream> {
 }
 
 /// 소켓 파일이 없거나(인스턴스 없음) 듣는 쪽이 없는(낡은 소켓) 경우.
+/// 그 경로에 소켓이 아닌 파일이 있으면 macOS는 ENOTSOCK, Linux는 ECONNREFUSED를 돌려준다.
+/// 어느 쪽이든 락을 잡은 쪽이 지우고 다시 bind한다.
 pub fn is_absent(e: &io::Error) -> bool {
     matches!(
         e.kind(),
         io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
-    )
+    ) || e.raw_os_error() == Some(libc::ENOTSOCK)
 }
 
 /// 대기열이 가득 찬 경우.

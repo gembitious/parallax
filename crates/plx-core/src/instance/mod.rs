@@ -414,14 +414,22 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn stale_socket_file_is_replaced() {
-        let dir = tempfile::tempdir().unwrap();
-        let ep = endpoint(dir.path());
-        // 강제 종료된 primary가 남긴 소켓 파일.
-        std::fs::write(&ep.socket, b"").unwrap();
-        let lock = expect_primary(claim(&ep, &invocation(&[]), Duration::from_secs(5)));
-        let _server = lock.serve(|_| Reply::ok()).unwrap();
-        let reply = expect_forwarded(claim(&ep, &invocation(&["x"]), Duration::from_secs(5)));
-        assert_eq!(reply, Reply::ok());
+        // 강제 종료된 primary가 남긴 소켓(듣는 쪽이 없다), 그리고 소켓이 아닌 파일.
+        // connect 오류가 플랫폼마다 다르다(ECONNREFUSED, macOS는 소켓이 아닌 파일에 ENOTSOCK).
+        let leave_stale_socket = |path: &Path| {
+            drop(std::os::unix::net::UnixListener::bind(path).unwrap());
+            assert!(path.exists(), "drop해도 소켓 파일은 남는다");
+        };
+        let leave_plain_file = |path: &Path| std::fs::write(path, b"").unwrap();
+        for leave in [&leave_stale_socket as &dyn Fn(&Path), &leave_plain_file] {
+            let dir = tempfile::tempdir().unwrap();
+            let ep = endpoint(dir.path());
+            leave(&ep.socket);
+            let lock = expect_primary(claim(&ep, &invocation(&[]), Duration::from_secs(5)));
+            let _server = lock.serve(|_| Reply::ok()).unwrap();
+            let reply = expect_forwarded(claim(&ep, &invocation(&["x"]), Duration::from_secs(5)));
+            assert_eq!(reply, Reply::ok());
+        }
     }
 
     #[test]
