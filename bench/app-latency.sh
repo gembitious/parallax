@@ -148,6 +148,13 @@ read -r cache_med cache_p90 cache_max <<<"$(printf '%s\n' "$cached_blame" | tota
 git_first="$(printf '%s\n' "$git_blame" | sed -n 's/.*git 첫 출력 \([0-9.]*\).*/\1/p' | summary | awk '{ print $1 }')"
 
 unpainted="$(LC_ALL=C grep -c '"ok":false' "$log" || true)"
+# 콜드 스타트 구간: "프로세스 39 · Tauri·WebView 275 · …"(구간 이름 뒤에 바로 "ms"가 오는 항목만 고른다)
+phases_of() {
+  grep -o '"label":"[^"]*","ms":[0-9.]*' | sed 's/"label":"\([^"]*\)","ms":\([0-9.]*\)/\1|\2/' |
+    awk -F'|' 'NF == 2 { printf "%s%s %.1f", sep, $1, $2; sep = " · " } END { print "" }'
+}
+cold_phases="$(grep '"kind":"cold"' "$log" | head -n 1 | phases_of)"
+cold_blame="$(LC_ALL=C grep -F '(콜드 스타트)' "$log" | LC_ALL=C grep -F '"kind":"blame"' | head -n 1 | phases_of)"
 echo "- 환경: $(uname -srm), $(date '+%Y-%m-%d'), $("$bin" --version 2>/dev/null || echo plx)"
 if [ "$unpainted" -gt 0 ]; then
   echo "- 주의: 페인트를 측정하지 못한 기록 ${unpainted}건(창이 화면에 그려지지 않는 환경). 그 기록은 렌더까지만 잰 값이다."
@@ -160,3 +167,6 @@ echo "| 상주 인스턴스에 plx 호출 → 대상 뷰 첫 페인트 (중앙�
 echo "| 두 번째 plx 프로세스, 셸에서 본 시간 (중앙값 / p90 / 최대) | $shell_med / $shell_p90 / $shell_max | — |"
 echo "| blame 첫 줄 표시, 처음 여는 파일 (n=$(count_of "$git_blame")) | $blame_med / $blame_p90 / $blame_max | ≤ git 첫 출력 + 30 (git 첫 출력 중앙값 $git_first) |"
 echo "| blame 첫 줄 표시, 다시 여는 파일·캐시 (n=$(count_of "$cached_blame")) | $cache_med / $cache_p90 / $cache_max | ≤ 16 |"
+echo
+echo "- 콜드 스타트 구간(ms): $cold_phases"
+echo "- 콜드 스타트의 blame(ms): $cold_blame"
