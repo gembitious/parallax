@@ -63,5 +63,5 @@ echo "설치했다: $shim -> $bin"
 
 case ":$PATH:" in
   *":$dir:"*) ;;
-  *) echo "주의: $dir가 PATH에 없다. 셸 설정에 추가한다: export PATH=\"$dir:\$PATH\"" ;;
+  *) echo "주의: ${dir}가 PATH에 없다. 셸 설정에 추가한다: export PATH=\"$dir:\$PATH\"" ;;
 esac

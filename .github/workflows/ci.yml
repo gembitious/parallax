@@ -79,6 +79,16 @@ jobs:
         if: runner.os == 'Linux'
         run: shellcheck bench/*.sh fixtures/*.sh scripts/*.sh
 
+      # macOS 기본 bash 3.2는 `$dir가`처럼 변수 바로 뒤에 붙은 한글 바이트까지 변수 이름으로 읽는다(unbound variable).
+      # shellcheck는 잡지 못한다. 변수 뒤에 ASCII가 아닌 글자가 오면 `${dir}가`처럼 감싼다.
+      - name: bash 3.2 호환 (변수 뒤 한글)
+        if: runner.os == 'Linux'
+        run: |
+          if grep -nP '\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7F]' bench/*.sh fixtures/*.sh scripts/*.sh; then
+            echo "::error::변수 바로 뒤에 ASCII가 아닌 글자가 있다. \${이름}처럼 감싼다(macOS bash 3.2)."
+            exit 1
+          fi
+
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 

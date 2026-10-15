@@ -103,7 +103,7 @@ for i in $(seq 1 "$runs"); do
   shell_ms="$shell_ms$(awk -v s="$start" -v e="$end" 'BEGIN { printf "%.1f", e - s }')
 "
   if ! wait_for "\"label\":\"blame $target:$i\""; then
-    echo "$i번째 호출 기록이 나오지 않았다." >&2
+    echo "${i}번째 호출 기록이 나오지 않았다." >&2
     exit 1
   fi
 done
