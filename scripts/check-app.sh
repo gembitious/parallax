@@ -178,6 +178,12 @@ check "한글 경로 저장소 파일 blame → 거터를 그림 (블록 2: 커�
   wait_for_all '"kind":"blame"' '"label":"blame 소스/파일 이름.rs"' '"ok":true' '블록 2'
 
 status=0
+(cd "$repo" && "$bin" show HEAD) || status=$?
+check "plx show → 종료 코드 0" test "$status" -eq 0
+check "커밋 상세가 파일 목록과 diff를 그림 (한글 경로)" \
+  wait_for_all '"kind":"commit"' '"ok":true' '소스/파일 이름.rs'
+
+status=0
 (cd "$work" && "$bin" "한글 폴더/파일 이름.txt:1") || status=$?
 check "한글·공백 경로 전달 → 종료 코드 0" test "$status" -eq 0
 check "한글·공백 경로 전달 → 상주 인스턴스가 그림" wait_for '파일 이름.txt:1"'

@@ -357,6 +357,166 @@ button.link {
   text-align: right;
 }
 
+/* ---------------------------------------------------------------- 커밋 상세 */
+
+.commit {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.commit-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+.commit-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: baseline;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.commit-body {
+  flex-basis: 100%;
+  max-height: 20vh;
+  overflow: auto;
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.commit-main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.file-list {
+  flex: 0 0 auto;
+  width: min(360px, 35vw);
+  margin: 0;
+  padding: 4px 0;
+  overflow: auto;
+  border-right: 1px solid var(--border);
+  list-style: none;
+  font-size: 12px;
+}
+
+.file-list li {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 2px 10px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.file-list li.selected {
+  background: var(--selection);
+}
+
+.file-name-cell {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+}
+
+.file-base {
+  flex-shrink: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-name-cell .file-dir {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+}
+
+.file-stat {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.status {
+  flex-shrink: 0;
+  width: 1.4em;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  color: var(--bg);
+  background: var(--muted);
+}
+
+.status-added {
+  background: var(--uncommitted);
+}
+
+.status-deleted {
+  background: var(--danger);
+}
+
+.status-modified {
+  background: var(--accent);
+}
+
+.status-renamed,
+.status-copied {
+  background: var(--syn-function);
+}
+
+.added {
+  color: var(--uncommitted);
+}
+
+.deleted {
+  color: var(--danger);
+}
+
+.diff-pane {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.diff-editor {
+  height: 100%;
+}
+
+.diff-editor .cm-mergeView {
+  height: 100%;
+  overflow: auto;
+}
+
+.diff-editor .cm-mergeView .cm-editor {
+  height: auto;
+}
+
+button.toggle {
+  flex-shrink: 0;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
 /* ---------------------------------------------------------------- 카드·도움말·알림 */
 
 .card {

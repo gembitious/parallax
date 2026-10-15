@@ -160,6 +160,12 @@ impl Repo {
 
     /// 커밋 상세(hover 카드). 변경 파일 수는 첫 부모(없으면 빈 트리)와 비교한다.
     pub fn commit_info(&self, id: ObjectId) -> Result<CommitInfo> {
+        self.commit_changes(id).map(|(info, _)| info)
+    }
+
+    /// 커밋 정보와 첫 부모(없으면 빈 트리)와 비교한 파일 변경. 디렉터리(트리) 항목은 뺀다.
+    /// rename은 사용자 설정과 관계없이 git 기본값(유사도 50%)으로 찾는다.
+    pub(crate) fn commit_changes(&self, id: ObjectId) -> Result<(CommitInfo, Vec<TreeChange>)> {
         let repo = self.local();
         let commit = repo.find_commit(id).map_err(|e| err("커밋 읽기", e))?;
         let decoded = commit.decode().map_err(|e| err("커밋 해석", e))?;
@@ -170,33 +176,40 @@ impl Repo {
         let parents: Vec<ObjectId> = commit.parent_ids().map(|id| id.detach()).collect();
 
         let tree = commit.tree().map_err(|e| err("커밋 트리", e))?;
+        // 얕은 클론의 경계 커밋은 부모 객체가 없다. git처럼 루트 커밋으로 보고 빈 트리와 비교한다.
         let parent_tree = match parents.first() {
-            Some(parent) => Some(
-                repo.find_commit(*parent)
-                    .and_then(|c| c.tree())
-                    .map_err(|e| err("부모 트리", e))?,
-            ),
+            Some(parent) => match repo.try_find_object(*parent) {
+                Ok(Some(object)) => Some(object.peel_to_tree().map_err(|e| err("부모 트리", e))?),
+                Ok(None) => None,
+                Err(e) => return Err(err("부모 커밋", e)),
+            },
             None => None,
         };
-        // 트리 비교는 바뀐 파일을 담은 디렉터리(트리) 항목도 변경으로 돌려준다. 파일만 센다.
-        let changed_files = repo
-            .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)
+        let options =
+            gix::diff::Options::default().with_rewrites(Some(gix::diff::Rewrites::default()));
+        // 트리 비교는 바뀐 파일을 담은 디렉터리(트리) 항목도 변경으로 돌려준다. 파일만 남긴다.
+        let changes: Vec<TreeChange> = repo
+            .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), options)
             .map_err(|e| err("트리 비교", e))?
-            .iter()
+            .into_iter()
             .filter(|change| !change.entry_mode().is_tree())
-            .count();
+            .collect();
 
-        Ok(CommitInfo {
+        let info = CommitInfo {
             sha: id.to_string(),
             parents: parents.iter().map(ToString::to_string).collect(),
             summary: message.lines().next().unwrap_or("").trim().to_owned(),
             message: message.trim_end().to_owned(),
             author,
             committer,
-            changed_files,
-        })
+            changed_files: changes.len(),
+        };
+        Ok((info, changes))
     }
 }
+
+/// 트리 비교 결과 하나(gix).
+pub(crate) type TreeChange = gix::object::tree::diff::ChangeDetached;
 
 /// 열어 둔 저장소 캐시. 같은 저장소를 다시 열지 않아 gix의 객체 캐시를 이어 쓰고,
 /// 디렉터리 → 저장소 찾기 결과도 기억한다(하위 모듈처럼 중첩된 저장소도 디렉터리마다 정확하다).

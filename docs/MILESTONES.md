@@ -43,7 +43,8 @@ baseline 표가 `bench/results.md`에 있다.
 - [ ] 파일 히스토리: 먼저 `git log -- <path>`로 첫 페이지를 띄우고, rename 이전 구간은 `--follow`로 이어 붙인다
       (`--follow`는 Bloom 필터 혜택이 제한적일 수 있으니 두 방식을 측정해 확정)
 - [ ] 라인/범위 히스토리 (`git log -L`), 코드 뷰 선택 영역에서 바로 진입
-- [ ] 커밋 상세: gix 트리 diff + `@codemirror/merge` (분할/통합 전환), 히스토리에서 열면 해당 파일 diff만
+- [x] 커밋 상세: gix 트리 diff + `@codemirror/merge` (분할/통합 전환), 히스토리에서 열면 해당 파일 diff만
+      — Windows·macOS 실기 확인 필요 (히스토리 뷰에서 여는 것은 파일 히스토리와 함께)
 - [ ] Bloom 필터 감지 → 없으면 "가속 설정" 버튼
       (사용자 확인 후 `git commit-graph write --reachable --changed-paths`, `commitGraph.changedPaths=true`)
 

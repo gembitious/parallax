@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use plx_core::blame_session::{SessionEvent, Sessions};
 use plx_core::cache::BlameCache;
+use plx_core::commit::{self, CommitDetail, FileVersions};
 use plx_core::navigate::{self, Direction, Version};
 use plx_core::repo::{CommitInfo, RepoCache};
 use serde::Serialize;
@@ -96,6 +97,36 @@ pub async fn commit_info(
         let repo = git.repos.for_path(Path::new(&repo))?;
         let id = repo.resolve_commit(&rev)?;
         repo.commit_info(id)
+    })
+    .await
+}
+
+/// 커밋 상세: 첫 부모와 비교한 파일 목록과 줄 수. `repo`는 저장소 안의 아무 경로(plx 호출의 cwd 등)다.
+#[tauri::command]
+pub async fn commit_detail(
+    git: State<'_, Arc<GitState>>,
+    repo: String,
+    rev: String,
+) -> Result<CommitDetail, String> {
+    blocking(git, move |git| {
+        let repo = git.repos.for_path(Path::new(&repo))?;
+        let id = repo.resolve_commit(&rev)?;
+        commit::commit_detail(&repo, id)
+    })
+    .await
+}
+
+/// 파일 하나의 두 버전(diff 화면). blob id가 없으면 빈 쪽이다(추가·삭제).
+#[tauri::command]
+pub async fn file_versions(
+    git: State<'_, Arc<GitState>>,
+    repo: String,
+    old_id: Option<String>,
+    new_id: Option<String>,
+) -> Result<FileVersions, String> {
+    blocking(git, move |git| {
+        let repo = git.repos.for_path(Path::new(&repo))?;
+        commit::file_versions(&repo, old_id.as_deref(), new_id.as_deref())
     })
     .await
 }

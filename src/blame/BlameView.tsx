@@ -2,6 +2,7 @@
 // 에디터(CodeMirror)는 React 밖에서 직접 다룬다. 이벤트 처리기는 한 번 만들어지므로 최신 상태는 ref로 읽는다.
 import { useEffect, useRef, useState } from "react";
 import { Help } from "../Help";
+import { copyText } from "../clipboard";
 import { call } from "../ipc";
 import { afterPaint, nowMs, record } from "../perf";
 import { CommitCard, type InfoState } from "./CommitCard";
@@ -9,11 +10,10 @@ import { createEditor, type Editor } from "./editor";
 import { formatCount, isUncommitted, shortSha } from "./format";
 import { blameChanged } from "./gutter";
 import { BlameModel } from "./model";
+import type { Navigation } from "../nav";
 import { openBlame, type BlameTarget } from "./session";
 import type { BlameMeta, BlameStats, CommitInfo, Neighbor, Version } from "./types";
 
-/** 다른 blame 화면으로 가자는 요청. `,`는 부모 리비전, `<`·`>`는 이전·다음 리비전이다. */
-export type Navigation = { kind: "parent" | "older" | "newer"; target: BlameTarget; line: number };
 
 type Props = {
   /** 열 파일과 리비전(작업트리면 rev가 null) */
@@ -70,23 +70,6 @@ export function displayText(text: string): { text: string; crlf: boolean } {
   let out = crlf ? text.replace(/\r\n/g, "\n") : text;
   if (out.endsWith("\n")) out = out.slice(0, -1);
   return { text: out, crlf };
-}
-
-async function copyText(text: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    // 클립보드 API가 막힌 WebView를 위한 대체 경로
-    const area = document.createElement("textarea");
-    area.value = text;
-    area.style.position = "fixed";
-    area.style.opacity = "0";
-    document.body.append(area);
-    area.select();
-    const ok = document.execCommand("copy");
-    area.remove();
-    if (!ok) throw new Error("클립보드에 쓰지 못했다");
-  }
 }
 
 export function BlameView({ target, line, active, depth, backDirection, cold = false, onShown, onBack, onNavigate }: Props) {
@@ -227,14 +210,11 @@ export function BlameView({ target, line, active, depth, backDirection, cold = f
       return true;
     },
     enter() {
-      const current = latest.current.hover;
-      const n = cursorLine();
-      if (current?.pinned && current.line === n) {
-        closeCard();
-        return true;
-      }
-      const anchor = anchorOf(n);
-      if (!anchor || !openCard(n, anchor, true)) showToast("이 줄은 아직 blame 정보가 없다");
+      const m = latest.current.meta;
+      const block = model.current?.block(cursorLine());
+      if (!m || !block) showToast("이 줄은 아직 blame 정보가 없다");
+      else if (isUncommitted(block.sha)) showToast("커밋하지 않은 줄이다");
+      else onNavigate({ kind: "commit", repo: m.repo, rev: block.sha, path: block.path });
       return true;
     },
     parent() {
@@ -497,6 +477,7 @@ export function BlameView({ target, line, active, depth, backDirection, cold = f
               (e: unknown) => showToast(String(e)),
             )
           }
+          onOpen={() => onNavigate({ kind: "commit", repo: meta.repo, rev: cardBlock.sha, path: cardBlock.path })}
           onClose={closeCard}
           onPointerInside={(inside) => {
             pointerInCard.current = inside;
@@ -507,6 +488,7 @@ export function BlameView({ target, line, active, depth, backDirection, cold = f
       )}
       {help && (
         <Help
+          view="blame"
           onClose={() => {
             setHelp(false);
             editor.current?.view.focus();

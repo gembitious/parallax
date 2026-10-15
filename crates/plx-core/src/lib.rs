@@ -7,6 +7,7 @@ pub mod blame;
 pub mod blame_session;
 pub mod cache;
 pub mod cli;
+pub mod commit;
 pub mod git;
 pub mod instance;
 pub mod linemap;
