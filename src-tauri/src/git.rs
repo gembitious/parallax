@@ -4,46 +4,53 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use plx_core::blame_session::{SessionEvent, Sessions};
-use plx_core::cache::BlameCache;
+use plx_core::cache::DiskCache;
 use plx_core::commit::{self, CommitDetail, FileVersions};
+use plx_core::history::{HistoryEvent, HistorySessions};
 use plx_core::navigate::{self, Direction, Version};
 use plx_core::repo::{CommitInfo, RepoCache};
 use serde::Serialize;
 use tauri::State;
 use tauri::ipc::Channel;
 
-/// blame 캐시 한도. 넘으면 오래 안 쓴 것부터 지운다.
+/// 결과 캐시 한도. 넘으면 오래 안 쓴 것부터 지운다.
 const CACHE_MAX_BYTES: u64 = 512 << 20;
 
 /// 앱 전체가 나눠 쓰는 저장소 캐시와 진행 중인 요청.
 pub struct GitState {
     repos: RepoCache,
     blames: Sessions,
+    histories: HistorySessions,
+    cache: Option<Arc<DiskCache>>,
 }
 
 impl GitState {
-    /// `cache_dir`가 있으면 blame 결과를 그 아래 `blame/`에 캐시한다.
+    /// `cache_dir`가 있으면 blame·히스토리 결과를 그 아래 `results/`에 캐시한다.
     pub fn new(cache_dir: Option<PathBuf>) -> GitState {
-        let blames = match cache_dir {
-            Some(dir) => {
-                let cache = BlameCache::new(dir.join("blame"), CACHE_MAX_BYTES);
-                Sessions::with_cache(cache)
-            }
-            None => Sessions::new(),
+        let cache =
+            cache_dir.map(|dir| Arc::new(DiskCache::new(dir.join("results"), CACHE_MAX_BYTES)));
+        let (blames, histories) = match &cache {
+            Some(cache) => (
+                Sessions::with_cache(cache.clone()),
+                HistorySessions::with_cache(cache.clone()),
+            ),
+            None => (Sessions::new(), HistorySessions::new()),
         };
         GitState {
             repos: RepoCache::new(),
             blames,
+            histories,
+            cache,
         }
     }
 
     /// 캐시가 한도를 넘었으면 줄인다. 시작할 때 백그라운드에서 한 번 부른다.
     pub fn prune_cache(&self) {
-        if let Some(cache) = self.blames.cache()
+        if let Some(cache) = &self.cache
             && let Err(e) = cache.prune()
         {
             eprintln!(
-                "plx: blame 캐시를 정리하지 못했다 ({}): {e}",
+                "plx: 결과 캐시를 정리하지 못했다 ({}): {e}",
                 cache.dir().display()
             );
         }
@@ -86,6 +93,34 @@ pub fn blame_cancel(git: State<'_, Arc<GitState>>, id: u64) -> bool {
     git.blames.cancel(id)
 }
 
+/// 파일 히스토리를 시작하고 요청 id를 바로 돌려준다. 결과는 `on_event`로 온다
+/// (`meta` → `entries`* → `done`·`error`·`cancelled`). `rev`가 없으면 HEAD부터다.
+#[tauri::command]
+pub async fn history_open(
+    git: State<'_, Arc<GitState>>,
+    repo: Option<String>,
+    path: String,
+    rev: Option<String>,
+    on_event: Channel<HistoryEvent>,
+) -> Result<u64, String> {
+    let git = git.inner().clone();
+    let id = git.histories.register();
+    let path = resolve(repo.as_deref(), &path);
+    tauri::async_runtime::spawn_blocking(move || {
+        git.histories
+            .run(id, &git.repos, &path, rev.as_deref(), |event| {
+                on_event.send(event).is_ok()
+            });
+    });
+    Ok(id)
+}
+
+/// 진행 중인 히스토리를 멈춘다. 이미 끝났으면 `false`.
+#[tauri::command]
+pub fn history_cancel(git: State<'_, Arc<GitState>>, id: u64) -> bool {
+    git.histories.cancel(id)
+}
+
 /// 커밋 상세(hover 카드). `repo`는 blame `meta`의 작업트리 경로다.
 #[tauri::command]
 pub async fn commit_info(
@@ -102,16 +137,18 @@ pub async fn commit_info(
 }
 
 /// 커밋 상세: 첫 부모와 비교한 파일 목록과 줄 수. `repo`는 저장소 안의 아무 경로(plx 호출의 cwd 등)다.
+/// `focus`는 화면이 처음 고를 파일(저장소 기준)이다. 그 파일의 rename은 파일이 많은 커밋에서도 찾는다.
 #[tauri::command]
 pub async fn commit_detail(
     git: State<'_, Arc<GitState>>,
     repo: String,
     rev: String,
+    focus: Option<String>,
 ) -> Result<CommitDetail, String> {
     blocking(git, move |git| {
         let repo = git.repos.for_path(Path::new(&repo))?;
         let id = repo.resolve_commit(&rev)?;
-        commit::commit_detail(&repo, id)
+        commit::commit_detail(&repo, id, focus.as_deref())
     })
     .await
 }

@@ -3,7 +3,8 @@
 //! 앱이 git을 띄우는 방식 그대로(`-c core.quotepath=false`, Windows는 `CREATE_NO_WINDOW`) 스폰해
 //! 첫 출력, 첫 N개 레코드, 전체 시간을 잰다. hyperfine 같은 도구는 전체 시간만 재므로 직접 잰다.
 //! 조건은 두 가지다: commit-graph 없음(`-c core.commitGraph=false`), commit-graph + changed-path Bloom 필터 있음.
-//! `plx-blame`은 git이 아니라 앱의 blame 요청(`plx_core::blame_session`)을 그대로 돌려 우리 오버헤드를 잰다.
+//! `plx-blame`·`plx-log`는 git이 아니라 앱의 요청(`plx_core::blame_session`, `plx_core::history`)을 그대로 돌려
+//! 우리 오버헤드를 잰다.
 //!
 //! 사용법: plx-bench --repos <디렉터리> --cases <파일> [--runs 5] [--warmup 1]
 //! 결과는 Markdown으로 표준 출력에 쓴다. bench/run.sh가 bench/results.md에 넣는다.
@@ -14,6 +15,7 @@ use std::process::{Command, ExitCode, Stdio};
 use std::time::Instant;
 
 use plx_core::blame_session::{SessionEvent, Sessions};
+use plx_core::history::{HistoryEvent, HistorySessions};
 use plx_core::repo::RepoCache;
 
 struct Options {
@@ -53,6 +55,9 @@ enum Kind {
     /// 앱의 커밋 상세: gix 트리 비교 + 파일별 줄 수(프로세스 없음). `show`(git CLI)와 비교한다.
     /// 첫 출력 = 결과 전체, 출력 = 화면으로 보내는 JSON 양. 저장소는 매번 새로 연다.
     PlxShow,
+    /// 앱의 파일 히스토리 요청: `git log -- <path>` 구간을 rename마다 이어 붙인다. `log`·`follow`와 비교한다.
+    /// 첫 출력은 meta, 첫 N은 50개째를 보낸 때다. 캐시는 쓰지 않는다.
+    PlxLog,
 }
 
 impl Kind {
@@ -67,6 +72,7 @@ impl Kind {
             "graph" => Kind::Graph,
             "plx-blame" => Kind::PlxBlame,
             "plx-show" => Kind::PlxShow,
+            "plx-log" => Kind::PlxLog,
             _ => return None,
         })
     }
@@ -82,6 +88,7 @@ impl Kind {
             Kind::Graph => "log --topo-order",
             Kind::PlxBlame => "plx blame 세션",
             Kind::PlxShow => "plx 커밋 상세",
+            Kind::PlxLog => "plx 파일 히스토리",
         }
     }
 
@@ -90,7 +97,7 @@ impl Kind {
         match self {
             Kind::Blame => Some((1, "첫 블록")),
             Kind::PlxBlame => Some((1, "첫 묶음")),
-            Kind::Log | Kind::Follow => Some((50, "첫 50개")),
+            Kind::Log | Kind::Follow | Kind::PlxLog => Some((50, "첫 50개")),
             Kind::Graph => Some((100, "첫 100개")),
             Kind::Spawn | Kind::LineLog | Kind::Show | Kind::PlxShow => None,
         }
@@ -121,7 +128,9 @@ impl Kind {
                 "--format=%H%x1f%P%x1f%an%x1f%at%x1f%s",
                 "HEAD",
             ],
-            Kind::PlxBlame | Kind::PlxShow => unreachable!("git을 직접 띄우지 않는다"),
+            Kind::PlxBlame | Kind::PlxShow | Kind::PlxLog => {
+                unreachable!("git을 직접 띄우지 않는다")
+            }
         };
         v.into_iter().map(String::from).collect()
     }
@@ -141,7 +150,12 @@ fn count_records(kind: Kind, chunk: &[u8], carry: &mut Vec<u8>) -> usize {
             count
         }
         Kind::Log | Kind::Follow | Kind::Graph => chunk.iter().filter(|&&b| b == 0).count(),
-        Kind::Spawn | Kind::LineLog | Kind::Show | Kind::PlxBlame | Kind::PlxShow => 0,
+        Kind::Spawn
+        | Kind::LineLog
+        | Kind::Show
+        | Kind::PlxBlame
+        | Kind::PlxShow
+        | Kind::PlxLog => 0,
     }
 }
 
@@ -259,10 +273,11 @@ fn run_once(repo: &Path, kind: Kind, target: &str, condition: Condition) -> io::
     })
 }
 
-fn run_session_once(repo: &Path, target: &str, condition: Condition) -> io::Result<Sample> {
+/// 앱 요청이 띄우는 git에 측정 조건을 넘긴다(환경 변수로 주는 `-c`).
+fn set_git_config(condition: Condition) {
     let vars = condition.env();
-    // SAFETY: plx-bench는 측정 사이에 다른 스레드를 두지 않는다. blame의 stderr 스레드는
-    // 끝까지 읽고 join하므로 여기서는 이 스레드만 환경을 읽고 쓴다.
+    // SAFETY: plx-bench는 측정 사이에 다른 스레드를 두지 않는다. 요청이 띄운 스레드(git 표준 오류·출력 읽기)는
+    // 요청이 끝나기 전에 모두 끝나므로 여기서는 이 스레드만 환경을 읽고 쓴다.
     unsafe {
         std::env::set_var("GIT_CONFIG_COUNT", vars.len().to_string());
         for (i, (key, value)) in vars.iter().enumerate() {
@@ -270,6 +285,10 @@ fn run_session_once(repo: &Path, target: &str, condition: Condition) -> io::Resu
             std::env::set_var(format!("GIT_CONFIG_VALUE_{i}"), value);
         }
     }
+}
+
+fn run_session_once(repo: &Path, target: &str, condition: Condition) -> io::Result<Sample> {
+    set_git_config(condition);
     let sessions = Sessions::new();
     let repos = RepoCache::new();
     let id = sessions.register();
@@ -308,11 +327,52 @@ fn run_session_once(repo: &Path, target: &str, condition: Condition) -> io::Resu
     }
 }
 
+fn run_history_once(repo: &Path, target: &str, condition: Condition) -> io::Result<Sample> {
+    set_git_config(condition);
+    let sessions = HistorySessions::new();
+    let repos = RepoCache::new();
+    let id = sessions.register();
+    let path = repo.join(target);
+
+    let start = Instant::now();
+    let ms = |t: Instant| t.duration_since(start).as_secs_f64() * 1000.0;
+    let (mut first_byte, mut first_n) = (None, None);
+    let (mut records, mut bytes) = (0usize, 0usize);
+    let mut end = None;
+    sessions.run(id, &repos, &path, None, |event| {
+        bytes += serde_json::to_vec(&event).map_or(0, |json| json.len());
+        let now = Instant::now();
+        match event {
+            HistoryEvent::Meta(_) => first_byte = Some(ms(now)),
+            HistoryEvent::Entries { entries } => {
+                records += entries.len();
+                if records >= 50 {
+                    first_n.get_or_insert_with(|| ms(now));
+                }
+            }
+            other => end = Some(other),
+        }
+        true
+    });
+    let total = ms(Instant::now());
+    match end {
+        Some(HistoryEvent::Done { .. }) => Ok(Sample {
+            first_byte,
+            first_n,
+            total,
+            records,
+            bytes,
+        }),
+        Some(HistoryEvent::Error { message }) => Err(io::Error::other(message)),
+        other => Err(io::Error::other(format!("예상하지 못한 끝: {other:?}"))),
+    }
+}
+
 fn run_show_once(repo: &Path, rev: &str) -> io::Result<Sample> {
     let start = Instant::now();
     let opened = plx_core::repo::Repo::discover(repo).map_err(io::Error::other)?;
     let id = opened.resolve_commit(rev).map_err(io::Error::other)?;
-    let detail = plx_core::commit::commit_detail(&opened, id).map_err(io::Error::other)?;
+    let detail = plx_core::commit::commit_detail(&opened, id, None).map_err(io::Error::other)?;
     let total = start.elapsed().as_secs_f64() * 1000.0;
     let bytes = serde_json::to_vec(&detail).map_or(0, |json| json.len());
     Ok(Sample {
@@ -344,6 +404,7 @@ fn measure(opts: &Options, repo: &Path, case: &Case, condition: Condition) -> io
     let run = || match case.kind {
         Kind::PlxBlame => run_session_once(repo, &case.target, condition),
         Kind::PlxShow => run_show_once(repo, &case.target),
+        Kind::PlxLog => run_history_once(repo, &case.target, condition),
         kind => run_once(repo, kind, &case.target, condition),
     };
     for _ in 0..opts.warmup {
@@ -547,6 +608,9 @@ fn report(opts: &Options, cases: &[Case]) -> io::Result<()> {
     );
     println!(
         "`plx blame 세션`의 첫 출력은 내용(meta), 레코드는 블록 수, 출력은 화면으로 보내는 JSON 양이다."
+    );
+    println!(
+        "`plx 파일 히스토리`의 첫 출력은 meta, 첫 N은 50개째를 보낸 때, 레코드는 커밋 수(rename 앞 구간 포함)다."
     );
     Ok(())
 }

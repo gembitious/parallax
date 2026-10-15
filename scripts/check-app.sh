@@ -9,7 +9,8 @@
 # 자동으로 확인하는 것
 #   1. plx --version, 잘못된 인자(종료 코드 2, 상주 인스턴스를 띄우지 않음)
 #   2. 콜드 스타트 → 첫 화면, 두 번째 호출이 상주 인스턴스로 전달되어 그려짐(한글·공백 경로 포함),
-#      blame이 끝까지 와서 거터가 그려짐(한글 경로의 저장소 파일 포함)
+#      blame이 끝까지 와서 거터가 그려짐(한글 경로의 저장소 파일 포함), 커밋 상세,
+#      파일 히스토리(이름을 바꾼 한글 경로 파일의 옛 이름 구간까지)
 #   3. 동시에 여러 번 실행해도 상주 인스턴스는 하나
 #   4. 강제 종료 뒤 다시 시작(남은 소켓·락 정리)
 #   5. 터미널에서 처음 실행하면 스스로 분리하고 셸을 바로 돌려줌(릴리스 빌드)
@@ -135,8 +136,9 @@ mkdir -p "$work/한글 폴더"
 printf '첫 줄\n둘째 줄\n' >"$work/한글 폴더/파일 이름.txt"
 # blame할 한글 경로 저장소(커밋 하나 + 커밋 안 한 줄 하나). 이 스크립트가 만든 임시 저장소라 바꿔도 된다.
 repo="$work/한글 저장소"
-mkdir -p "$repo/소스"
+mkdir -p "$repo/소스" "$repo/자료"
 printf '하나\n둘\n' >"$repo/소스/파일 이름.rs"
+printf '# 설명\n\n이름을 바꿀 문서의 첫 내용\n둘째 줄\n셋째 줄\n' >"$repo/자료/옛 이름.md"
 (
   cd "$repo"
   git -c init.defaultBranch=main init -q
@@ -182,6 +184,24 @@ status=0
 check "plx show → 종료 코드 0" test "$status" -eq 0
 check "커밋 상세가 파일 목록과 diff를 그림 (한글 경로)" \
   wait_for_all '"kind":"commit"' '"ok":true' '소스/파일 이름.rs'
+
+# 파일 히스토리: 이름을 바꾼 파일은 옛 이름의 이력이 이어진다(커밋 2개, git log 구간 2개).
+# (자료/는 경로 순으로 소스/ 뒤라 위 커밋 상세가 처음 고르는 파일은 그대로 소스/파일 이름.rs다.)
+(
+  cd "$repo"
+  git mv "자료/옛 이름.md" "자료/새 이름.md"
+  printf '# 설명\n\n이름을 바꿀 문서의 첫 내용\n둘째 줄을 고쳤다\n셋째 줄\n' >"자료/새 이름.md"
+  git add 자료
+  git -c user.name=검사 -c user.email=check@example.com -c commit.gpgsign=false commit -q --no-verify -m "이름 바꿈"
+)
+status=0
+(cd "$repo" && "$bin" log "자료/새 이름.md") || status=$?
+check "plx log → 종료 코드 0" test "$status" -eq 0
+check "파일 히스토리가 rename 앞 구간까지 그림 (커밋 2, 구간 2)" \
+  wait_for_all '"kind":"history"' '"label":"히스토리 자료/새 이름.md"' '"ok":true' '커밋 2 · 구간 2'
+(cd "$repo" && "$bin" log "자료/새 이름.md") || true
+check "같은 히스토리를 다시 열면 캐시에서" \
+  wait_for_all '"kind":"history"' '"label":"히스토리 자료/새 이름.md (캐시)"' '"ok":true'
 
 status=0
 (cd "$work" && "$bin" "한글 폴더/파일 이름.txt:1") || status=$?

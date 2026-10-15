@@ -121,13 +121,23 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
 - 탐색 스택: `,`·`<`·`>`는 새 화면을 쌓고 `q`가 하나씩 돌아간다(아래 화면은 숨긴 채 유지해 커서·스크롤이 남는다).
   `<`로 온 화면에서 `>`(또는 반대)는 새로 쌓지 않고 돌아간다. 맨 아래에서 `q`는 창을 숨긴다.
 - 리비전 이동은 첫 부모를 따라 파일을 바꾼 커밋 단위다(`git log --first-parent --follow`). merge가 바꾼 버전도 포함한다.
+- 파일 히스토리 화면: `j`/`k` 이동, `Enter` 커밋 상세(그 파일 diff만, 상세에서 `a`로 모든 파일), `b` 그 리비전 blame,
+  `,` 바꾸기 전 리비전 blame, `y` sha 복사, `/`·`n`·`N` 검색. blame의 `H`는 그 리비전부터의 히스토리다.
 
 ## 결정 기록
 - 2026-10-15: 범위를 읽기 전용 git 뷰어로 한정. 편집·터미널·LSP는 제외.
 - 2026-10-15: blame·라인 히스토리는 git CLI로 시작. gix-blame은 골든 테스트 통과 시 전환 검토.
 - 2026-10-15: 코드 뷰는 Monaco 대신 CodeMirror 6.
-- 2026-10-15: blame 결과 캐시는 파일(JSON) 하나에 결과 하나, 이름은 열쇠의 FNV 해시이고 파일 안의 열쇠로 충돌을 거른다.
-  작업트리 blame은 수정 2초 안의 파일을 넣지 않는다(크기·수정 시각이 같은 채로 바뀌는 racy 문제).
+- 2026-10-15: 결과 캐시(blame, 파일 히스토리)는 파일(JSON) 하나에 결과 하나, 이름은 열쇠의 FNV 해시이고 파일 안의 열쇠로
+  충돌을 거른다. 작업트리 blame은 수정 2초 안의 파일을 넣지 않는다(크기·수정 시각이 같은 채로 바뀌는 racy 문제).
+  파일 히스토리는 시작 커밋(요청할 때의 HEAD)으로 고정해 넣고, 커밋 2만 개가 넘는 결과는 넣지 않는다.
+- 2026-10-15: 파일 히스토리는 `git log --follow` 대신 `git log -- <경로>` 구간을 잇는다(`plx_core::history`).
+  구간 안에서 파일이 생긴 커밋(상태 A)마다 rename 원본을 찾아, 그 커밋의 첫 부모부터 옛 이름으로 다음 구간을 돌린다.
+  이유(bench/results.md): `--follow`는 rename 앞 구간에서 Bloom 필터를 거의 못 써서 git/git `Documentation/git-log.adoc`
+  첫 50개가 1.1초(Bloom 있음)인데 구간 잇기는 85ms다. `--follow`는 diff가 없는 merge(merge에서 바뀐 버전)를 빼고,
+  날짜 순 워크 도중 경로를 바꿔 다른 브랜치 커밋이 빠지거나 낀다. 구간마다 git의 기본 이력 단순화를 그대로 따른다.
+  rename 원본은 그 파일 하나만 git과 같은 유사도(diffcore의 spanhash를 옮긴 `plx_core::similarity`, 50%)로 찾는다.
+  gix의 rename 추적은 짝 수(추가×삭제)가 1,000을 넘으면 유사도 비교를 건너뛰어 파일을 많이 옮긴 커밋을 놓친다.
 - 2026-10-15: 단일 인스턴스는 `tauri-plugin-single-instance` 대신 직접 구현한다(`plx_core::instance`).
   `main()` 맨 앞, Tauri 초기화 전에 로컬 소켓(Windows named pipe, Unix 소켓)으로 argv·cwd·t0를 넘기고 끝낸다.
   primary 판정은 락 파일(`File::try_lock`). 이유: 두 번째 호출이 WebView 초기화를 거치지 않는다,

@@ -604,7 +604,8 @@ fn session_events_serialize_for_the_ui() {
 // ---------------------------------------------------------------- 캐시
 
 use plx_core::blame::Chunk;
-use plx_core::cache::BlameCache;
+use plx_core::cache::DiskCache;
+use std::sync::Arc;
 
 /// 요청 하나의 (줄별 결과, 캐시에서 읽었는가).
 fn cached_session(
@@ -644,7 +645,8 @@ fn cached_session(
 #[test]
 fn commit_blame_is_cached() {
     let dir = tempfile::tempdir().unwrap();
-    let sessions = Sessions::with_cache(BlameCache::new(dir.path().to_path_buf(), 1 << 30));
+    let sessions =
+        Sessions::with_cache(Arc::new(DiskCache::new(dir.path().to_path_buf(), 1 << 30)));
     let file = history().join("src/lib.rs");
     let (first, cached) = cached_session(&sessions, &file, Some("HEAD~1"));
     assert!(!cached);
@@ -691,7 +693,10 @@ fn worktree_blame_cache_follows_the_file() {
     set_mtime(3600);
 
     let cache_dir = tempfile::tempdir().unwrap();
-    let sessions = Sessions::with_cache(BlameCache::new(cache_dir.path().to_path_buf(), 1 << 30));
+    let sessions = Sessions::with_cache(Arc::new(DiskCache::new(
+        cache_dir.path().to_path_buf(),
+        1 << 30,
+    )));
     let (first, cached) = cached_session(&sessions, &file, None);
     assert!(!cached);
     assert_eq!(

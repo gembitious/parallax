@@ -1,6 +1,7 @@
-//! blame 결과 디스크 캐시.
+//! 이력 질의 결과(blame, 파일 히스토리) 디스크 캐시.
 //!
-//! 커밋 고정 blame은 결과가 바뀌지 않으므로 (저장소, 커밋, 경로)로 영구히 쓴다. 작업트리 blame은
+//! 커밋 고정 결과는 바뀌지 않으므로 (저장소, 커밋, 경로)로 영구히 쓴다. 파일 히스토리는 시작 커밋
+//! (요청할 때의 HEAD)으로 고정한다. 작업트리 blame은
 //! (저장소, HEAD, 경로, 파일 크기, 수정 시각)으로 쓰되, 막 고친 파일은 넣지 않는다: 수정 시각의 단위
 //! 안에서 다시 고치면 크기와 시각이 같아 낡은 결과를 돌려줄 수 있다(git의 racy-git과 같은 문제).
 //!
@@ -13,12 +14,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, SystemTime};
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use crate::blame::Chunk;
-
 /// 형식이 바뀌면 올린다. 열쇠에 들어가므로 예전 파일은 읽지 않고 오래된 순으로 지워진다.
-const FORMAT: &str = "plx-blame-cache 1";
+const FORMAT: &str = "plx-cache 2";
 /// 이보다 최근에 고친 작업트리 파일은 캐시에 넣지 않는다.
 const RACY: Duration = Duration::from_secs(2);
 /// 이만큼 쓸 때마다 한도를 확인한다.
@@ -36,6 +36,14 @@ impl CacheKey {
     pub fn commit(repo: &Path, commit: &str, path: &str) -> CacheKey {
         CacheKey {
             text: format!("{FORMAT}\ncommit\n{}\n{commit}\n{path}", repo.display()),
+            storable: true,
+        }
+    }
+
+    /// `start` 커밋부터의 파일 히스토리. `start`는 sha 전체.
+    pub fn history(repo: &Path, start: &str, path: &str) -> CacheKey {
+        CacheKey {
+            text: format!("{FORMAT}\nhistory\n{}\n{start}\n{path}", repo.display()),
             storable: true,
         }
     }
@@ -73,21 +81,27 @@ impl CacheKey {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-struct Entry {
-    key: String,
-    chunk: Chunk,
+#[derive(Serialize)]
+struct EntryRef<'a, T> {
+    key: &'a str,
+    value: &'a T,
 }
 
-pub struct BlameCache {
+#[derive(Deserialize)]
+struct Entry<T> {
+    key: String,
+    value: T,
+}
+
+pub struct DiskCache {
     dir: PathBuf,
     max_bytes: u64,
     writes: AtomicU32,
 }
 
-impl BlameCache {
-    pub fn new(dir: PathBuf, max_bytes: u64) -> BlameCache {
-        BlameCache {
+impl DiskCache {
+    pub fn new(dir: PathBuf, max_bytes: u64) -> DiskCache {
+        DiskCache {
             dir,
             max_bytes,
             writes: AtomicU32::new(0),
@@ -99,10 +113,10 @@ impl BlameCache {
     }
 
     /// 캐시된 결과. 없거나 읽지 못하면 `None`(캐시는 없어도 동작해야 한다).
-    pub fn get(&self, key: &CacheKey) -> Option<Chunk> {
+    pub fn get<T: DeserializeOwned>(&self, key: &CacheKey) -> Option<T> {
         let path = self.dir.join(key.file_name());
         let bytes = fs::read(&path).ok()?;
-        let entry: Entry = serde_json::from_slice(&bytes).ok()?;
+        let entry: Entry<T> = serde_json::from_slice(&bytes).ok()?;
         if entry.key != key.text {
             return None;
         }
@@ -110,18 +124,18 @@ impl BlameCache {
         if let Ok(file) = fs::File::options().write(true).open(&path) {
             let _ = file.set_modified(SystemTime::now());
         }
-        Some(entry.chunk)
+        Some(entry.value)
     }
 
     /// 결과를 넣는다. 실패해도 앱은 계속 동작한다.
-    pub fn put(&self, key: &CacheKey, chunk: &Chunk) -> io::Result<()> {
+    pub fn put<T: Serialize>(&self, key: &CacheKey, value: &T) -> io::Result<()> {
         if !key.storable {
             return Ok(());
         }
         fs::create_dir_all(&self.dir)?;
-        let entry = Entry {
-            key: key.text.clone(),
-            chunk: chunk.clone(),
+        let entry = EntryRef {
+            key: &key.text,
+            value,
         };
         let path = self.dir.join(key.file_name());
         let tmp = self
@@ -195,7 +209,7 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blame::{BlameBlock, BlameCommit};
+    use crate::blame::{BlameBlock, BlameCommit, Chunk};
 
     fn chunk(summary: &str) -> Chunk {
         Chunk {
@@ -218,22 +232,26 @@ mod tests {
     #[test]
     fn put_get_and_key_mismatch() {
         let dir = tempfile::tempdir().unwrap();
-        let cache = BlameCache::new(dir.path().join("blame"), 1 << 20);
+        let cache = DiskCache::new(dir.path().join("blame"), 1 << 20);
         let key = CacheKey::commit(Path::new("/repo"), &"1".repeat(40), "a.rs");
-        assert_eq!(cache.get(&key), None);
+        assert_eq!(cache.get::<Chunk>(&key), None);
         cache.put(&key, &chunk("첫 커밋")).unwrap();
         assert_eq!(cache.get(&key), Some(chunk("첫 커밋")));
 
         // 다른 열쇠, 그리고 같은 파일 이름에 다른 열쇠가 들어 있는 경우(해시 충돌 흉내)
         let other = CacheKey::commit(Path::new("/repo"), &"2".repeat(40), "a.rs");
-        assert_eq!(cache.get(&other), None);
+        assert_eq!(cache.get::<Chunk>(&other), None);
         let collided = dir.path().join("blame").join(other.file_name());
         fs::copy(dir.path().join("blame").join(key.file_name()), &collided).unwrap();
-        assert_eq!(cache.get(&other), None, "열쇠가 다르면 읽지 않는다");
+        assert_eq!(
+            cache.get::<Chunk>(&other),
+            None,
+            "열쇠가 다르면 읽지 않는다"
+        );
 
         // 깨진 파일
         fs::write(dir.path().join("blame").join(key.file_name()), b"{").unwrap();
-        assert_eq!(cache.get(&key), None);
+        assert_eq!(cache.get::<Chunk>(&key), None);
     }
 
     #[test]
@@ -283,9 +301,9 @@ mod tests {
         );
         assert_ne!(settled.text, other_head.text);
 
-        let cache = BlameCache::new(dir.path().join("cache"), 1 << 20);
+        let cache = DiskCache::new(dir.path().join("cache"), 1 << 20);
         cache.put(&fresh, &chunk("x")).unwrap();
-        assert_eq!(cache.get(&fresh), None);
+        assert_eq!(cache.get::<Chunk>(&fresh), None);
         cache.put(&settled, &chunk("x")).unwrap();
         assert_eq!(
             cache.get(&fresh),
@@ -297,7 +315,7 @@ mod tests {
     #[test]
     fn prune_removes_least_recently_used_first() {
         let dir = tempfile::tempdir().unwrap();
-        let cache = BlameCache::new(dir.path().to_path_buf(), 0);
+        let cache = DiskCache::new(dir.path().to_path_buf(), 0);
         let keys: Vec<CacheKey> = (0..5)
             .map(|i| CacheKey::commit(Path::new("/r"), &i.to_string(), "a.rs"))
             .collect();
@@ -318,7 +336,7 @@ mod tests {
                 .unwrap();
         }
         // 한도를 파일 세 개 크기로 두면 80%인 두 개 남짓까지 오래된 것부터 지운다.
-        let cache = BlameCache::new(dir.path().to_path_buf(), size * 3);
+        let cache = DiskCache::new(dir.path().to_path_buf(), size * 3);
         cache.prune().unwrap();
         let left: Vec<bool> = keys
             .iter()

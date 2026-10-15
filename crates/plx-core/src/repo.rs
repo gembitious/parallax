@@ -208,6 +208,166 @@ impl Repo {
     }
 }
 
+/// rename 원본 후보를 이만큼만 내용까지 비교한다(크기로 거른 뒤, 이름이 비슷한 것부터).
+const MAX_RENAME_CANDIDATES: usize = 4000;
+
+impl Repo {
+    /// `id` 커밋이 첫 부모의 다른 파일을 옮겨(rename) `path`를 만들었다면 그 원래 경로.
+    ///
+    /// `git log --follow`처럼 이 파일 하나의 원본만 찾는다: 그 커밋에서 지운 파일 가운데 내용이 같은 것,
+    /// 없으면 git과 같은 유사도([`crate::similarity`])가 50% 이상인 것 중 가장 비슷한 것(같으면 파일 이름이
+    /// 같은 것). 커밋 전체의 rename을 찾지 않으므로 파일 수백 개를 옮긴 커밋에서도 빠르다.
+    /// 복사(copy)는 따라가지 않는다. 얕은 클론의 경계처럼 부모가 없으면 `None`.
+    pub fn rename_source(&self, id: ObjectId, path: &str) -> Result<Option<String>> {
+        use crate::similarity::{self, MINIMUM_SCORE, Spans};
+
+        let repo = self.local();
+        let commit = repo.find_commit(id).map_err(|e| err("커밋 읽기", e))?;
+        let Some(parent) = commit.parent_ids().next().map(|id| id.detach()) else {
+            return Ok(None);
+        };
+        let Some(parent) = repo
+            .try_find_object(parent)
+            .map_err(|e| err("부모 커밋", e))?
+        else {
+            return Ok(None);
+        };
+        let parent_tree = parent.peel_to_tree().map_err(|e| err("부모 트리", e))?;
+        let tree = commit.tree().map_err(|e| err("커밋 트리", e))?;
+        let Some(dest) = tree
+            .lookup_entry_by_path(path)
+            .map_err(|e| err("트리 조회", e))?
+        else {
+            return Ok(None);
+        };
+        // git처럼 일반 파일만 내용으로 비교한다(심볼릭 링크는 내용이 같을 때만 rename).
+        let dest_regular = dest.mode().is_blob();
+        let dest_id = dest.object_id();
+        if parent_tree
+            .lookup_entry_by_path(path)
+            .map_err(|e| err("트리 조회", e))?
+            .is_some()
+        {
+            return Ok(None);
+        }
+
+        let options = gix::diff::Options::default().with_rewrites(None);
+        let deleted: Vec<(String, ObjectId, bool)> = repo
+            .diff_tree_to_tree(Some(&parent_tree), Some(&tree), options)
+            .map_err(|e| err("트리 비교", e))?
+            .into_iter()
+            .filter_map(|change| match change {
+                TreeChange::Deletion {
+                    location,
+                    entry_mode,
+                    id,
+                    ..
+                } if !entry_mode.is_tree() && !entry_mode.is_commit() => Some((
+                    location.to_str_lossy().into_owned(),
+                    id,
+                    entry_mode.is_blob(),
+                )),
+                _ => None,
+            })
+            .collect();
+        let name = file_name(path);
+        let same_name = |candidate: &str| file_name(candidate) == name;
+
+        // 1. 내용이 같은 파일(파일 이름이 같은 것을 먼저)
+        let mut exact = deleted.iter().filter(|(_, id, _)| *id == dest_id);
+        if let Some(first) = exact.next() {
+            let best = std::iter::once(first)
+                .chain(exact)
+                .find(|(p, ..)| same_name(p))
+                .unwrap_or(first);
+            return Ok(Some(best.0.clone()));
+        }
+        if !dest_regular {
+            return Ok(None);
+        }
+
+        // 2. 비슷한 파일. 이름이 닮은 것부터, 크기로 먼저 거르고(헤더만 읽는다) 내용을 비교한다.
+        let dest_data = repo
+            .find_object(dest_id)
+            .map_err(|e| err("blob 읽기", e))?
+            .detach()
+            .data;
+        if dest_data.is_empty() {
+            return Ok(None);
+        }
+        let dest_size = dest_data.len() as u64;
+        let dest_spans = Spans::new(&dest_data, !crate::text::is_binary(&dest_data));
+        let mut candidates: Vec<(u8, &str, ObjectId)> = deleted
+            .iter()
+            .filter(|(.., regular)| *regular)
+            .map(|(candidate, id, _)| (affinity(candidate, path), candidate.as_str(), *id))
+            .collect();
+        candidates.sort_by_key(|(affinity, ..)| std::cmp::Reverse(*affinity));
+
+        let mut best: Option<(u64, bool, &str)> = None;
+        let mut compared = 0;
+        for (affinity, candidate, id) in candidates {
+            let size = repo
+                .find_header(id)
+                .map_err(|e| err("blob 크기", e))?
+                .size();
+            if !similarity::sizes_may_match(size, dest_size) {
+                continue;
+            }
+            compared += 1;
+            if compared > MAX_RENAME_CANDIDATES {
+                break;
+            }
+            let data = repo
+                .find_object(id)
+                .map_err(|e| err("blob 읽기", e))?
+                .detach()
+                .data;
+            let score = similarity::score(
+                &Spans::new(&data, !crate::text::is_binary(&data)),
+                &dest_spans,
+            );
+            if score < MINIMUM_SCORE {
+                continue;
+            }
+            // 이름이 닮았고 아주 비슷하면(75% 이상) 다른 후보를 보지 않는다(git의 같은 파일 이름 지름길과 같은 기준).
+            if affinity > 0 && score >= (MINIMUM_SCORE + similarity::MAX_SCORE) / 2 {
+                return Ok(Some(candidate.to_owned()));
+            }
+            let named = affinity == AFFINITY_SAME_NAME;
+            if best.is_none_or(|(s, n, _)| score > s || (score == s && named && !n)) {
+                best = Some((score, named, candidate));
+            }
+        }
+        Ok(best.map(|(.., candidate)| candidate.to_owned()))
+    }
+}
+
+const AFFINITY_SAME_NAME: u8 = 2;
+
+/// 이름이 얼마나 닮았나: 파일 이름이 같으면 2, 확장자를 뺀 이름이 같으면 1(`git-log.txt` → `git-log.adoc`).
+fn affinity(candidate: &str, path: &str) -> u8 {
+    let (a, b) = (file_name(candidate), file_name(path));
+    if a == b {
+        AFFINITY_SAME_NAME
+    } else if stem(a) == stem(b) {
+        1
+    } else {
+        0
+    }
+}
+
+fn file_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+fn stem(name: &str) -> &str {
+    match name.rsplit_once('.') {
+        Some((stem, _)) if !stem.is_empty() => stem,
+        _ => name,
+    }
+}
+
 /// 트리 비교 결과 하나(gix).
 pub(crate) type TreeChange = gix::object::tree::diff::ChangeDetached;
 

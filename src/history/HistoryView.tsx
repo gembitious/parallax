@@ -1,0 +1,496 @@
+// 파일 히스토리: 파일을 바꾼 커밋 목록(가상 스크롤). 이름을 바꾸기 전 구간은 옛 이름으로 이어진다.
+// 키: j/k 이동, Enter 커밋 상세(이 파일 diff만), b 그 리비전 blame, , 바꾸기 전 리비전 blame, y sha 복사,
+//     / 검색, n/N 다음·이전 결과, q 뒤로, ? 도움말.
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Help } from "../Help";
+import { copyText } from "../clipboard";
+import { formatCount, formatDate, parseTz, relativeTime, shortSha } from "../blame/format";
+import { STATUS_LETTER, STATUS_NAME } from "../commit/types";
+import type { Navigation } from "../nav";
+import { afterPaint, nowMs, record } from "../perf";
+import { findMatch, formerPaths, matches, scrollToRow, visibleRange } from "./list";
+import { openHistory } from "./session";
+import { PAGE, type HistoryMeta, type HistoryStats, type HistoryTarget, type LogEntry } from "./types";
+
+type Props = {
+  target: HistoryTarget;
+  /** 탐색 스택 맨 위(보이는 화면)인가 */
+  active: boolean;
+  depth: number;
+  /** 콜드 스타트의 첫 요청. 창이 보일 때까지 페인트가 없어 예산과 비교하지 않는다. */
+  cold?: boolean;
+  /** 첫 화면(첫 커밋들 또는 오류)을 DOM에 넣었다. */
+  onShown?(committedMs: number): void;
+  onBack(): void;
+  onNavigate(navigation: Navigation): void;
+};
+
+type Progress =
+  | { kind: "loading" }
+  | { kind: "streaming" }
+  | { kind: "done"; stats: HistoryStats }
+  | { kind: "failed"; message: string };
+
+const ROW_HEIGHT = 24;
+const TOAST_MS = 1800;
+/** 성능 예산(docs/MILESTONES.md): 파일 히스토리 첫 50개 ≤ git log 첫 50개 + 30ms, 캐시 히트 재표시 ≤ 16ms */
+const PAGE_SLACK_MS = 30;
+const CACHE_HIT_BUDGET_MS = 16;
+
+export function HistoryView({ target, active, depth, cold = false, onShown, onBack, onNavigate }: Props) {
+  const [meta, setMeta] = useState<HistoryMeta | null>(null);
+  /** 받은 커밋. 수천 개가 쌓이므로 배열은 고치고 길이만 상태로 둔다. */
+  const entries = useRef<LogEntry[]>([]);
+  const [count, setCount] = useState(0);
+  const [progress, setProgress] = useState<Progress>({ kind: "loading" });
+  const [selected, setSelected] = useState(0);
+  const [viewport, setViewport] = useState({ top: 0, height: 0 });
+  const [search, setSearch] = useState({ open: false, query: "" });
+  const [help, setHelp] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  /** 숨겼다 다시 보일 때 되돌릴 스크롤 위치(숨긴 요소의 스크롤은 브라우저마다 남지 않을 수 있다) */
+  const savedTop = useRef(0);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const toastTimer = useRef(0);
+  const nowAtOpen = useRef(Date.now());
+  /** 첫 화면·첫 50개 측정 */
+  const timing = useRef({
+    t0: nowMs(),
+    shown: false,
+    page: null as Promise<number | null> | null,
+    reported: false,
+  });
+  const latest = useRef({ active, meta, selected, help, search, count });
+  latest.current = { active, meta, selected, help, search, count };
+
+  const showToast = (message: string) => {
+    setToast(message);
+    window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(null), TOAST_MS);
+  };
+
+  // 히스토리를 받는다.
+  useEffect(() => {
+    const handle = openHistory(target, (event) => {
+      switch (event.kind) {
+        case "meta": {
+          const { kind: _kind, ...m } = event;
+          setMeta(m);
+          setProgress({ kind: "streaming" });
+          break;
+        }
+        case "entries":
+          for (const entry of event.entries) entries.current.push(entry);
+          setCount(entries.current.length);
+          break;
+        case "done":
+          setProgress({ kind: "done", stats: event.stats });
+          break;
+        case "error":
+          setProgress({ kind: "failed", message: event.message });
+          break;
+        case "cancelled":
+          break;
+      }
+    });
+    return () => {
+      handle.cancel();
+      window.clearTimeout(toastTimer.current);
+    };
+    // 요청마다 새 컴포넌트다(App이 key를 준다).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 첫 화면과 첫 50개(적으면 전부)를 그린 시각
+  useLayoutEffect(() => {
+    const t = timing.current;
+    const ended = progress.kind === "done" || progress.kind === "failed";
+    if (!t.shown && (count > 0 || ended)) {
+      t.shown = true;
+      onShown?.(nowMs());
+    }
+    if (!t.page && (count >= PAGE || ended)) t.page = afterPaint();
+  }, [count, progress]);
+
+  // 끝나면 성능 HUD에 남긴다: 첫 50개를 그린 때까지, 예산은 git이 50개째를 낸 때 + 30ms.
+  useEffect(() => {
+    const t = timing.current;
+    if (progress.kind !== "done" || t.reported || !t.page) return;
+    t.reported = true;
+    const { stats } = progress;
+    void t.page.then((painted) => {
+      const end = painted ?? nowMs();
+      const budgetMs = cold
+        ? undefined
+        : stats.cached
+          ? CACHE_HIT_BUDGET_MS
+          : stats.gitPageMs === null
+            ? undefined
+            : Math.round(stats.gitPageMs + PAGE_SLACK_MS);
+      const phases = [
+        { label: "첫 묶음", ms: stats.firstEntryMs ?? NaN },
+        { label: `${PAGE}개째 보냄`, ms: stats.firstPageMs ?? NaN },
+        { label: "표시", ms: end - t.t0 },
+        { label: "끝", ms: stats.totalMs },
+      ].filter((p) => Number.isFinite(p.ms));
+      record({
+        kind: "history",
+        label: `히스토리 ${latest.current.meta?.path ?? target.path}${stats.cached ? " (캐시)" : ""}${cold ? " (콜드 스타트)" : ""}`,
+        totalMs: end - t.t0,
+        budgetMs,
+        phases,
+        detail: `${stats.cached ? "캐시" : `git ${PAGE}개째 ${stats.gitPageMs?.toFixed(1) ?? "—"}`} · 커밋 ${stats.entries} · 구간 ${stats.segments}`,
+        ok: painted !== null,
+      });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [progress]);
+
+  // 목록 크기를 따라간다.
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const update = () => setViewport({ top: list.scrollTop, height: list.clientHeight });
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const list = listRef.current;
+    if (active && list) {
+      if (list.scrollTop !== savedTop.current) list.scrollTop = savedTop.current;
+      setViewport({ top: list.scrollTop, height: list.clientHeight });
+      list.focus({ preventScroll: true });
+    } else {
+      setHelp(false);
+      setSearch((s) => ({ ...s, open: false }));
+    }
+  }, [active]);
+
+  useEffect(() => {
+    if (search.open) searchRef.current?.focus();
+    else if (latest.current.active) listRef.current?.focus({ preventScroll: true });
+  }, [search.open]);
+
+  /** `index`를 고르고 보이게 스크롤한다. */
+  const select = (index: number) => {
+    const n = latest.current.count;
+    if (n === 0) return;
+    const next = Math.max(0, Math.min(n - 1, index));
+    setSelected(next);
+    const list = listRef.current;
+    if (list) {
+      const top = scrollToRow(next, list.scrollTop, list.clientHeight, ROW_HEIGHT);
+      if (top !== list.scrollTop) list.scrollTop = top;
+    }
+  };
+
+  const pageRows = () => Math.max(1, Math.floor((listRef.current?.clientHeight ?? ROW_HEIGHT) / ROW_HEIGHT) - 1);
+
+  /** 디렉터리·저장소 전체 히스토리면 커밋마다 파일 상태가 없다. */
+  const isFileHistory = () => entries.current.some((e) => e.status !== null);
+
+  const current = (index = latest.current.selected): { m: HistoryMeta; e: LogEntry } | null => {
+    const m = latest.current.meta;
+    const e = entries.current[index];
+    return m && e ? { m, e } : null;
+  };
+
+  const openCommit = (index?: number) => {
+    const at = current(index);
+    if (!at) return;
+    const file = isFileHistory();
+    onNavigate({ kind: "commit", repo: at.m.repo, rev: at.e.sha, path: file ? at.e.path : null, only: file });
+  };
+
+  /** 그 리비전(`parent`면 바꾸기 전 리비전)의 파일 blame */
+  const openBlame = (parent: boolean) => {
+    const at = current();
+    if (!at) return;
+    const { m, e } = at;
+    if (!isFileHistory()) {
+      showToast("디렉터리 히스토리에서는 blame하지 않는다");
+      return;
+    }
+    const first = e.parents[0];
+    if (parent) {
+      if (e.status === "added" || !first) {
+        showToast("이 커밋에서 생긴 파일이라 앞 버전이 없다");
+        return;
+      }
+      // 이름을 바꾼 커밋의 앞 버전은 옛 이름이다.
+      onNavigate({ kind: "file", target: { repo: m.repo, path: e.oldPath ?? e.path, rev: first }, line: null });
+    } else if (e.status === "deleted") {
+      // 지운 커밋에는 파일이 없다. 지우기 전 버전을 연다.
+      if (first) onNavigate({ kind: "file", target: { repo: m.repo, path: e.path, rev: first }, line: null });
+    } else {
+      onNavigate({ kind: "file", target: { repo: m.repo, path: e.path, rev: e.sha }, line: null });
+    }
+  };
+
+  const copySha = () => {
+    const at = current();
+    if (!at) return;
+    copyText(at.e.sha).then(
+      () => showToast(`복사했다: ${shortSha(at.e.sha)}`),
+      (e: unknown) => showToast(String(e)),
+    );
+  };
+
+  const findNext = (direction: 1 | -1, from = latest.current.selected) => {
+    const query = latest.current.search.query;
+    if (!query.trim()) return;
+    const found = findMatch(entries.current, from, query, direction);
+    if (found < 0) showToast(`찾지 못했다: ${query}`);
+    else select(found);
+  };
+
+  // 키: 화면이 맨 위일 때만. 검색 입력 중이면 넘긴다(입력 칸이 Enter·Esc를 따로 다룬다).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!latest.current.active || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+      if ((e.target as HTMLElement | null)?.closest("input, textarea")) return;
+      const { selected: at, help: helpOpen } = latest.current;
+      let handled = true;
+      switch (e.key) {
+        case "j":
+        case "ArrowDown":
+          select(at + 1);
+          break;
+        case "k":
+        case "ArrowUp":
+          select(at - 1);
+          break;
+        case "PageDown":
+        case " ":
+          select(at + pageRows());
+          break;
+        case "PageUp":
+          select(at - pageRows());
+          break;
+        case "Home":
+          select(0);
+          break;
+        case "End":
+          select(latest.current.count - 1);
+          break;
+        case "Enter":
+          openCommit();
+          break;
+        case "b":
+          openBlame(false);
+          break;
+        case ",":
+          openBlame(true);
+          break;
+        case "y":
+          copySha();
+          break;
+        case "/":
+          setSearch((s) => ({ ...s, open: true }));
+          break;
+        case "n":
+          findNext(1);
+          break;
+        case "N":
+          findNext(-1);
+          break;
+        case "q":
+          onBack();
+          break;
+        case "?":
+          setHelp(true);
+          break;
+        case "Escape":
+          handled = helpOpen;
+          setHelp(false);
+          break;
+        default:
+          handled = false;
+      }
+      if (handled) e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const all = entries.current;
+  const { start, end } = visibleRange(viewport.top, viewport.height, ROW_HEIGHT, count);
+  const path = meta?.path ?? target.path;
+  const former = progress.kind === "done" ? formerPaths(all, path) : [];
+  const chosen = all[selected];
+  const query = search.query.trim();
+
+  return (
+    <section className="history">
+      <header className="blame-header">
+        <span className="badge">히스토리</span>
+        <FilePath path={path} />
+        {former.length > 0 && (
+          <span className="badge" title={`이전 이름: ${former.join(" ← ")}`}>
+            이름 바뀜 {former.length}번
+          </span>
+        )}
+        {meta?.rev && (
+          <span className="badge mono" title={`${meta.rev}부터 거슬러 올라간다`}>
+            @{shortSha(meta.rev)}
+          </span>
+        )}
+        {depth > 1 && (
+          <span className="badge" title="q로 앞 화면으로 돌아간다">
+            뒤로 q · {depth - 1}
+          </span>
+        )}
+        <span className="blame-status">
+          {progress.kind === "loading" && "여는 중…"}
+          {progress.kind === "streaming" && `읽는 중… 커밋 ${formatCount(count)}개`}
+          {progress.kind === "done" && `커밋 ${formatCount(count)}개`}
+          {progress.kind === "failed" && <span className="error-text">실패</span>}
+        </span>
+        <button type="button" className="icon" onClick={() => setHelp(true)} aria-label="단축키 (?)" title="단축키 (?)">
+          ?
+        </button>
+      </header>
+      {search.open && (
+        <div className="history-search">
+          <input
+            ref={searchRef}
+            type="search"
+            value={search.query}
+            placeholder="요약·작성자·sha·경로 (Enter 다음, Shift+Enter 이전, Esc 닫기)"
+            aria-label="히스토리 검색"
+            onChange={(e) => setSearch({ open: true, query: e.target.value })}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                findNext(e.shiftKey ? -1 : 1);
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                setSearch((s) => ({ ...s, open: false }));
+              }
+            }}
+          />
+        </div>
+      )}
+      <div
+        className="history-list"
+        ref={listRef}
+        tabIndex={0}
+        role="listbox"
+        aria-label={`${path} 히스토리`}
+        aria-activedescendant={chosen ? `history-row-${selected}` : undefined}
+        onScroll={(e) => {
+          const list = e.currentTarget;
+          if (latest.current.active) savedTop.current = list.scrollTop;
+          setViewport({ top: list.scrollTop, height: list.clientHeight });
+        }}
+      >
+        <div className="history-rows" style={{ height: count * ROW_HEIGHT }}>
+          {all.slice(start, end).map((entry, offset) => {
+            const i = start + offset;
+            const classes = ["history-row"];
+            if (i === selected) classes.push("selected");
+            if (query && matches(entry, query)) classes.push("match");
+            return (
+              <div
+                key={entry.sha}
+                id={`history-row-${i}`}
+                role="option"
+                aria-selected={i === selected}
+                className={classes.join(" ")}
+                style={{ top: i * ROW_HEIGHT, height: ROW_HEIGHT }}
+                onClick={() => select(i)}
+                onDoubleClick={() => {
+                  select(i);
+                  openCommit(i);
+                }}
+              >
+                <Row entry={entry} path={path} nowMs={nowAtOpen.current} />
+              </div>
+            );
+          })}
+        </div>
+        {progress.kind === "done" && count === 0 && (
+          <div className="blame-message">
+            <p>이 경로를 바꾼 커밋이 없다.</p>
+          </div>
+        )}
+        {progress.kind === "failed" && (
+          <div className="blame-message error">
+            <p>{progress.message}</p>
+          </div>
+        )}
+      </div>
+      {chosen && (
+        <footer className="history-detail">
+          <span className="mono" title="y로 복사">
+            {chosen.sha}
+          </span>
+          <span>
+            {chosen.author} <span className="muted">&lt;{chosen.authorMail}&gt;</span>
+          </span>
+          <span className="muted">{formatDate(chosen.authorTime, parseTz(chosen.authorTz))}</span>
+          {chosen.parents.length > 1 && <span className="badge">merge</span>}
+          {chosen.path !== path && <span className="badge mono">{chosen.path}</span>}
+        </footer>
+      )}
+      {help && <Help view="history" onClose={() => setHelp(false)} />}
+      {toast && (
+        <div className="toast" role="status">
+          {toast}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function Row({ entry, path, nowMs }: { entry: LogEntry; path: string; nowMs: number }) {
+  const status = entry.status;
+  return (
+    <>
+      {status ? (
+        <span className={`status status-${status}`} title={STATUS_NAME[status]}>
+          {STATUS_LETTER[status]}
+        </span>
+      ) : (
+        <span className="status status-merge" title="merge 커밋 (바뀐 파일은 첫 부모와 비교해 본다)">
+          ·
+        </span>
+      )}
+      <span className="history-sha mono">{shortSha(entry.sha)}</span>
+      <span className="history-summary">{entry.summary}</span>
+      {entry.oldPath ? (
+        <span className="history-path mono" title={`${entry.oldPath} → ${entry.path}`}>
+          ← {entry.oldPath}
+        </span>
+      ) : (
+        entry.path !== path && (
+          <span className="history-path mono" title="이 커밋 때의 이름">
+            {entry.path}
+          </span>
+        )
+      )}
+      <span className="history-author" title={entry.authorMail}>
+        {entry.author}
+      </span>
+      <span className="history-time" title={formatDate(entry.authorTime, parseTz(entry.authorTz))}>
+        {relativeTime(entry.authorTime, nowMs)}
+      </span>
+    </>
+  );
+}
+
+/** 파일 이름을 먼저, 디렉터리는 흐리게. */
+function FilePath({ path }: { path: string }) {
+  const cut = path.lastIndexOf("/") + 1;
+  return (
+    <span className="file-path mono" title={path}>
+      {cut > 0 && <span className="file-dir">{path.slice(0, cut)}</span>}
+      <span className="file-name">{path.slice(cut)}</span>
+    </span>
+  );
+}

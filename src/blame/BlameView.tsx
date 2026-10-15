@@ -52,6 +52,7 @@ type Actions = {
   parent(): boolean;
   older(): boolean;
   newer(): boolean;
+  history(): boolean;
   back(): boolean;
   help(): boolean;
   escape(): boolean;
@@ -249,6 +250,12 @@ export function BlameView({ target, line, active, depth, backDirection, cold = f
     newer() {
       return neighbor("newer");
     },
+    history() {
+      const m = latest.current.meta;
+      if (!m) showToast("아직 파일을 여는 중이다");
+      else onNavigate({ kind: "history", target: { repo: m.repo, path: m.path, rev: m.rev } });
+      return true;
+    },
     back() {
       onBack();
       return true;
@@ -337,6 +344,7 @@ export function BlameView({ target, line, active, depth, backDirection, cold = f
                 parent: () => actions.current.parent(),
                 older: () => actions.current.older(),
                 newer: () => actions.current.newer(),
+                history: () => actions.current.history(),
                 back: () => actions.current.back(),
                 help: () => actions.current.help(),
                 escape: () => actions.current.escape(),
@@ -412,7 +420,13 @@ export function BlameView({ target, line, active, depth, backDirection, cold = f
       const target = e.target as HTMLElement | null;
       if (target?.closest(".cm-editor") || target?.closest("input, textarea")) return;
       const handled =
-        e.key === "q" ? actions.current.back() : e.key === "?" ? actions.current.help() : e.key === "Escape" && actions.current.escape();
+        e.key === "q"
+          ? actions.current.back()
+          : e.key === "?"
+            ? actions.current.help()
+            : e.key === "H"
+              ? actions.current.history()
+              : e.key === "Escape" && actions.current.escape();
       if (handled) e.preventDefault();
     };
     window.addEventListener("keydown", onKey);

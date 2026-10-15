@@ -4,17 +4,16 @@
 //! → [`Blame::stream`]으로 블록 묶음. 화면은 내용을 먼저 그리고 거터를 점진적으로 채운다.
 //! 요청은 [`Sessions`]에 id로 등록하고, 화면이 다른 파일·리비전으로 넘어가면 그 id로 취소한다.
 
-use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
 use serde::Serialize;
 
-use crate::blame::{Blame, BlameBlock, BlameCommit, BlameError, Canceller, Chunk, Stats};
-use crate::cache::{BlameCache, CacheKey};
+use crate::blame::{Blame, BlameBlock, BlameCommit, BlameError, Chunk, Stats};
+use crate::cache::{CacheKey, DiskCache};
 use crate::repo::RepoCache;
+use crate::requests::Requests;
 use crate::text::{self, Decoded};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -79,7 +78,7 @@ enum Source {
 /// 요청을 열고 git blame을 띄운다. git을 먼저 띄우고 그동안 파일을 읽는다. 캐시에 있으면 git을 띄우지 않는다.
 fn start(
     repos: &RepoCache,
-    cache: Option<&BlameCache>,
+    cache: Option<&DiskCache>,
     path: &Path,
     rev: Option<&str>,
 ) -> Result<(BlameMeta, Source), String> {
@@ -195,17 +194,8 @@ fn uncommitted(path: &str, lines: u32) -> Chunk {
 /// 진행 중인 blame 요청들. 앱 상태로 하나 둔다.
 #[derive(Default)]
 pub struct Sessions {
-    next_id: AtomicU64,
-    slots: Mutex<HashMap<u64, Slot>>,
-    cache: Option<BlameCache>,
-}
-
-enum Slot {
-    /// 등록만 했다(git을 띄우기 전).
-    Starting,
-    /// git을 띄우기 전에 취소됐다.
-    Cancelled,
-    Running(Canceller),
+    requests: Requests,
+    cache: Option<Arc<DiskCache>>,
 }
 
 impl Sessions {
@@ -214,39 +204,30 @@ impl Sessions {
     }
 
     /// 끝까지 온 blame을 `cache`에 넣고, 같은 요청은 git을 띄우지 않고 캐시에서 읽는다.
-    pub fn with_cache(cache: BlameCache) -> Self {
+    pub fn with_cache(cache: Arc<DiskCache>) -> Self {
         Sessions {
             cache: Some(cache),
             ..Self::default()
         }
     }
 
-    pub fn cache(&self) -> Option<&BlameCache> {
-        self.cache.as_ref()
+    pub fn cache(&self) -> Option<&DiskCache> {
+        self.cache.as_deref()
     }
 
     /// 새 요청 id. 이 id로 [`Sessions::run`]을 부르고 [`Sessions::cancel`]로 멈춘다.
-    /// 화면은 이 id를 받은 뒤에만 취소할 수 있으므로 "시작 전 취소"도 등록된 요청에만 일어난다.
     pub fn register(&self) -> u64 {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
-        self.slots.lock().unwrap().insert(id, Slot::Starting);
-        id
+        self.requests.register()
     }
 
     /// 요청을 멈춘다. 이미 끝났거나 모르는 id면 `false`.
     pub fn cancel(&self, id: u64) -> bool {
-        let mut slots = self.slots.lock().unwrap();
-        match slots.get_mut(&id) {
-            Some(Slot::Running(canceller)) => canceller.cancel(),
-            Some(slot) => *slot = Slot::Cancelled,
-            None => return false,
-        }
-        true
+        self.requests.cancel(id)
     }
 
     /// 끝나지 않은 요청 수.
     pub fn active(&self) -> usize {
-        self.slots.lock().unwrap().len()
+        self.requests.active()
     }
 
     /// `id` 요청을 끝까지 처리한다. 끝 이벤트는 반드시 하나 보낸다.
@@ -260,7 +241,7 @@ impl Sessions {
         mut on_event: impl FnMut(SessionEvent) -> bool,
     ) {
         let end = self.drive(id, repos, path, rev, &mut on_event);
-        self.slots.lock().unwrap().remove(&id);
+        self.requests.finish(id);
         on_event(end);
     }
 
@@ -273,22 +254,20 @@ impl Sessions {
         on_event: &mut impl FnMut(SessionEvent) -> bool,
     ) -> SessionEvent {
         let started = Instant::now();
-        if self.is_cancelled(id) {
+        if self.requests.is_cancelled(id) {
             return SessionEvent::Cancelled;
         }
-        let (meta, source) = match start(repos, self.cache.as_ref(), path, rev) {
+        let (meta, source) = match start(repos, self.cache(), path, rev) {
             Ok(started) => started,
             Err(message) => return SessionEvent::Error { message },
         };
         // 시작하는 동안 취소가 왔으면 끝낸다(git은 Drop이 끝낸다). 아니면 이제부터 취소는 git을 바로 끝낸다.
-        {
-            let mut slots = self.slots.lock().unwrap();
-            if matches!(slots.get(&id), Some(Slot::Cancelled)) {
-                return SessionEvent::Cancelled;
-            }
-            if let Source::Git(blame, _) = &source {
-                slots.insert(id, Slot::Running(blame.canceller()));
-            }
+        let attached = match &source {
+            Source::Git(blame, _) => self.requests.attach(id, blame.canceller()),
+            _ => !self.requests.is_cancelled(id),
+        };
+        if !attached {
+            return SessionEvent::Cancelled;
         }
         let meta_ms = started.elapsed().as_secs_f64() * 1000.0;
         let sent = on_event(SessionEvent::Meta(meta));
@@ -320,7 +299,7 @@ impl Sessions {
         });
         match result {
             Ok(stats) => {
-                if let (Some(cache), Some(key), Some(all)) = (&self.cache, &key, &all)
+                if let (Some(cache), Some(key), Some(all)) = (self.cache(), &key, &all)
                     && let Err(e) = cache.put(key, all)
                 {
                     eprintln!("plx: blame 캐시에 쓰지 못했다: {e}");
@@ -332,10 +311,6 @@ impl Sessions {
                 message: e.to_string(),
             },
         }
-    }
-
-    fn is_cancelled(&self, id: u64) -> bool {
-        matches!(self.slots.lock().unwrap().get(&id), Some(Slot::Cancelled))
     }
 }
 

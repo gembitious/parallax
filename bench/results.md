@@ -35,26 +35,39 @@
 
 | 저장소 | 항목 | 대상 | commit-graph 없음 | Bloom 있음 | 레코드 | 출력 |
 |---|---|---|---|---|---|---|
-| git | git 스폰 | — | 1.7 / — / 1.8 | 1.8 / — / 1.9 | — | 0 KB |
-| git | blame --incremental (첫 블록) | `diff.c` | 17.6 / 17.6 / 1729 | 15.4 / 15.4 / 1158 | 3198 | 560 KB |
-| git | blame --incremental (첫 블록) | `builtin/blame.c` | 16.3 / 16.3 / 730 | 11.2 / 11.2 / 362 | 643 | 134 KB |
-| git | log -- <path> (첫 50개) | `Makefile` | 3.8 / 27.5 / 953 | 3.5 / 11.6 / 374 | 3276 | 354 KB |
-| git | log -- <path> (첫 50개) | `diff.c` | 6.7 / 38.8 / 990 | 3.7 / 14.5 / 280 | 1701 | 187 KB |
-| git | log --follow (첫 50개) | `Documentation/git-log.adoc` | 60.7 / 1673 / 2473 | 36.8 / 1110 / 1621 | 120 | 13 KB |
-| git | log --follow (첫 50개) | `builtin/blame.c` | 29.6 / 421 / 2241 | 21.6 / 281 / 1440 | 407 | 46 KB |
-| git | log -L | `1000,1060:diff.c` | 1469 / — / 2577 | 234 / — / 591 | — | 47 KB |
-| git | show | `HEAD` | 3.6 / — / 3.9 | 3.5 / — / 3.9 | — | 0 KB |
-| git | log --topo-order (첫 100개) | — | 976 / 977 / 1601 | 3.5 / 7.7 / 1926 | 82327 | 13364 KB |
-| vscode | blame --incremental (첫 블록) | `src/vs/editor/common/config/editorOptions.ts` | 26.3 / 26.3 / 3429 | 16.7 / 16.7 / 1208 | 2824 | 680 KB |
-| vscode | blame --incremental (첫 블록) | `src/vs/workbench/contrib/terminal/browser/terminalInstance.ts` | 13.4 / 13.4 / 3899 | 15.1 / 15.1 / 1204 | 1546 | 497 KB |
-| vscode | log -- <path> (첫 50개) | `package.json` | 2.5 / 45.3 / 2096 | 2.9 / 11.4 / 549 | 5127 | 488 KB |
-| vscode | log -- <path> (첫 50개) | `src/vs/workbench/browser/layout.ts` | 110 / 511 / 3242 | 10.1 / 41.0 / 375 | 680 | 75 KB |
-| vscode | log --follow (첫 50개) | `src/vs/workbench/contrib/terminal/browser/terminalInstance.ts` | 3.2 / 755 / 5300 | 3.6 / 451 / 3878 | 1760 | 182 KB |
-| vscode | log -L | `100,160:src/vs/editor/common/model/textModel.ts` | 2775 / — / 3792 | 272 / — / 633 | — | 52 KB |
-| vscode | show | `HEAD` | 3.8 / — / 4.0 | 3.8 / — / 4.2 | — | 10 KB |
-| vscode | log --topo-order (첫 100개) | — | 1895 / 1896 / 3275 | 2.8 / 7.4 / 3903 | 167522 | 25925 KB |
+| git | git 스폰 | — | 1.5 / — / 1.6 | 1.5 / — / 1.6 | — | 0 KB |
+| git | blame --incremental (첫 블록) | `diff.c` | 17.1 / 17.1 / 1607 | 14.2 / 14.2 / 1101 | 3198 | 560 KB |
+| git | blame --incremental (첫 블록) | `builtin/blame.c` | 17.0 / 17.0 / 743 | 10.1 / 10.1 / 317 | 643 | 134 KB |
+| git | plx blame 세션 (첫 묶음) | `diff.c` | 2.6 / 18.2 / 1673 | 2.6 / 16.1 / 1099 | 3198 | 1069 KB |
+| git | plx blame 세션 (첫 묶음) | `builtin/blame.c` | 2.0 / 17.4 / 736 | 1.8 / 12.3 / 330 | 643 | 234 KB |
+| git | log -- <path> (첫 50개) | `Makefile` | 4.5 / 31.3 / 911 | 3.4 / 12.6 / 368 | 3276 | 354 KB |
+| git | log -- <path> (첫 50개) | `diff.c` | 6.8 / 39.2 / 1006 | 4.3 / 16.1 / 286 | 1701 | 187 KB |
+| git | log --follow (첫 50개) | `Documentation/git-log.adoc` | 54.1 / 1643 / 2345 | 35.4 / 1081 / 1499 | 120 | 13 KB |
+| git | log --follow (첫 50개) | `builtin/blame.c` | 30.8 / 394 / 2171 | 26.1 / 270 / 1433 | 407 | 46 KB |
+| git | plx 파일 히스토리 (첫 50개) | `Makefile` | 1.8 / 30.9 / 968 | 1.5 / 14.5 / 410 | 3276 | 1056 KB |
+| git | plx 파일 히스토리 (첫 50개) | `Documentation/git-log.adoc` | 1.5 / 682 / 707 | 1.5 / 88.4 / 181 | 140 | 47 KB |
+| git | plx 파일 히스토리 (첫 50개) | `builtin/blame.c` | 1.6 / 97.3 / 886 | 1.4 / 30.1 / 214 | 576 | 190 KB |
+| git | log -L | `1000,1060:diff.c` | 1437 / — / 2541 | 229 / — / 551 | — | 47 KB |
+| git | show | `HEAD` | 3.0 / — / 3.2 | 2.9 / — / 3.2 | — | 0 KB |
+| git | plx 커밋 상세 | `HEAD` | 1.8 / — / 1.8 | 1.9 / — / 1.9 | — | 0 KB |
+| git | log --topo-order (첫 100개) | — | 948 / 948 / 1568 | 2.7 / 7.2 / 1870 | 82327 | 13364 KB |
+| vscode | blame --incremental (첫 블록) | `src/vs/editor/common/config/editorOptions.ts` | 20.1 / 20.1 / 3454 | 18.3 / 18.3 / 1145 | 2824 | 680 KB |
+| vscode | blame --incremental (첫 블록) | `src/vs/workbench/contrib/terminal/browser/terminalInstance.ts` | 14.6 / 14.6 / 4071 | 16.4 / 16.4 / 1205 | 1546 | 497 KB |
+| vscode | plx blame 세션 (첫 묶음) | `src/vs/editor/common/config/editorOptions.ts` | 4.8 / 23.7 / 3351 | 4.8 / 20.6 / 1101 | 2824 | 1180 KB |
+| vscode | plx blame 세션 (첫 묶음) | `src/vs/workbench/contrib/terminal/browser/terminalInstance.ts` | 4.7 / 17.6 / 4004 | 4.5 / 18.0 / 1213 | 1546 | 781 KB |
+| vscode | log -- <path> (첫 50개) | `package.json` | 2.7 / 50.7 / 2142 | 2.9 / 14.5 / 561 | 5127 | 488 KB |
+| vscode | log -- <path> (첫 50개) | `src/vs/workbench/browser/layout.ts` | 108 / 490 / 3184 | 13.9 / 45.5 / 346 | 680 | 75 KB |
+| vscode | log --follow (첫 50개) | `src/vs/workbench/contrib/terminal/browser/terminalInstance.ts` | 3.1 / 726 / 5201 | 3.6 / 452 / 3885 | 1760 | 182 KB |
+| vscode | plx 파일 히스토리 (첫 50개) | `package.json` | 3.9 / 52.4 / 2207 | 3.9 / 18.2 / 613 | 5127 | 1590 KB |
+| vscode | plx 파일 히스토리 (첫 50개) | `src/vs/workbench/contrib/terminal/browser/terminalInstance.ts` | 3.8 / 598 / 4356 | 3.9 / 50.2 / 663 | 1898 | 710 KB |
+| vscode | log -L | `100,160:src/vs/editor/common/model/textModel.ts` | 2752 / — / 3790 | 274 / — / 645 | — | 52 KB |
+| vscode | show | `HEAD` | 5.3 / — / 5.9 | 4.2 / — / 4.6 | — | 10 KB |
+| vscode | plx 커밋 상세 | `HEAD` | 8.2 / — / 8.2 | 7.3 / — / 7.3 | — | 1 KB |
+| vscode | log --topo-order (첫 100개) | — | 1948 / 1948 / 3148 | 2.8 / 9.5 / 3977 | 167522 | 25925 KB |
 
 셀은 `첫 출력 / 첫 N / 전체` (ms). 첫 N은 항목 이름의 괄호 안 기준이고, 해당 없으면 —.
+`plx blame 세션`의 첫 출력은 내용(meta), 레코드는 블록 수, 출력은 화면으로 보내는 JSON 양이다.
+`plx 파일 히스토리`의 첫 출력은 meta, 첫 N은 50개째를 보낸 때, 레코드는 커밋 수(rename 앞 구간 포함)다.
 <!-- /bench:linux-container -->
 
 <!-- bench:baseline-end -->
@@ -106,7 +119,17 @@ linux-container는 클라우드 VM(4코어, git 2.43.0)에서 잰 참고값이�
   commit-graph가 있으면 7ms다. M3의 gix 리비전 워크도 commit-graph(세대 번호)를 써야 한다.
 - **라인 히스토리:** `log -L`의 첫 출력이 Bloom 필터 없이 1.5~2.8초, 있으면 0.23~0.27초다. M2 "가속 설정"의 효과가 가장 큰 항목이다.
 - **파일 히스토리:** `log --follow`는 Bloom 필터가 있어도 첫 50개까지 0.3~1.1초로, `log -- <path>`(12~45ms)보다 훨씬 느리다.
-  "먼저 `log -- <path>`로 첫 페이지를 띄우고 rename 이전은 `--follow`로 이어 붙인다"는 M2 계획을 뒷받침한다.
+- **파일 히스토리 구현(M2-b):** rename 앞도 `--follow` 대신 옛 이름의 `log -- <path>` 구간으로 잇기로 했다(`plx-log`).
+  첫 50개(Bloom 있음)가 `Documentation/git-log.adoc` 1081 → 88ms, `builtin/blame.c` 270 → 30ms,
+  `terminalInstance.ts` 452 → 50ms다. commit-graph가 없어도 1643 → 682, 394 → 97, 726 → 598ms다.
+  rename이 없는 파일은 git의 첫 50개보다 2~4ms 늦다(`Makefile` 12.6 → 14.5, `package.json` 14.5 → 18.2).
+  - 커밋 수가 다르다(120 → 140, 407 → 576, 1,760 → 1,898). `--follow`는 diff가 없는 merge(양쪽 브랜치가 바꾼 것을
+    합친 merge)를 빼고, 구간 잇기는 구간마다 git의 기본 이력 단순화를 따른다(결과에 기여하지 않은 곁가지 커밋은 빠진다).
+  - `git-log.adoc`의 첫 50개는 앞 구간(5개)이 저장소 끝까지 걷기를 기다린다(Bloom 있음 87ms, 없음 0.7초).
+    다음 구간 git은 rename을 찾자마자 미리 띄우므로 그동안 출력이 쌓여 있다.
+  - rename 원본 찾기는 gix의 rename 추적(짝 1,000개 한도라 문서 906개를 옮긴 커밋에서 놓쳤다) 대신 파일 하나만
+    git과 같은 유사도로 본다. 그 커밋에서 3ms다.
+  - 화면으로 보내는 JSON은 git 출력의 약 3배(`Makefile` 1.0MB)다. 커밋마다 부모 sha, 메일, 경로가 들어 있다.
 - **blame:** 첫 블록은 Bloom 필터와 관계없이 11~26ms지만 전체는 0.4~3.9초다. incremental 스트리밍과 커밋 고정 캐시가 필요하다.
 - **blame 세션 오버헤드(M1):** 앱의 blame 요청(`plx-blame`: 저장소 찾기·git 실행·파일 읽기·파싱·JSON 직렬화)은
   내용(meta)을 1~2ms에 내고, 첫 묶음은 git의 첫 블록과 측정 잡음 안에서 같다(−4~+0.5ms, 2026-10-15 linux-container,

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { BlameView } from "./blame/BlameView";
 import { CommitView } from "./commit/CommitView";
+import { HistoryView } from "./history/HistoryView";
 import { Hud } from "./Hud";
 import { call } from "./ipc";
 import {
@@ -26,7 +27,7 @@ const PLX_BUDGET_MS = 100;
 const VIEW_NAMES: Record<ViewRequest["kind"], string> = {
   graph: "커밋 그래프 (M3)",
   blame: "blame",
-  log: "파일 히스토리 (M2)",
+  log: "파일 히스토리",
   lineLog: "라인 히스토리 (M2)",
   show: "커밋 상세",
 };
@@ -224,8 +225,10 @@ export default function App() {
                       backDirection={backDirectionOf(entry.via)}
                       cold={entry.via === "request" && request.cold}
                     />
+                  ) : entry.view === "history" ? (
+                    <HistoryView {...common} target={entry.target} cold={entry.via === "request" && request.cold} />
                   ) : (
-                    <CommitView {...common} repo={entry.repo} rev={entry.rev} path={entry.path} />
+                    <CommitView {...common} repo={entry.repo} rev={entry.rev} path={entry.path} only={entry.only} />
                   )}
                 </div>
               );
