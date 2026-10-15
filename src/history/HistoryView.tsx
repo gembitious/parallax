@@ -1,7 +1,7 @@
 // 파일 히스토리: 파일을 바꾼 커밋 목록(가상 스크롤). 이름을 바꾸기 전 구간은 옛 이름으로 이어진다.
 // 라인 히스토리(`lines`)면 그 줄 범위를 바꾼 커밋 목록과, 고른 커밋이 그 범위를 어떻게 바꿨는지(hunk)를 아래에 보인다.
 // 키: j/k 이동, Enter 커밋 상세(이 파일 diff만), b 그 리비전 blame, , 바꾸기 전 리비전 blame, y sha 복사,
-//     / 검색, n/N 다음·이전 결과, q 뒤로, ? 도움말.
+//     / 검색, n/N 다음·이전 결과, G 그래프, q 뒤로, ? 도움말.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Help } from "../Help";
 import { copyText } from "../clipboard";
@@ -317,6 +317,11 @@ export function HistoryView({ target, lines = null, active, depth, cold = false,
         case "N":
           findNext(-1);
           break;
+        case "G": {
+          const at = current();
+          if (at) onNavigate({ kind: "graph", repo: at.m.repo, rev: at.e.sha });
+          break;
+        }
         case "q":
           onBack();
           break;

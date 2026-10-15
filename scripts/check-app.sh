@@ -10,7 +10,7 @@
 #   1. plx --version, 잘못된 인자(종료 코드 2, 상주 인스턴스를 띄우지 않음)
 #   2. 콜드 스타트 → 첫 화면, 두 번째 호출이 상주 인스턴스로 전달되어 그려짐(한글·공백 경로 포함),
 #      blame이 끝까지 와서 거터가 그려짐(한글 경로의 저장소 파일 포함), 커밋 상세,
-#      파일·라인 히스토리(이름을 바꾼 한글 경로 파일의 옛 이름 구간까지)
+#      파일·라인 히스토리(이름을 바꾼 한글 경로 파일의 옛 이름 구간까지), 커밋 그래프(인자 없는 plx)
 #   3. 동시에 여러 번 실행해도 상주 인스턴스는 하나
 #   4. 강제 종료 뒤 다시 시작(남은 소켓·락 정리)
 #   5. 터미널에서 처음 실행하면 스스로 분리하고 셸을 바로 돌려줌(릴리스 빌드)
@@ -209,6 +209,21 @@ status=0
 check "plx log -L → 종료 코드 0" test "$status" -eq 0
 check "라인 히스토리가 rename 앞 커밋까지 그림 (커밋 2)" \
   wait_for_all '"kind":"history"' '"label":"라인 히스토리 자료/새 이름.md:3-4"' '"ok":true' '커밋 2'
+
+# 커밋 그래프: 인자 없는 plx는 cwd 저장소의 그래프다. 한글 이름 브랜치를 merge해 레인이 둘이다.
+(
+  cd "$repo"
+  author=(-c user.name=검사 -c user.email=check@example.com -c commit.gpgsign=false)
+  git checkout -q -b 곁가지
+  git "${author[@]}" commit -q --no-verify --allow-empty -m "곁가지 커밋"
+  git checkout -q main
+  git "${author[@]}" merge -q --no-ff --no-verify -m "곁가지 합침" 곁가지
+)
+status=0
+(cd "$repo/소스" && "$bin") || status=$?
+check "plx (인자 없음) → 종료 코드 0" test "$status" -eq 0
+check "커밋 그래프가 첫 화면을 그림 (커밋 4, 레인 2)" \
+  wait_for_all '"kind":"graph"' '"label":"그래프 한글 저장소"' '"ok":true' '커밋 4 · 레인 2'
 
 status=0
 (cd "$work" && "$bin" "한글 폴더/파일 이름.txt:1") || status=$?

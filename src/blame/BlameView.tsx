@@ -54,6 +54,7 @@ type Actions = {
   newer(): boolean;
   history(): boolean;
   lineHistory(): boolean;
+  graph(): boolean;
   back(): boolean;
   help(): boolean;
   escape(): boolean;
@@ -273,6 +274,18 @@ export function BlameView({ target, line, active, depth, backDirection, cold = f
       onNavigate({ kind: "history", target: { repo: m.repo, path: m.path, rev: m.rev }, lines: { start, end } });
       return true;
     },
+    graph() {
+      const m = latest.current.meta;
+      if (!m) {
+        showToast("아직 파일을 여는 중이다");
+        return true;
+      }
+      // 커서 줄의 커밋(미커밋 줄이면 이 리비전, 작업트리면 HEAD)을 골라서 연다.
+      const sha = model.current?.sha(cursorLine());
+      const rev = sha !== undefined && !isUncommitted(sha) ? sha : m.rev;
+      onNavigate({ kind: "graph", repo: m.repo, rev });
+      return true;
+    },
     back() {
       onBack();
       return true;
@@ -363,6 +376,7 @@ export function BlameView({ target, line, active, depth, backDirection, cold = f
                 newer: () => actions.current.newer(),
                 history: () => actions.current.history(),
                 lineHistory: () => actions.current.lineHistory(),
+                graph: () => actions.current.graph(),
                 back: () => actions.current.back(),
                 help: () => actions.current.help(),
                 escape: () => actions.current.escape(),

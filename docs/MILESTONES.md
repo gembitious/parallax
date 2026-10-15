@@ -55,9 +55,12 @@ baseline 표가 `bench/results.md`에 있다.
 - [x] 커밋 DAG(commit-graph 위치 번호 → 앱 캐시의 커밋 표 → gix 객체) + `git log --topo-order`와 같은 순서 +
       레인 레이아웃은 Rust에서 계산, 가시 영역 행만 전송 (gix topo 워크는 세대 번호 v1만 읽어 원격 브랜치가 많으면 느려
       쓰지 않는다: CLAUDE.md 결정 기록, bench/results.md) — Windows·macOS 실기 확인 필요
-- [ ] 가상 스크롤, 브랜치·태그·HEAD 라벨
+- [x] 가상 스크롤, 브랜치·태그·HEAD 라벨. 인자 없는 `plx`가 cwd 저장소의 그래프를 열고(HEAD 커밋을 골라 둔다),
+      blame·히스토리·커밋 상세의 `G`는 그 커밋을 고른 그래프로 간다. 범위는 HEAD / 브랜치(로컬 + upstream, 기본) /
+      원격 포함(`R`) — Windows·macOS 실기 확인 필요
 - [ ] 검색: 메시지·작성자·경로
-- [ ] orrery의 SVG 렌더링 재사용 검토 (성능 미달이면 canvas)
+- [ ] orrery의 SVG 렌더링 재사용 검토 (성능 미달이면 canvas) — 지금은 캔버스 하나에 보이는 행만 다시 그린다
+      (행마다 DOM이 없다). orrery는 이 저장소 밖이라 아직 비교하지 못했다.
 
 **완료 기준:** 참조 저장소 전체 이력에서 첫 화면 ≤ 150ms, 스크롤 60fps.
 
