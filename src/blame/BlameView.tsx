@@ -12,6 +12,7 @@ import { blameChanged } from "./gutter";
 import { BlameModel } from "./model";
 import type { Navigation } from "../nav";
 import { watchFile, watchRepo } from "../watch";
+import { WorktreePicker } from "../worktree/WorktreePicker";
 import { openBlame, type BlameTarget } from "./session";
 import type { BlameMeta, BlameStats, CommitInfo, Neighbor, Version } from "./types";
 
@@ -58,6 +59,7 @@ type Actions = {
   history(): boolean;
   lineHistory(): boolean;
   graph(): boolean;
+  worktrees(): boolean;
   back(): boolean;
   help(): boolean;
   escape(): boolean;
@@ -102,6 +104,7 @@ export function BlameView({
   const [hover, setHover] = useState<Hover | null>(null);
   const [infos, setInfos] = useState<ReadonlyMap<string, InfoState>>(() => new Map());
   const [help, setHelp] = useState(false);
+  const [worktrees, setWorktrees] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
   const timers = useRef({ show: 0, hide: 0, toast: 0 });
@@ -319,6 +322,10 @@ export function BlameView({
       onNavigate({ kind: "graph", repo: m.repo, rev });
       return true;
     },
+    worktrees() {
+      setWorktrees(true);
+      return true;
+    },
     back() {
       onBack();
       return true;
@@ -410,6 +417,7 @@ export function BlameView({
                 history: () => actions.current.history(),
                 lineHistory: () => actions.current.lineHistory(),
                 graph: () => actions.current.graph(),
+                worktrees: () => actions.current.worktrees(),
                 back: () => actions.current.back(),
                 help: () => actions.current.help(),
                 escape: () => actions.current.escape(),
@@ -571,6 +579,28 @@ export function BlameView({
           onClose={() => {
             setHelp(false);
             editor.current?.view.focus();
+          }}
+        />
+      )}
+      {worktrees && meta && (
+        <WorktreePicker
+          repo={meta.repo}
+          onClose={() => {
+            setWorktrees(false);
+            editor.current?.view.focus();
+          }}
+          onPick={(worktree) => {
+            setWorktrees(false);
+            // 다른 워크트리의 같은 파일(작업트리 버전), 같은 줄
+            if (!worktree.current) {
+              onNavigate({
+                kind: "file",
+                target: { repo: worktree.path, path: meta.path, rev: null },
+                line: editor.current ? cursorLine() : null,
+              });
+            } else {
+              editor.current?.view.focus();
+            }
           }}
         />
       )}

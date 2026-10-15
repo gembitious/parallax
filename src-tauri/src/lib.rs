@@ -50,6 +50,7 @@ pub fn run() {
             git::graph_close,
             git::watch_repo,
             git::watch_file,
+            git::worktrees,
             git::unwatch_repo,
             git::repo_acceleration,
             git::accelerate,

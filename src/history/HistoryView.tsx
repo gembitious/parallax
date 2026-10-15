@@ -4,6 +4,7 @@
 //     / 검색, n/N 다음·이전 결과, G 그래프, q 뒤로, ? 도움말.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Help } from "../Help";
+import { WorktreePicker } from "../worktree/WorktreePicker";
 import { copyText } from "../clipboard";
 import { formatCount, formatDate, parseTz, relativeTime, shortSha } from "../blame/format";
 import { STATUS_LETTER, STATUS_NAME } from "../commit/types";
@@ -72,6 +73,7 @@ export function HistoryView({
   const [viewport, setViewport] = useState({ top: 0, height: 0 });
   const [search, setSearch] = useState({ open: false, query: "" });
   const [help, setHelp] = useState(false);
+  const [worktrees, setWorktrees] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   /** 숨겼다 다시 보일 때 되돌릴 스크롤 위치(숨긴 요소의 스크롤은 브라우저마다 남지 않을 수 있다) */
@@ -348,6 +350,9 @@ export function HistoryView({
         case "q":
           onBack();
           break;
+        case "W":
+          setWorktrees(true);
+          break;
         case "?":
           setHelp(true);
           break;
@@ -494,6 +499,23 @@ export function HistoryView({
         </footer>
       )}
       {help && <Help view="history" onClose={() => setHelp(false)} />}
+      {worktrees && meta && (
+        <WorktreePicker
+          repo={meta.repo}
+          onClose={() => setWorktrees(false)}
+          onPick={(worktree) => {
+            setWorktrees(false);
+            // 다른 워크트리의 같은 경로(라인 히스토리면 같은 줄 범위)
+            if (!worktree.current) {
+              onNavigate({
+                kind: "history",
+                target: { repo: worktree.path, path: meta.path, rev: null },
+                lines: meta.lines ?? undefined,
+              });
+            }
+          }}
+        />
+      )}
       {toast && (
         <div className="toast" role="status">
           {toast}

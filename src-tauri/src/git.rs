@@ -282,6 +282,24 @@ pub async fn watch_file(git: State<'_, Arc<GitState>>, path: String) -> Result<W
     .map_err(|e| e.to_string())?
 }
 
+/// 저장소의 워크트리들(주 작업트리 먼저, 링크된 워크트리는 이름 순).
+#[tauri::command]
+pub async fn worktrees(
+    git: State<'_, Arc<GitState>>,
+    repo: String,
+) -> Result<Vec<plx_core::worktree::Worktree>, String> {
+    let git = git.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = git
+            .repos
+            .for_path(Path::new(&repo))
+            .map_err(|e| e.to_string())?;
+        plx_core::worktree::list(&repo).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// 감시 구독(저장소·파일)을 끝낸다. 이미 끝났으면 `false`.
 #[tauri::command]
 pub fn unwatch_repo(git: State<'_, Arc<GitState>>, id: u64) -> bool {
