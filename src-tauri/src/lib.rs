@@ -40,6 +40,8 @@ pub fn run() {
             git::blame_map_line,
             git::blame_neighbor,
             git::commit_info,
+            git::commit_detail,
+            git::file_versions,
             instance::current_request,
             window::app_ready,
             window::hide_window,

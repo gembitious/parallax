@@ -1,6 +1,6 @@
 # 측정 항목: 저장소 종류 대상
-# 종류: spawn | blame | log | follow | line-log | show | graph | plx-blame (bench/src/main.rs의 Kind)
-# plx-blame은 git 대신 앱의 blame 요청을 돌린다(바로 위 blame 줄과 비교).
+# 종류: spawn | blame | log | follow | line-log | show | graph | plx-blame | plx-show (bench/src/main.rs의 Kind)
+# plx-blame·plx-show는 git 대신 앱의 blame 요청·커밋 상세를 돌린다(같은 대상의 git 줄과 비교).
 # 대상을 바꾸면 results.md의 기존 수치와 비교할 수 없으니 모든 플랫폼에서 다시 잰다.
 
 # 프로세스 생성 비용 (Windows에서 특히 중요)
@@ -17,6 +17,7 @@ git     follow    Documentation/git-log.adoc   # 2025년 .txt → .adoc rename: 
 git     follow    builtin/blame.c
 git     line-log  1000,1060:diff.c
 git     show      HEAD
+git     plx-show  HEAD
 git     graph     -
 
 # microsoft/vscode 1.142.0
@@ -29,4 +30,5 @@ vscode  log       src/vs/workbench/browser/layout.ts
 vscode  follow    src/vs/workbench/contrib/terminal/browser/terminalInstance.ts   # log 1,342개, --follow 1,760개
 vscode  line-log  100,160:src/vs/editor/common/model/textModel.ts
 vscode  show      HEAD
+vscode  plx-show  HEAD
 vscode  graph     -

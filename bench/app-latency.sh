@@ -139,6 +139,17 @@ for pass in 1 2; do
 done
 read -r warm_med warm_p90 warm_max <<<"$(grep '"kind":"plx"' "$log" | total_of | summary)"
 read -r shell_med shell_p90 shell_max <<<"$(printf '%s' "$shell_ms" | summary)"
+# 커밋 상세: HEAD를 몇 번 연다(CI는 얕은 클론이라 커밋이 하나뿐이다). 매번 새 화면이라 gix 비교부터 다시 한다.
+shows=5
+for i in $(seq 1 "$shows"); do
+  "$bin" show HEAD >/dev/null
+  if ! wait_lines '"kind":"commit"' "$i"; then
+    echo "${i}번째 plx show의 커밋 상세 기록이 나오지 않았다." >&2
+    exit 1
+  fi
+done
+read -r commit_med commit_p90 commit_max <<<"$(LC_ALL=C grep -F '"kind":"commit"' "$log" | total_of | summary)"
+
 warm_blame="$(LC_ALL=C grep -F '"kind":"blame"' "$log" | LC_ALL=C grep -vF '(콜드 스타트)' || true)"
 git_blame="$(printf '%s\n' "$warm_blame" | LC_ALL=C grep -vF '(캐시)' || true)"
 cached_blame="$(printf '%s\n' "$warm_blame" | LC_ALL=C grep -F '(캐시)' || true)"
@@ -163,10 +174,11 @@ echo
 echo "| 항목 | 값 (ms) | 예산 |"
 echo "|---|---|---|"
 echo "| 콜드 스타트 → 첫 페인트 | $cold | ≤ 1000 |"
-echo "| 상주 인스턴스에 plx 호출 → 대상 뷰 첫 페인트 (중앙값 / p90 / 최대, n=$calls) | $warm_med / $warm_p90 / $warm_max | ≤ 100 |"
+echo "| 상주 인스턴스에 plx 호출 → 대상 뷰 첫 페인트 (중앙값 / p90 / 최대, n=$((calls + shows))) | $warm_med / $warm_p90 / $warm_max | ≤ 100 |"
 echo "| 두 번째 plx 프로세스, 셸에서 본 시간 (중앙값 / p90 / 최대) | $shell_med / $shell_p90 / $shell_max | — |"
 echo "| blame 첫 줄 표시, 처음 여는 파일 (n=$(count_of "$git_blame")) | $blame_med / $blame_p90 / $blame_max | ≤ git 첫 출력 + 30 (git 첫 출력 중앙값 $git_first) |"
 echo "| blame 첫 줄 표시, 다시 여는 파일·캐시 (n=$(count_of "$cached_blame")) | $cache_med / $cache_p90 / $cache_max | ≤ 16 |"
+echo "| 커밋 상세 → 파일 목록 + 첫 diff 표시 (HEAD, n=$shows) | $commit_med / $commit_p90 / $commit_max | ≤ 50 |"
 echo
 echo "- 콜드 스타트 구간(ms): $cold_phases"
 echo "- 콜드 스타트의 blame(ms): $cold_blame"

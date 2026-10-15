@@ -2,9 +2,19 @@ import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState }
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { BlameView } from "./blame/BlameView";
+import { CommitView } from "./commit/CommitView";
 import { Hud } from "./Hud";
 import { call } from "./ipc";
-import { backDirectionOf, titleOf, viewReducer, type PlxRequest, type Shown, type ViewRequest } from "./nav";
+import {
+  backDirectionOf,
+  titleOf,
+  viewReducer,
+  type Navigation,
+  type PlxRequest,
+  type Shown,
+  type StackEntry,
+  type ViewRequest,
+} from "./nav";
 import { afterPaint, getPerfInfo, initPerf, nowMs, phasesBetween, record } from "./perf";
 
 type AppInfo = { version: string; coreVersion: string };
@@ -18,7 +28,7 @@ const VIEW_NAMES: Record<ViewRequest["kind"], string> = {
   blame: "blame",
   log: "파일 히스토리 (M2)",
   lineLog: "라인 히스토리 (M2)",
-  show: "커밋 상세 (M2)",
+  show: "커밋 상세",
 };
 
 function ViewDetails({ request }: { request: ViewRequest }) {
@@ -171,13 +181,18 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 탐색으로 화면이 바뀌면 창 제목도 바꾼다(plx 호출로 연 화면은 백엔드가 이미 정했다).
+  // 탐색으로 화면이 바뀌면 창 제목도 바꾼다. plx 호출로 연 맨 아래 화면은 호출 요약(백엔드가 처음 정한 제목)이다.
   const top = stack[stack.length - 1];
+  const rootLabel = shown?.request.label;
+  const titled = useRef<StackEntry | null>(null);
   useEffect(() => {
-    if (top && top.via !== "request") {
-      invoke("set_window_title", { title: titleOf(top) }).catch(() => {});
-    }
-  }, [top]);
+    if (!top || titled.current === top) return;
+    const first = titled.current === null;
+    titled.current = top;
+    if (top.via === "request" && first) return;
+    const title = top.via === "request" ? rootLabel : titleOf(top);
+    if (title) invoke("set_window_title", { title }).catch(() => {});
+  }, [top, rootLabel]);
 
   const back = () => {
     if (stack.length > 1) dispatch({ type: "back" });
@@ -189,22 +204,29 @@ export default function App() {
     <div className="app">
       {request ? (
         <main className="view">
-          {request.request.kind === "blame" ? (
+          {stack.length > 0 ? (
             stack.map((entry, i) => {
               const isTop = i === stack.length - 1;
+              const common = {
+                active: isTop,
+                depth: i + 1,
+                onShown: entry.via === "request" ? (ms: number) => onShown(request.id, ms) : undefined,
+                onBack: back,
+                onNavigate: (navigation: Navigation) => dispatch({ type: "navigate", navigation }),
+              };
               return (
                 <div key={entry.key} className="stack-entry" hidden={!isTop}>
-                  <BlameView
-                    target={entry.target}
-                    line={entry.line}
-                    active={isTop}
-                    depth={i + 1}
-                    backDirection={backDirectionOf(entry.via)}
-                    cold={entry.via === "request" && request.cold}
-                    onShown={entry.via === "request" ? (ms) => onShown(request.id, ms) : undefined}
-                    onBack={back}
-                    onNavigate={(navigation) => dispatch({ type: "navigate", navigation })}
-                  />
+                  {entry.view === "blame" ? (
+                    <BlameView
+                      {...common}
+                      target={entry.target}
+                      line={entry.line}
+                      backDirection={backDirectionOf(entry.via)}
+                      cold={entry.via === "request" && request.cold}
+                    />
+                  ) : (
+                    <CommitView {...common} repo={entry.repo} rev={entry.rev} path={entry.path} />
+                  )}
                 </div>
               );
             })

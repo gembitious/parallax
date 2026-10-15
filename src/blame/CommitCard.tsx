@@ -16,6 +16,8 @@ type Props = {
   pinned: boolean;
   nowMs: number;
   onCopy(sha: string): void;
+  /** 커밋 상세로 */
+  onOpen(): void;
   onClose(): void;
   onPointerInside(inside: boolean): void;
 };
@@ -23,7 +25,7 @@ type Props = {
 const GAP = 6;
 const MARGIN = 8;
 
-export function CommitCard({ commit, block, info, path, anchor, pinned, nowMs, onCopy, onClose, onPointerInside }: Props) {
+export function CommitCard({ commit, block, info, path, anchor, pinned, nowMs, onCopy, onOpen, onClose, onPointerInside }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: anchor.right + GAP, top: anchor.top });
 
@@ -93,6 +95,9 @@ export function CommitCard({ commit, block, info, path, anchor, pinned, nowMs, o
           <code>{shortSha(block.sha)}</code>{" "}
           <button type="button" className="link" onClick={() => onCopy(block.sha)}>
             복사 (y)
+          </button>{" "}
+          <button type="button" className="link" onClick={onOpen}>
+            상세 (Enter)
           </button>
         </dd>
         <dt>파일</dt>

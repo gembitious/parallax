@@ -44,7 +44,8 @@ GitLens의 핵심 흐름(줄 → 커밋 → 부모 리비전 blame → 파일·�
     `@codemirror/language-data` 6.5.2(언어 모듈은 필요할 때 불러온다), `@codemirror/search` 6.7.2, `@codemirror/commands` 6.11.1,
     `@lezer/highlight` 1.2.5. `codemirror` 묶음 패키지(basicSetup)는 쓰지 않는다(편집 기능이 필요 없다).
   - 프런트 테스트: `vitest` 5.0.3 (순수 로직만, `vitest.config.ts`가 `src/**/*.test.ts`만 본다)
-  - 도입 예정 (그 마일스톤에서 다시 확인): `@codemirror/merge` 6.12.2 (M2), `notify` 8.2.0 (M4, 9.0은 RC)
+  - diff 뷰(M2): `@codemirror/merge` 6.12.2 (분할 MergeView, 통합 unifiedMergeView)
+  - 도입 예정 (그 마일스톤에서 다시 확인): `notify` 8.2.0 (M4, 9.0은 RC)
 
 ## 디렉터리
 ```

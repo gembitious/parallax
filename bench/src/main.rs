@@ -50,6 +50,9 @@ enum Kind {
     /// 앱의 작업트리 blame 요청: 저장소 찾기·git blame·파일 읽기·파싱·JSON 직렬화(채널로 보낼 모양).
     /// 첫 출력은 내용(meta), 첫 N은 첫 묶음(거터 첫 줄), 전체는 끝(done) 시각이다. 저장소 캐시는 매번 비운다.
     PlxBlame,
+    /// 앱의 커밋 상세: gix 트리 비교 + 파일별 줄 수(프로세스 없음). `show`(git CLI)와 비교한다.
+    /// 첫 출력 = 결과 전체, 출력 = 화면으로 보내는 JSON 양. 저장소는 매번 새로 연다.
+    PlxShow,
 }
 
 impl Kind {
@@ -63,6 +66,7 @@ impl Kind {
             "show" => Kind::Show,
             "graph" => Kind::Graph,
             "plx-blame" => Kind::PlxBlame,
+            "plx-show" => Kind::PlxShow,
             _ => return None,
         })
     }
@@ -77,6 +81,7 @@ impl Kind {
             Kind::Show => "show",
             Kind::Graph => "log --topo-order",
             Kind::PlxBlame => "plx blame 세션",
+            Kind::PlxShow => "plx 커밋 상세",
         }
     }
 
@@ -87,7 +92,7 @@ impl Kind {
             Kind::PlxBlame => Some((1, "첫 묶음")),
             Kind::Log | Kind::Follow => Some((50, "첫 50개")),
             Kind::Graph => Some((100, "첫 100개")),
-            Kind::Spawn | Kind::LineLog | Kind::Show => None,
+            Kind::Spawn | Kind::LineLog | Kind::Show | Kind::PlxShow => None,
         }
     }
 
@@ -116,7 +121,7 @@ impl Kind {
                 "--format=%H%x1f%P%x1f%an%x1f%at%x1f%s",
                 "HEAD",
             ],
-            Kind::PlxBlame => unreachable!("git을 직접 띄우지 않는다"),
+            Kind::PlxBlame | Kind::PlxShow => unreachable!("git을 직접 띄우지 않는다"),
         };
         v.into_iter().map(String::from).collect()
     }
@@ -136,7 +141,7 @@ fn count_records(kind: Kind, chunk: &[u8], carry: &mut Vec<u8>) -> usize {
             count
         }
         Kind::Log | Kind::Follow | Kind::Graph => chunk.iter().filter(|&&b| b == 0).count(),
-        Kind::Spawn | Kind::LineLog | Kind::Show | Kind::PlxBlame => 0,
+        Kind::Spawn | Kind::LineLog | Kind::Show | Kind::PlxBlame | Kind::PlxShow => 0,
     }
 }
 
@@ -303,6 +308,22 @@ fn run_session_once(repo: &Path, target: &str, condition: Condition) -> io::Resu
     }
 }
 
+fn run_show_once(repo: &Path, rev: &str) -> io::Result<Sample> {
+    let start = Instant::now();
+    let opened = plx_core::repo::Repo::discover(repo).map_err(io::Error::other)?;
+    let id = opened.resolve_commit(rev).map_err(io::Error::other)?;
+    let detail = plx_core::commit::commit_detail(&opened, id).map_err(io::Error::other)?;
+    let total = start.elapsed().as_secs_f64() * 1000.0;
+    let bytes = serde_json::to_vec(&detail).map_or(0, |json| json.len());
+    Ok(Sample {
+        first_byte: Some(total),
+        first_n: None,
+        total,
+        records: detail.files.len(),
+        bytes,
+    })
+}
+
 fn median(mut values: Vec<f64>) -> Option<f64> {
     if values.is_empty() {
         return None;
@@ -322,6 +343,7 @@ struct Summary {
 fn measure(opts: &Options, repo: &Path, case: &Case, condition: Condition) -> io::Result<Summary> {
     let run = || match case.kind {
         Kind::PlxBlame => run_session_once(repo, &case.target, condition),
+        Kind::PlxShow => run_show_once(repo, &case.target),
         kind => run_once(repo, kind, &case.target, condition),
     };
     for _ in 0..opts.warmup {
