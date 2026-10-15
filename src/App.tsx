@@ -4,15 +4,74 @@ import { listen } from "@tauri-apps/api/event";
 
 type AppInfo = { version: string; coreVersion: string };
 
+/** 열 뷰. plx-core/src/cli.rs의 Request와 같은 모양. */
+type ViewRequest =
+  | { kind: "graph" }
+  | { kind: "blame"; path: string; line: number | null }
+  | { kind: "log"; path: string }
+  | { kind: "lineLog"; path: string; start: number; end: number }
+  | { kind: "show"; rev: string };
+
 /** `plx` 호출 하나. src-tauri/src/instance.rs의 PlxRequest와 같은 모양. */
 type PlxRequest = {
   id: number;
+  request: ViewRequest;
+  label: string;
   args: string[];
   cwd: string;
   t0Ms: number;
   recvMs: number;
   cold: boolean;
 };
+
+const VIEW_NAMES: Record<ViewRequest["kind"], string> = {
+  graph: "커밋 그래프 (M3)",
+  blame: "blame (M1)",
+  log: "파일 히스토리 (M2)",
+  lineLog: "라인 히스토리 (M2)",
+  show: "커밋 상세 (M2)",
+};
+
+function ViewDetails({ request }: { request: ViewRequest }) {
+  switch (request.kind) {
+    case "graph":
+      return null;
+    case "blame":
+      return (
+        <>
+          <dt>파일</dt>
+          <dd className="mono">{request.path}</dd>
+          <dt>줄</dt>
+          <dd className="mono">{request.line ?? "—"}</dd>
+        </>
+      );
+    case "log":
+      return (
+        <>
+          <dt>파일</dt>
+          <dd className="mono">{request.path}</dd>
+        </>
+      );
+    case "lineLog":
+      return (
+        <>
+          <dt>파일</dt>
+          <dd className="mono">{request.path}</dd>
+          <dt>범위</dt>
+          <dd className="mono">
+            {request.start}–{request.end}
+          </dd>
+        </>
+      );
+    case "show":
+      return (
+        <>
+          <dt>리비전</dt>
+          <dd className="mono">{request.rev}</dd>
+        </>
+      );
+  }
+}
 
 /** 더 최근 요청만 받는다. 이벤트와 current_request가 같은 요청을 두 번 줄 수 있다. */
 function newer(current: PlxRequest | null, next: PlxRequest): PlxRequest | null {
@@ -55,6 +114,9 @@ export default function App() {
       <main className="placeholder">
         {request ? (
           <dl className="request">
+            <dt>뷰</dt>
+            <dd>{VIEW_NAMES[request.request.kind]}</dd>
+            <ViewDetails request={request.request} />
             <dt>호출</dt>
             <dd className="mono">plx {request.args.join(" ")}</dd>
             <dt>위치</dt>

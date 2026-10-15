@@ -4,6 +4,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use plx_core::cli::{self, Parsed, Request};
 use plx_core::instance::{self, Claim, Endpoint, Invocation, PROTOCOL_VERSION, Reply, Server};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -27,6 +28,10 @@ const CLAIM_TIMEOUT: Duration = Duration::from_secs(10);
 #[serde(rename_all = "camelCase")]
 pub struct PlxRequest {
     pub id: u64,
+    /// 파싱한 뷰 요청.
+    pub request: Request,
+    /// 창 제목·화면 표시용 요약.
+    pub label: String,
     pub args: Vec<String>,
     pub cwd: String,
     /// 호출 시작 시각(epoch ms).
@@ -52,12 +57,23 @@ struct Inner {
 }
 
 impl Requests {
-    pub fn submit(&self, invocation: Invocation, cold: bool) {
+    /// 받은 호출을 파싱해 창에 보낸다. 인자가 잘못됐으면 호출한 쪽에 보여 줄 오류 문장을 돌려준다.
+    pub fn submit(&self, invocation: Invocation, cold: bool) -> Result<(), String> {
         let recv_ms = plx_core::time::epoch_ms();
+        let cwd = Path::new(&invocation.cwd);
+        let request = match cli::parse(&invocation.args, cwd, cli::stat) {
+            Ok(Parsed::Request(request)) => request,
+            // 도움말·버전은 호출한 프로세스가 직접 출력하고 넘기지 않는다.
+            Ok(Parsed::Help | Parsed::Version) => return Err("넘길 요청이 없다".to_owned()),
+            Err(e) => return Err(e.to_string()),
+        };
+        let label = request.label(cwd);
         let mut inner = self.inner.lock().unwrap();
         inner.next_id += 1;
         let request = PlxRequest {
             id: inner.next_id,
+            request,
+            label,
             args: invocation.args,
             cwd: invocation.cwd,
             t0_ms: invocation.t0_ms,
@@ -72,6 +88,7 @@ impl Requests {
             }
             None => inner.pending = true,
         }
+        Ok(())
     }
 
     /// 앱 초기화(setup)에서 부른다. 그 전에 온 요청 중 마지막 것만 보여 주면 된다.
@@ -94,17 +111,9 @@ impl Requests {
 
 fn deliver(app: &AppHandle, request: &PlxRequest) {
     window::show_main(app);
-    window::set_title(app, &summary(request));
+    window::set_title(app, &request.label);
     // 프론트엔드가 아직 듣기 전이면 이벤트는 사라지지만, 뜨자마자 current_request로 가져간다.
     let _ = app.emit_to(window::MAIN, "plx-request", request);
-}
-
-fn summary(request: &PlxRequest) -> String {
-    if request.args.is_empty() {
-        "plx".to_owned()
-    } else {
-        format!("plx {}", request.args.join(" "))
-    }
 }
 
 /// 프론트엔드가 뜨면서 놓친 요청을 가져간다.
@@ -131,6 +140,13 @@ pub fn start(t_main_ms: f64, requests: Arc<Requests>) -> Server {
     }
 
     let invocation = current_invocation(t0_ms).unwrap_or_else(|msg| fail(&msg, 2));
+    // 잘못된 인자는 상주 인스턴스를 건드리지 않고 이 터미널에서 바로 알린다.
+    match cli::parse(&invocation.args, Path::new(&invocation.cwd), cli::stat) {
+        Ok(Parsed::Request(_)) => {}
+        Ok(Parsed::Help) => print_and_exit(cli::USAGE),
+        Ok(Parsed::Version) => print_and_exit(&format!("plx {}", env!("CARGO_PKG_VERSION"))),
+        Err(e) => fail(&format!("{e}\n자세한 사용법: plx --help"), 2),
+    }
     let flavor = cfg!(debug_assertions).then_some("dev");
     let endpoint = Endpoint::new(APP_ID, flavor)
         .unwrap_or_else(|e| fail(&format!("인스턴스 경로를 준비하지 못했다: {e}"), 1));
@@ -153,10 +169,12 @@ pub fn start(t_main_ms: f64, requests: Arc<Requests>) -> Server {
         }
     }
 
-    requests.submit(invocation, true);
-    lock.serve(move |invocation| {
-        requests.submit(invocation, false);
-        Reply::ok()
+    if let Err(message) = requests.submit(invocation, true) {
+        fail(&message, 2);
+    }
+    lock.serve(move |invocation| match requests.submit(invocation, false) {
+        Ok(()) => Reply::ok(),
+        Err(message) => Reply::error(message),
     })
     .unwrap_or_else(|e| fail(&format!("인스턴스 소켓을 열지 못했다: {e}"), 1))
 }
@@ -201,7 +219,14 @@ fn current_invocation(t0_ms: f64) -> Result<Invocation, String> {
     })
 }
 
+fn print_and_exit(text: &str) -> ! {
+    cli::attach_parent_console();
+    println!("{text}");
+    std::process::exit(0)
+}
+
 fn fail(message: &str, code: i32) -> ! {
+    cli::attach_parent_console();
     eprintln!("plx: {message}");
     std::process::exit(code)
 }

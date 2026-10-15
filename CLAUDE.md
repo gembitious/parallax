@@ -41,8 +41,10 @@ GitLens의 핵심 흐름(줄 → 커밋 → 부모 리비전 blame → 파일·�
 
 ## 디렉터리
 ```
-crates/plx-core/   gix·git CLI 래퍼, 출력 파서, 캐시, 그래프 레인 레이아웃, 인스턴스 간 전달(로컬 소켓) (UI 무관, 단위 테스트 필수)
-src-tauri/         Tauri 명령·채널, 단일 인스턴스 연결(창·트레이), CLI 인자 처리
+crates/plx-core/   gix·git CLI 래퍼, 출력 파서, 캐시, 그래프 레인 레이아웃, plx 인자 파서, 인스턴스 간 전달(로컬 소켓)
+                   (UI 무관, 단위 테스트 필수)
+src-tauri/         Tauri 명령·채널, 단일 인스턴스·CLI 호출을 창·트레이에 연결
+scripts/           설치 보조 스크립트 (macOS shim)
 src/               React UI
 bench/             참조 저장소 준비 스크립트와 측정 결과(results.md)
 fixtures/          테스트 저장소 생성 스크립트 (rename, 이동, merge, CRLF, 한글 경로·내용)
@@ -74,7 +76,11 @@ plx log <file>               파일 히스토리
 plx log -L <a>,<b>:<file>    라인 범위 히스토리
 plx show <rev>               커밋 상세
 ```
-macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다.
+`-h`/`--help`, `-V`/`--version`, `--`(뒤 인자를 파일 이름으로: `plx -- log`)도 받는다.
+blame은 작업트리에 있는 파일만 받고, `log`는 삭제된 경로도 받는다. 잘못된 인자는 상주 인스턴스에 넘기지 않고
+호출한 터미널에 알린 뒤 종료 코드 2로 끝난다.
+
+macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `scripts/install-macos-shim.sh [앱 경로] [설치 디렉터리]`.
 
 인스턴스가 없을 때 릴리스 빌드를 셸에서 실행하면 스스로 분리 실행하고 셸을 바로 돌려준다.
 - `PLX_DETACH=0|1`: 분리 실행 끄기·강제 (개발 빌드는 기본적으로 분리하지 않는다. `tauri dev`가 자식 프로세스로 잡고 있어야 한다)
