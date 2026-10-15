@@ -145,6 +145,19 @@ impl Repo {
         Ok(Some(blob.detach().data))
     }
 
+    /// `commit`에 `path` 파일(blob·실행 파일·심볼릭 링크)이 있는가. 내용은 읽지 않는다.
+    pub fn has_file(&self, commit: ObjectId, path: &str) -> Result<bool> {
+        let repo = self.local();
+        let tree = repo
+            .find_commit(commit)
+            .and_then(|commit| commit.tree())
+            .map_err(|e| err("커밋 트리", e))?;
+        let entry = tree
+            .lookup_entry_by_path(path)
+            .map_err(|e| err("트리 조회", e))?;
+        Ok(entry.is_some_and(|entry| !entry.mode().is_tree() && !entry.mode().is_commit()))
+    }
+
     /// 커밋 상세(hover 카드). 변경 파일 수는 첫 부모(없으면 빈 트리)와 비교한다.
     pub fn commit_info(&self, id: ObjectId) -> Result<CommitInfo> {
         let repo = self.local();

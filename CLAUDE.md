@@ -40,7 +40,11 @@ GitLens의 핵심 흐름(줄 → 커밋 → 부모 리비전 blame → 파일·�
     `tempfile` 3.27.0(테스트)
   - git·텍스트(M1): `gix` 0.89.0 (`default-features = false`, `basic`·`sha1`·`max-performance-safe`. diff는 gix에 든 imara-diff),
     `encoding_rs` 0.8.42 (EUC-KR 커밋 메시지·파일 내용), `dunce` 1.0.5 (Windows `\\?\` 경로 정리, Tauri가 이미 쓰는 버전)
-  - 도입 예정 (그 마일스톤에서 다시 확인): `codemirror` 6.0.2·`@codemirror/view` 6.43.14·`@codemirror/merge` 6.12.2 (M1·M2), `notify` 8.2.0 (M4, 9.0은 RC)
+  - 코드 뷰(M1): `@codemirror/state` 6.7.6, `@codemirror/view` 6.43.14, `@codemirror/language` 6.13.1,
+    `@codemirror/language-data` 6.5.2(언어 모듈은 필요할 때 불러온다), `@codemirror/search` 6.7.2, `@codemirror/commands` 6.11.1,
+    `@lezer/highlight` 1.2.5. `codemirror` 묶음 패키지(basicSetup)는 쓰지 않는다(편집 기능이 필요 없다).
+  - 프런트 테스트: `vitest` 5.0.3 (순수 로직만, `vitest.config.ts`가 `src/**/*.test.ts`만 본다)
+  - 도입 예정 (그 마일스톤에서 다시 확인): `@codemirror/merge` 6.12.2 (M2), `notify` 8.2.0 (M4, 9.0은 RC)
 
 ## 디렉터리
 ```
@@ -68,13 +72,14 @@ docs/              MILESTONES.md
 - 처음 한 번: `npm install` (Node·npm 버전은 Volta가, Rust 버전은 rustup이 `rust-toolchain.toml`로 맞춘다)
 - 개발: `npm run tauri dev`
 - 릴리스 빌드: `npm run tauri build` (번들 없이 실행 파일만: `npm run tauri build -- --no-bundle` → `target/release/plx`)
-- 프런트 타입 검사 + 빌드: `npm run build`
+- 프런트 타입 검사 + 빌드: `npm run build` / 프런트 단위 테스트(순수 로직, vitest): `npm test`
 - 코어 테스트: `cargo test -p plx-core` / 전체: `cargo test --workspace`
   (fixtures 결정성 테스트가 `fixtures/make-repos.sh`를 실행하므로 bash와 git이 필요하다. Windows는 Git for Windows의 bash, `PLX_BASH`로 지정 가능)
 - 테스트 저장소 만들기: `fixtures/make-repos.sh <출력 디렉터리>` → `history`, `encoding` 저장소 (어느 플랫폼에서든 같은 sha)
-- 앱 자동 확인(릴리스 빌드 후): `scripts/check-app.sh [실행 파일]` → 단일 인스턴스 전달·CLI 오류·동시 실행·분리 실행 확인과 지연 측정.
+- 앱 자동 확인(릴리스 빌드 후): `scripts/check-app.sh [실행 파일]` → 단일 인스턴스 전달·CLI 오류·동시 실행·분리 실행,
+  blame이 끝까지 와서 거터를 그리는지(한글 경로 저장소 포함) 확인과 지연 측정.
   `PLX_CHECK_RECORD=<이름>`이면 지연 표를 `bench/results.md`에 넣는다. CI도 이 스크립트를 돌린다.
-- 앱 지연만 측정: `bench/app-latency.sh [실행 파일] [반복 횟수]` → 콜드 스타트, plx 호출 → 첫 페인트
+- 앱 지연만 측정: `bench/app-latency.sh [실행 파일] [반복 횟수]` → 콜드 스타트, plx 호출 → 첫 페인트, blame 첫 줄 표시
 - git baseline: `bench/setup.sh`(참조 저장소 준비, 한 번) → `bench/run.sh [이름]`(측정 → `bench/results.md`)
 
 ## 작업 방식

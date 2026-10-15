@@ -71,6 +71,10 @@ jobs:
       - name: 프런트 타입 검사·빌드
         run: npm run build
 
+      - name: 프런트 단위 테스트
+        if: runner.os == 'Linux'
+        run: npm test
+
       - name: 포맷
         if: runner.os == 'Linux'
         run: cargo fmt --all -- --check

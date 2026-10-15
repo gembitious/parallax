@@ -6,8 +6,8 @@ export type Phase = { label: string; ms: number };
 
 export type Entry = {
   id: number;
-  /** cold: 콜드 스타트, plx: 상주 인스턴스로 온 호출, ipc: 백엔드 요청, probe: 측정 버튼 */
-  kind: "cold" | "plx" | "ipc" | "probe";
+  /** cold: 콜드 스타트, plx: 상주 인스턴스로 온 호출, blame: blame 요청(첫 줄 표시까지), ipc: 백엔드 요청, probe: 측정 버튼 */
+  kind: "cold" | "plx" | "blame" | "ipc" | "probe";
   label: string;
   totalMs: number;
   phases: Phase[];

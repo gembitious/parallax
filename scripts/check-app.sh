@@ -8,7 +8,8 @@
 #
 # 자동으로 확인하는 것
 #   1. plx --version, 잘못된 인자(종료 코드 2, 상주 인스턴스를 띄우지 않음)
-#   2. 콜드 스타트 → 첫 화면, 두 번째 호출이 상주 인스턴스로 전달되어 그려짐(한글·공백 경로 포함)
+#   2. 콜드 스타트 → 첫 화면, 두 번째 호출이 상주 인스턴스로 전달되어 그려짐(한글·공백 경로 포함),
+#      blame이 끝까지 와서 거터가 그려짐(한글 경로의 저장소 파일 포함)
 #   3. 동시에 여러 번 실행해도 상주 인스턴스는 하나
 #   4. 강제 종료 뒤 다시 시작(남은 소켓·락 정리)
 #   5. 터미널에서 처음 실행하면 스스로 분리하고 셸을 바로 돌려줌(릴리스 빌드)
@@ -88,6 +89,22 @@ wait_for() {
   done
 }
 
+# 기록 한 줄에 문자열들이 모두 있을 때까지 기다린다(최대 약 15초).
+wait_for_all() { # wait_for_all <문자열...>
+  local i=0
+  while :; do
+    local lines
+    lines="$(LC_ALL=C grep -F "$1" "$log" 2>/dev/null || true)"
+    for needle in "${@:2}"; do
+      lines="$(printf '%s\n' "$lines" | LC_ALL=C grep -F "$needle" || true)"
+    done
+    if [ -n "$lines" ]; then return 0; fi
+    i=$((i + 1))
+    if [ "$i" -gt 300 ]; then return 1; fi
+    sleep 0.05
+  done
+}
+
 wait_count() { # wait_count <기대 개수> — 프로세스 수가 그 값이 될 때까지(최대 약 10초)
   local i=0
   while [ "$(plx_count)" -ne "$1" ]; do
@@ -115,6 +132,17 @@ check() { # check <설명> <명령...>
 cd "$root"
 mkdir -p "$work/한글 폴더"
 printf '첫 줄\n둘째 줄\n' >"$work/한글 폴더/파일 이름.txt"
+# blame할 한글 경로 저장소(커밋 하나 + 커밋 안 한 줄 하나). 이 스크립트가 만든 임시 저장소라 바꿔도 된다.
+repo="$work/한글 저장소"
+mkdir -p "$repo/소스"
+printf '하나\n둘\n' >"$repo/소스/파일 이름.rs"
+(
+  cd "$repo"
+  git -c init.defaultBranch=main init -q
+  git add .
+  git -c user.name=검사 -c user.email=check@example.com -c commit.gpgsign=false commit -q --no-verify -m "첫 커밋"
+)
+printf '셋(커밋 안 함)\n' >>"$repo/소스/파일 이름.rs"
 
 echo "== $bin ($os)"
 
@@ -137,6 +165,13 @@ status=0
 "$bin" package.json:2 || status=$?
 check "두 번째 호출 → 종료 코드 0, 셸 $(($(now_ms) - start))ms" test "$status" -eq 0
 check "두 번째 호출 → 상주 인스턴스가 그림" wait_for '"label":"blame package.json:2"'
+check "blame이 끝까지 와서 거터를 그림 (package.json)" wait_for_all '"kind":"blame"' '"label":"blame package.json"' '"ok":true'
+
+status=0
+(cd "$repo" && "$bin" "소스/파일 이름.rs:3") || status=$?
+check "한글 경로 저장소 파일 blame → 종료 코드 0" test "$status" -eq 0
+check "한글 경로 저장소 파일 blame → 거터를 그림 (블록 2: 커밋 1, 미커밋 1)" \
+  wait_for_all '"kind":"blame"' '"label":"blame 소스/파일 이름.rs"' '"ok":true' '블록 2'
 
 status=0
 (cd "$work" && "$bin" "한글 폴더/파일 이름.txt:1") || status=$?
