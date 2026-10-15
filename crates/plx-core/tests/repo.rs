@@ -9,7 +9,9 @@ use plx_core::repo::Repo;
 fn discover_and_relative_paths() {
     let dir = history();
     let repo = Repo::discover(&dir.join("src/lib.rs")).unwrap();
-    assert_eq!(repo.workdir(), std::fs::canonicalize(&dir).unwrap());
+    // Windows에서도 `\\?\` 없는 경로다(git 작업 디렉터리·화면 표시용).
+    assert_eq!(repo.workdir(), dunce::canonicalize(&dir).unwrap());
+    assert!(!repo.workdir().to_string_lossy().starts_with(r"\\?\"));
     assert_eq!(
         repo.relative_path(&dir.join("src/lib.rs")).unwrap(),
         "src/lib.rs"
@@ -56,7 +58,7 @@ fn not_a_repository() {
     std::fs::create_dir_all(&dir).unwrap();
     // CARGO_TARGET_TMPDIR가 이 저장소(parallax) 안이라 위로 올라가면 저장소를 찾는다. 그 경우는 건너뛴다.
     if let Ok(repo) = Repo::discover(&dir) {
-        assert_ne!(repo.workdir(), std::fs::canonicalize(&dir).unwrap());
+        assert_ne!(repo.workdir(), dunce::canonicalize(&dir).unwrap());
     }
 }
 
