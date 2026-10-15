@@ -1,4 +1,4 @@
-//! 이력 질의 결과(blame, 파일 히스토리) 디스크 캐시.
+//! 이력 질의 결과(blame, 파일 히스토리, 커밋 표) 디스크 캐시.
 //!
 //! 커밋 고정 결과는 바뀌지 않으므로 (저장소, 커밋, 경로)로 영구히 쓴다. 파일 히스토리는 시작 커밋
 //! (요청할 때의 HEAD)으로 고정한다. 작업트리 blame은
@@ -83,12 +83,25 @@ impl CacheKey {
         }
     }
 
+    /// commit-graph가 없는 저장소의 커밋 표([`crate::commit_table`]). `git_dir`는 git 공통 디렉터리.
+    /// 커밋은 sha로 찾으므로 같은 경로에 다른 저장소가 생겨도 틀린 값을 주지 않는다(없는 커밋은 찾지 않는다).
+    pub fn commit_table(git_dir: &Path) -> CacheKey {
+        CacheKey {
+            text: format!("{FORMAT}\ncommits\n{}", git_dir.display()),
+            storable: true,
+        }
+    }
+
     pub fn storable(&self) -> bool {
         self.storable
     }
 
     fn file_name(&self) -> String {
         format!("{:016x}.json", fnv1a64(self.text.as_bytes()))
+    }
+
+    fn bytes_file_name(&self) -> String {
+        format!("{:016x}.bin", fnv1a64(self.text.as_bytes()))
     }
 }
 
@@ -153,6 +166,46 @@ impl DiskCache {
             .dir
             .join(format!("{}.{}.tmp", key.file_name(), std::process::id()));
         fs::write(&tmp, serde_json::to_vec(&entry).map_err(io::Error::other)?)?;
+        if let Err(e) = fs::rename(&tmp, &path) {
+            let _ = fs::remove_file(&tmp);
+            return Err(e);
+        }
+        if self.writes.fetch_add(1, Ordering::Relaxed) % PRUNE_EVERY == PRUNE_EVERY - 1 {
+            self.prune()?;
+        }
+        Ok(())
+    }
+
+    /// 바이너리 값(커서 JSON으로 두지 않는 것). 파일은 열쇠 길이(u32 LE), 열쇠, 값이다.
+    pub fn get_bytes(&self, key: &CacheKey) -> Option<Vec<u8>> {
+        let path = self.dir.join(key.bytes_file_name());
+        let bytes = fs::read(&path).ok()?;
+        let len = u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?) as usize;
+        let stored = bytes.get(4..4 + len)?;
+        if stored != key.text.as_bytes() {
+            return None;
+        }
+        if let Ok(file) = fs::File::options().write(true).open(&path) {
+            let _ = file.set_modified(SystemTime::now());
+        }
+        let mut bytes = bytes;
+        bytes.drain(..4 + len);
+        Some(bytes)
+    }
+
+    pub fn put_bytes(&self, key: &CacheKey, value: &[u8]) -> io::Result<()> {
+        if !key.storable {
+            return Ok(());
+        }
+        fs::create_dir_all(&self.dir)?;
+        let name = key.bytes_file_name();
+        let path = self.dir.join(&name);
+        let tmp = self.dir.join(format!("{name}.{}.tmp", std::process::id()));
+        let mut bytes = Vec::with_capacity(4 + key.text.len() + value.len());
+        bytes.extend_from_slice(&(key.text.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(key.text.as_bytes());
+        bytes.extend_from_slice(value);
+        fs::write(&tmp, bytes)?;
         if let Err(e) = fs::rename(&tmp, &path) {
             let _ = fs::remove_file(&tmp);
             return Err(e);
@@ -354,6 +407,28 @@ mod tests {
             .map(|k| dir.path().join(k.file_name()).exists())
             .collect();
         assert_eq!(left, [false, false, false, true, true]);
+    }
+
+    #[test]
+    fn bytes_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = DiskCache::new(dir.path().to_path_buf(), 1 << 20);
+        let key = CacheKey::commit_table(Path::new("/repo/.git"));
+        assert_eq!(cache.get_bytes(&key), None);
+        cache.put_bytes(&key, b"\x00\x01binary").unwrap();
+        assert_eq!(
+            cache.get_bytes(&key).as_deref(),
+            Some(&b"\x00\x01binary"[..])
+        );
+        let other = CacheKey::commit_table(Path::new("/other/.git"));
+        fs::copy(
+            dir.path().join(key.bytes_file_name()),
+            dir.path().join(other.bytes_file_name()),
+        )
+        .unwrap();
+        assert_eq!(cache.get_bytes(&other), None, "열쇠가 다르면 읽지 않는다");
+        // JSON 항목과 같은 열쇠여도 섞이지 않는다.
+        assert_eq!(cache.get::<Chunk>(&key), None);
     }
 
     #[test]

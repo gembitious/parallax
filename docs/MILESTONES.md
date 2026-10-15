@@ -52,7 +52,9 @@ baseline 표가 `bench/results.md`에 있다.
 **완료 기준:** 히스토리·커밋 상세 예산 충족. Bloom 필터 유무별 측정을 `bench/results.md`에 추가.
 
 ## M3 — 커밋 그래프
-- [ ] gix 리비전 워크(topo 순) + 레인 레이아웃은 Rust에서 계산, 가시 영역 행만 전송
+- [x] 커밋 DAG(commit-graph 위치 번호 → 앱 캐시의 커밋 표 → gix 객체) + `git log --topo-order`와 같은 순서 +
+      레인 레이아웃은 Rust에서 계산, 가시 영역 행만 전송 (gix topo 워크는 세대 번호 v1만 읽어 원격 브랜치가 많으면 느려
+      쓰지 않는다: CLAUDE.md 결정 기록, bench/results.md) — Windows·macOS 실기 확인 필요
 - [ ] 가상 스크롤, 브랜치·태그·HEAD 라벨
 - [ ] 검색: 메시지·작성자·경로
 - [ ] orrery의 SVG 렌더링 재사용 검토 (성능 미달이면 canvas)

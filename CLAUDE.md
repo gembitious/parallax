@@ -145,6 +145,12 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
   (v1은 0x80 이상 바이트가 든 경로, 즉 한글 경로의 해시가 `char` 부호에 따라 달라진다). 저장소 설정은 바꾸지 않는다:
   MILESTONES 초안의 `commitGraph.changedPaths`는 git에 없는 설정이고, `--changed-paths`로 쓴 뒤의 commit-graph 쓰기
   (git gc 포함)는 필터를 유지한다. 상태는 commit-graph 파일 머리(청크 표, BDAT 버전)와 HEAD가 그래프에 있는지로 본다.
+- 2026-10-15: 커밋 그래프는 gix의 topo 워크 대신 시작점에서 닿는 DAG를 직접 읽어 git의 `--topo-order`와 같은
+  LIFO 정렬을 한다(`plx_core::graph`). 커밋은 commit-graph의 위치 번호 → 앱 캐시의 커밋 표(`plx_core::commit_table`)
+  → 커밋 객체 순으로 찾는다. 이유(bench/results.md): gix-commitgraph는 세대 번호 v2를 읽지 않아 원격 브랜치가 많으면
+  첫 화면이 0.3~0.45초였다. 커밋 표는 commit-graph가 없는 저장소를 위해 한 번 푼 (sha, 부모, 시각)을 저장소 밖에
+  둔다(얕은 클론은 넣지 않는다). 기본 범위는 HEAD + 로컬 브랜치 + 그 upstream이고 원격 브랜치 모두·HEAD만은 화면에서 고른다.
+  레인은 같은 커밋을 기다리면 왼쪽으로 합치고(git의 graph.c와 같은 열 수) 빈 레인은 당기지 않는다(선이 옆으로 밀리지 않는다).
 - 2026-10-15: 단일 인스턴스는 `tauri-plugin-single-instance` 대신 직접 구현한다(`plx_core::instance`).
   `main()` 맨 앞, Tauri 초기화 전에 로컬 소켓(Windows named pipe, Unix 소켓)으로 argv·cwd·t0를 넘기고 끝낸다.
   primary 판정은 락 파일(`File::try_lock`). 이유: 두 번째 호출이 WebView 초기화를 거치지 않는다,

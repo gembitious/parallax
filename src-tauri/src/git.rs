@@ -7,6 +7,7 @@ use plx_core::blame_session::{SessionEvent, Sessions};
 use plx_core::cache::DiskCache;
 use plx_core::commit::{self, CommitDetail, FileVersions};
 use plx_core::commit_graph::{self, GraphStatus, Progress};
+use plx_core::graph::{GraphEvent, GraphOptions, GraphSessions, GraphWindow};
 use plx_core::history::{HistoryEvent, HistorySessions, LineRange};
 use plx_core::navigate::{self, Direction, Version};
 use plx_core::repo::{CommitInfo, RepoCache};
@@ -22,6 +23,7 @@ pub struct GitState {
     repos: RepoCache,
     blames: Sessions,
     histories: HistorySessions,
+    graphs: GraphSessions,
     cache: Option<Arc<DiskCache>>,
 }
 
@@ -30,17 +32,23 @@ impl GitState {
     pub fn new(cache_dir: Option<PathBuf>) -> GitState {
         let cache =
             cache_dir.map(|dir| Arc::new(DiskCache::new(dir.join("results"), CACHE_MAX_BYTES)));
-        let (blames, histories) = match &cache {
+        let (blames, histories, graphs) = match &cache {
             Some(cache) => (
                 Sessions::with_cache(cache.clone()),
                 HistorySessions::with_cache(cache.clone()),
+                GraphSessions::with_cache(cache.clone()),
             ),
-            None => (Sessions::new(), HistorySessions::new()),
+            None => (
+                Sessions::new(),
+                HistorySessions::new(),
+                GraphSessions::new(),
+            ),
         };
         GitState {
             repos: RepoCache::new(),
             blames,
             histories,
+            graphs,
             cache,
         }
     }
@@ -150,6 +158,63 @@ pub async fn line_history_open(
 #[tauri::command]
 pub fn history_cancel(git: State<'_, Arc<GitState>>, id: u64) -> bool {
     git.histories.cancel(id)
+}
+
+/// 커밋 그래프를 열고 id를 바로 돌려준다. 이벤트는 `on_event`로 온다
+/// (`meta` → `loading`* → `page` → `progress`* → `done`·`error`·`cancelled`). 첫 화면 뒤의 행은 `graph_rows`로 읽는다.
+/// 화면을 떠나면 `graph_close`로 닫는다(행 레이아웃을 메모리에 둔다).
+#[tauri::command]
+pub async fn graph_open(
+    git: State<'_, Arc<GitState>>,
+    repo: String,
+    options: Option<GraphOptions>,
+    on_event: Channel<GraphEvent>,
+) -> Result<u64, String> {
+    let git = git.inner().clone();
+    // 참조 읽기도 파일을 읽으므로 블로킹 스레드에서 한다.
+    tauri::async_runtime::spawn_blocking(move || {
+        git.graphs.open(
+            &git.repos,
+            Path::new(&repo),
+            options.unwrap_or_default(),
+            move |event| on_event.send(event).is_ok(),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 그래프의 `start`..`end` 행(요약·작성자·이름표·레이아웃).
+#[tauri::command]
+pub async fn graph_rows(
+    git: State<'_, Arc<GitState>>,
+    id: u64,
+    start: usize,
+    end: usize,
+) -> Result<GraphWindow, String> {
+    let git = git.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || git.graphs.rows(id, start, end))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// 리비전이 놓인 행. 그래프에 없으면 `null`.
+#[tauri::command]
+pub async fn graph_find(
+    git: State<'_, Arc<GitState>>,
+    id: u64,
+    rev: String,
+) -> Result<Option<usize>, String> {
+    let git = git.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || git.graphs.find(id, &rev))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// 그래프를 닫는다. 이미 닫혔으면 `false`.
+#[tauri::command]
+pub fn graph_close(git: State<'_, Arc<GitState>>, id: u64) -> bool {
+    git.graphs.close(id)
 }
 
 /// 커밋 상세(hover 카드). `repo`는 blame `meta`의 작업트리 경로다.

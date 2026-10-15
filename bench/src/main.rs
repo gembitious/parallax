@@ -3,8 +3,8 @@
 //! 앱이 git을 띄우는 방식 그대로(`-c core.quotepath=false`, Windows는 `CREATE_NO_WINDOW`) 스폰해
 //! 첫 출력, 첫 N개 레코드, 전체 시간을 잰다. hyperfine 같은 도구는 전체 시간만 재므로 직접 잰다.
 //! 조건은 두 가지다: commit-graph 없음(`-c core.commitGraph=false`), commit-graph + changed-path Bloom 필터 있음.
-//! `plx-blame`·`plx-log`는 git이 아니라 앱의 요청(`plx_core::blame_session`, `plx_core::history`)을 그대로 돌려
-//! 우리 오버헤드를 잰다.
+//! `plx-blame`·`plx-log`·`plx-graph`는 git이 아니라 앱의 요청(`plx_core::blame_session`, `plx_core::history`,
+//! `plx_core::graph`)을 그대로 돌려 우리 오버헤드를 잰다.
 //!
 //! 사용법: plx-bench --repos <디렉터리> --cases <파일> [--runs 5] [--warmup 1]
 //! 결과는 Markdown으로 표준 출력에 쓴다. bench/run.sh가 bench/results.md에 넣는다.
@@ -12,9 +12,12 @@
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
+use std::sync::{Arc, mpsc};
 use std::time::Instant;
 
 use plx_core::blame_session::{SessionEvent, Sessions};
+use plx_core::cache::DiskCache;
+use plx_core::graph::{GraphEvent, GraphOptions, GraphScope, GraphSessions};
 use plx_core::history::{HistoryEvent, HistorySessions, LineRange};
 use plx_core::repo::RepoCache;
 
@@ -61,6 +64,10 @@ enum Kind {
     /// 앱의 라인 히스토리 요청(`git log -L` + hunk 해석). `line-log`와 비교한다. 대상은 `a,b:path`.
     /// 첫 출력은 meta, 첫 N은 첫 커밋을 보낸 때다.
     PlxLineLog,
+    /// 앱의 커밋 그래프(`plx_core::graph`): DAG 읽기 + 위상 정렬 + 레이아웃. `graph`와 비교한다.
+    /// 대상은 범위(`head`·`branches`·`all`, 클론마다 같은 것은 `head`뿐)이고 `+table`을 붙이면 앱 캐시의
+    /// 커밋 표를 미리 채워 둔다(commit-graph가 없을 때 두 번째 열기부터). 첫 출력은 meta, 첫 N은 첫 화면(100행).
+    PlxGraph,
 }
 
 impl Kind {
@@ -77,6 +84,7 @@ impl Kind {
             "plx-show" => Kind::PlxShow,
             "plx-log" => Kind::PlxLog,
             "plx-line-log" => Kind::PlxLineLog,
+            "plx-graph" => Kind::PlxGraph,
             _ => return None,
         })
     }
@@ -94,6 +102,7 @@ impl Kind {
             Kind::PlxShow => "plx 커밋 상세",
             Kind::PlxLog => "plx 파일 히스토리",
             Kind::PlxLineLog => "plx 라인 히스토리",
+            Kind::PlxGraph => "plx 커밋 그래프",
         }
     }
 
@@ -104,7 +113,7 @@ impl Kind {
             Kind::PlxBlame => Some((1, "첫 묶음")),
             Kind::Log | Kind::Follow | Kind::PlxLog => Some((50, "첫 50개")),
             Kind::PlxLineLog => Some((1, "첫 커밋")),
-            Kind::Graph => Some((100, "첫 100개")),
+            Kind::Graph | Kind::PlxGraph => Some((100, "첫 100개")),
             Kind::Spawn | Kind::LineLog | Kind::Show | Kind::PlxShow => None,
         }
     }
@@ -134,7 +143,7 @@ impl Kind {
                 "--format=%H%x1f%P%x1f%an%x1f%at%x1f%s",
                 "HEAD",
             ],
-            Kind::PlxBlame | Kind::PlxShow | Kind::PlxLog | Kind::PlxLineLog => {
+            Kind::PlxBlame | Kind::PlxShow | Kind::PlxLog | Kind::PlxLineLog | Kind::PlxGraph => {
                 unreachable!("git을 직접 띄우지 않는다")
             }
         };
@@ -162,7 +171,8 @@ fn count_records(kind: Kind, chunk: &[u8], carry: &mut Vec<u8>) -> usize {
         | Kind::PlxBlame
         | Kind::PlxShow
         | Kind::PlxLog
-        | Kind::PlxLineLog => 0,
+        | Kind::PlxLineLog
+        | Kind::PlxGraph => 0,
     }
 }
 
@@ -400,6 +410,74 @@ fn run_history_once(
     }
 }
 
+/// `plx-graph` 대상: 범위와 커밋 표를 쓸지
+fn parse_graph_target(target: &str) -> io::Result<(GraphScope, bool)> {
+    let (scope, table) = match target.strip_suffix("+table") {
+        Some(scope) => (scope, true),
+        None => (target, false),
+    };
+    let scope = match scope {
+        "head" => GraphScope::Head,
+        "branches" => GraphScope::Branches,
+        "all" => GraphScope::All,
+        other => {
+            return Err(io::Error::other(format!(
+                "plx-graph 대상은 head·branches·all(+table): {other}"
+            )));
+        }
+    };
+    Ok((scope, table))
+}
+
+/// 그래프 열기 한 번. 첫 N은 첫 화면(100행)을 보낸 때, 전체는 레이아웃을 다 정한 때다.
+fn run_graph_once(
+    repo: &Path,
+    scope: GraphScope,
+    cache: Option<Arc<DiskCache>>,
+    condition: Condition,
+) -> io::Result<Sample> {
+    set_git_config(condition);
+    let sessions = match cache {
+        Some(cache) => GraphSessions::with_cache(cache),
+        None => GraphSessions::new(),
+    };
+    let repos = RepoCache::new();
+    let (tx, rx) = mpsc::channel();
+    let start = Instant::now();
+    let ms = |t: Instant| t.duration_since(start).as_secs_f64() * 1000.0;
+    let id = sessions
+        .open(&repos, repo, GraphOptions::scope(scope), move |event| {
+            tx.send((Instant::now(), event)).is_ok()
+        })
+        .map_err(io::Error::other)?;
+    let (mut first_byte, mut first_n) = (None, None);
+    let (mut records, mut bytes) = (0usize, 0usize);
+    for (at, event) in rx {
+        bytes += serde_json::to_vec(&event).map_or(0, |json| json.len());
+        match event {
+            GraphEvent::Meta(_) => first_byte = Some(ms(at)),
+            GraphEvent::Page { total, .. } => {
+                first_n = Some(ms(at));
+                records = total;
+            }
+            GraphEvent::Done { .. } => {
+                sessions.close(id);
+                return Ok(Sample {
+                    first_byte,
+                    first_n,
+                    total: ms(at),
+                    records,
+                    bytes,
+                });
+            }
+            GraphEvent::Error { message } => return Err(io::Error::other(message)),
+            GraphEvent::Cancelled => return Err(io::Error::other("취소됐다")),
+            GraphEvent::Loading { .. } | GraphEvent::Progress { .. } => {}
+        }
+    }
+    Err(io::Error::other("그래프 이벤트가 끊겼다"))
+}
+
 fn run_show_once(repo: &Path, rev: &str) -> io::Result<Sample> {
     let start = Instant::now();
     let opened = plx_core::repo::Repo::discover(repo).map_err(io::Error::other)?;
@@ -433,7 +511,35 @@ struct Summary {
 }
 
 fn measure(opts: &Options, repo: &Path, case: &Case, condition: Condition) -> io::Result<Summary> {
+    // `plx-graph …+table`: 측정 전에 한 번 열어 커밋 표를 채운다(측정이 끝나면 지우는 임시 캐시).
+    let table_dir = std::env::temp_dir().join(format!("plx-bench-table-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&table_dir);
+    let mut graph_cache = None;
+    if case.kind == Kind::PlxGraph {
+        let (scope, table) = parse_graph_target(&case.target)?;
+        if table {
+            let cache = Arc::new(DiskCache::new(table_dir.clone(), 1 << 32));
+            run_graph_once(repo, scope, Some(cache.clone()), condition)?;
+            graph_cache = Some(cache);
+        }
+    }
+    let summary = measure_runs(opts, repo, case, condition, graph_cache);
+    let _ = std::fs::remove_dir_all(&table_dir);
+    summary
+}
+
+fn measure_runs(
+    opts: &Options,
+    repo: &Path,
+    case: &Case,
+    condition: Condition,
+    graph_cache: Option<Arc<DiskCache>>,
+) -> io::Result<Summary> {
     let run = || match case.kind {
+        Kind::PlxGraph => {
+            let (scope, _) = parse_graph_target(&case.target)?;
+            run_graph_once(repo, scope, graph_cache.clone(), condition)
+        }
         Kind::PlxBlame => run_session_once(repo, &case.target, condition),
         Kind::PlxShow => run_show_once(repo, &case.target),
         Kind::PlxLog => run_history_once(repo, &case.target, None, condition),
