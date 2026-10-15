@@ -102,7 +102,9 @@ impl Listener {
             let mut stream = match conn {
                 Ok(stream) => stream,
                 Err(e) => {
+                    // 파일 디스크립터 고갈처럼 계속 실패하는 경우에 CPU를 태우지 않게 잠깐 쉰다.
                     eprintln!("plx: 인스턴스 소켓 accept 실패: {e}");
+                    thread::sleep(Duration::from_millis(50));
                     continue;
                 }
             };
