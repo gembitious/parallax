@@ -42,6 +42,8 @@ pub fn run() {
             git::history_open,
             git::history_cancel,
             git::line_history_open,
+            git::repo_acceleration,
+            git::accelerate,
             git::commit_info,
             git::commit_detail,
             git::file_versions,

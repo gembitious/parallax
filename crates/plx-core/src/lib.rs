@@ -8,6 +8,7 @@ pub mod blame_session;
 pub mod cache;
 pub mod cli;
 pub mod commit;
+pub mod commit_graph;
 pub mod git;
 pub mod history;
 pub mod instance;

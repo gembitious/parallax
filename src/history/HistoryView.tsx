@@ -9,6 +9,7 @@ import { formatCount, formatDate, parseTz, relativeTime, shortSha } from "../bla
 import { STATUS_LETTER, STATUS_NAME } from "../commit/types";
 import type { Navigation } from "../nav";
 import { afterPaint, nowMs, record } from "../perf";
+import { Acceleration } from "./Acceleration";
 import { findMatch, formerPaths, matches, scrollToRow, visibleRange } from "./list";
 import { openHistory } from "./session";
 import {
@@ -369,6 +370,7 @@ export function HistoryView({ target, lines = null, active, depth, cold = false,
             뒤로 q · {depth - 1}
           </span>
         )}
+        {meta && <Acceleration repo={meta.repo} onDone={showToast} />}
         <span className="blame-status">
           {progress.kind === "loading" && "여는 중…"}
           {progress.kind === "streaming" && `읽는 중… 커밋 ${formatCount(count)}개`}
