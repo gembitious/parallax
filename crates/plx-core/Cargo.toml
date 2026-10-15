@@ -1,0 +1,9 @@
+[package]
+name = "plx-core"
+description = "parallax 코어: gix·git CLI 래퍼, 출력 파서, 캐시, 그래프 레이아웃 (UI 무관)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]

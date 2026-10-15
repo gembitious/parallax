@@ -1,0 +1,23 @@
+[workspace]
+resolver = "3"
+members = ["crates/plx-core", "src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+
+[workspace.dependencies]
+plx-core = { path = "crates/plx-core" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+# 워크스페이스에서는 루트의 [profile]만 적용된다.
+# https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true
+# 템플릿의 panic = "abort"는 뺐다. 상주 앱이라 요청 하나의 패닉이 프로세스 전체를 죽이면 안 된다.

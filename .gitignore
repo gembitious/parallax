@@ -1,0 +1,16 @@
+# Node
+node_modules/
+dist/
+dist-ssr/
+*.local
+*.log
+
+# Rust / Tauri
+/target/
+/src-tauri/gen/schemas/
+
+# 에디터·OS
+.vscode/
+.idea/
+.DS_Store
+*.sw?

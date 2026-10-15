@@ -17,7 +17,7 @@ baseline은 M0에서 같은 머신·같은 저장소로 git CLI를 직접 잰 �
 | 그래프 스크롤 | 60fps (참조 저장소 전체 이력) |
 
 ## M0 — 뼈대와 측정
-- [ ] Tauri 2 + React + Vite 스캐폴딩, `crates/plx-core` 분리
+- [x] Tauri 2 + React + Vite 스캐폴딩, `crates/plx-core` 분리 — Windows·macOS 실기 확인 필요
 - [ ] 단일 인스턴스 + argv/cwd 전달, 창 닫기 = 숨기기, 트레이(종료)
 - [ ] `plx` 인자 파싱 (CLAUDE.md의 CLI 인터페이스), macOS shim
 - [ ] 개발 빌드 성능 HUD: 요청별 소요 ms

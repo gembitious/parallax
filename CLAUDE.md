@@ -32,7 +32,12 @@ GitLens의 핵심 흐름(줄 → 커밋 → 부모 리비전 blame → 파일·�
 - git: `gix` + 시스템 `git` CLI
 - 파일 감시: `notify` (`.git`의 HEAD, refs/, packed-refs, logs/HEAD)
 - Node는 Volta로 고정한다. 각 의존성 버전은 M0에서 확인해 아래에 기록한다.
-  - (M0에서 기록)
+  정확한 버전은 `Cargo.lock`·`package-lock.json`이 고정한다(`.npmrc`의 `save-exact`). 2026-10-15 확인.
+  - 툴체인: Rust 1.97.0 + edition 2024 (`rust-toolchain.toml`), Node 24.22.0 LTS + npm 11.19.1 (`package.json`의 `volta`), Volta 2.0.2
+  - Tauri: `tauri` 2.12.4, `tauri-build` 2.7.3, `@tauri-apps/api` 2.12.4, `@tauri-apps/cli` 2.12.3 (3.0은 alpha라 보류)
+  - 프런트: React 19.3.1, Vite 8.3.4, `@vitejs/plugin-react` 6.1.2, TypeScript 6.0.3 (7.0은 Go 포트라 도구 호환성 확인 전까지 보류)
+  - Rust 공통: `serde` 1.0.229, `serde_json` 1.0.154
+  - 도입 예정 (그 마일스톤에서 다시 확인): `gix` 0.89.0 (M1), `codemirror` 6.0.2·`@codemirror/view` 6.43.14·`@codemirror/merge` 6.12.2 (M1·M2), `notify` 8.2.0 (M4, 9.0은 RC)
 
 ## 디렉터리
 ```
@@ -53,9 +58,12 @@ docs/              MILESTONES.md
 - **읽기 전용:** 저장소를 바꾸는 git 명령은 호출하지 않는다. 유일한 예외는 사용자가 확인한 "가속 설정"(commit-graph 작성).
 - **파서 정확성:** git 출력 파서마다 fixtures 기반 골든 테스트(`git blame --porcelain` 등 git 결과와 비교)를 둔다.
 
-## 명령 (스캐폴딩 후 실제 값으로 갱신)
+## 명령
+- 처음 한 번: `npm install` (Node·npm 버전은 Volta가, Rust 버전은 rustup이 `rust-toolchain.toml`로 맞춘다)
 - 개발: `npm run tauri dev`
-- 코어 테스트: `cargo test -p plx-core`
+- 릴리스 빌드: `npm run tauri build` (번들 없이 실행 파일만: `npm run tauri build -- --no-bundle` → `target/release/plx`)
+- 프런트 타입 검사 + 빌드: `npm run build`
+- 코어 테스트: `cargo test -p plx-core` / 전체: `cargo test --workspace`
 - 벤치: `bench/` 스크립트 (M0에서 작성)
 
 ## CLI 인터페이스 (목표)
