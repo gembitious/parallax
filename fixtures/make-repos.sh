@@ -5,7 +5,8 @@
 #   <출력>/history   rename, 디렉터리 이동, 파일 안·파일 간 줄 이동, merge(양쪽 수정, merge에서만 생긴 줄,
 #                    충돌 해결), 삭제 후 재추가, 바이너리, 끝 개행 없음, 빈 파일, 브랜치·태그, 미커밋 변경
 #   <출력>/encoding  CRLF, LF→CRLF 전환, 섞인 줄 끝, 한글 경로·내용·커밋 메시지·작성자,
-#                    한글 경로 rename, 공백·이모지 경로, EUC-KR 바이트(비 UTF-8)
+#                    한글 경로 rename, 공백·이모지 경로, EUC-KR 바이트(비 UTF-8),
+#                    EUC-KR로 인코딩된 커밋 메시지(encoding 헤더)
 #   이미 있으면 지우고 다시 만든다.
 #
 # 결정성을 지키는 규칙
@@ -241,6 +242,15 @@ commit_msgfile_as_config_user "한글 파일 수정"
 mkdir -p 문서
 mv 한글/설명.md 문서/설명.md
 commit_msgfile "설명.md를 문서/로 옮김"
+
+# EUC-KR로 쓴 커밋 메시지(encoding 헤더가 붙는다). 오래된 한국어 저장소에 있는 형태다.
+# 메시지: "인코딩 테스트: EUC-KR 커밋 메시지", 추가한 줄: "EUC-KR 줄 추가"
+printf 'EUC-KR \301\331 \303\337\260\241\n' >>euc-kr.txt
+printf '\300\316\304\332\265\371 \305\327\275\272\306\256: EUC-KR \304\277\271\324 \270\336\275\303\301\366\n' >"$out/.msg"
+next_date
+git add -A
+GIT_AUTHOR_DATE="$date" GIT_COMMITTER_DATE="$date" \
+  git -c i18n.commitEncoding=euc-kr commit -q --no-verify -F "$out/.msg"
 
 rm -f "$out/.msg"
 echo "만들었다: $out/history, $out/encoding"

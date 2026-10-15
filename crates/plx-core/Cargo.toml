@@ -7,6 +7,12 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+# 저장소·객체 읽기, 리비전 해석, 트리·blob diff (프로세스를 띄우지 않는다)
+gix = { version = "0.89.0", default-features = false, features = ["basic", "sha1", "max-performance-safe"] }
+# 커밋의 encoding 헤더(예: euc-kr)에 맞춰 메시지를 디코드한다
+encoding_rs = "0.8.42"
+# Windows에서 canonicalize 결과의 `\\?\`를 안전할 때만 뗀다(git 작업 디렉터리·화면 표시용)
+dunce = "1.0.5"
 serde.workspace = true
 serde_json.workspace = true
 
