@@ -6,6 +6,7 @@ use std::sync::Arc;
 use plx_core::blame_session::{SessionEvent, Sessions};
 use plx_core::cache::DiskCache;
 use plx_core::commit::{self, CommitDetail, FileVersions};
+use plx_core::commit_graph::{self, GraphStatus, Progress};
 use plx_core::history::{HistoryEvent, HistorySessions, LineRange};
 use plx_core::navigate::{self, Direction, Version};
 use plx_core::repo::{CommitInfo, RepoCache};
@@ -237,6 +238,36 @@ pub async fn blame_neighbor(
         };
         let line = navigate::map_line(&repo, &current, &version, line)?;
         Ok(Some(Neighbor { version, line }))
+    })
+    .await
+}
+
+/// 저장소의 가속 상태(commit-graph·Bloom 필터). 파일 머리만 읽는다.
+#[tauri::command]
+pub async fn repo_acceleration(
+    git: State<'_, Arc<GitState>>,
+    repo: String,
+) -> Result<GraphStatus, String> {
+    blocking(git, move |git| {
+        let repo = git.repos.for_path(Path::new(&repo))?;
+        commit_graph::status(&repo)
+    })
+    .await
+}
+
+/// 가속 설정: 사용자가 확인한 뒤 commit-graph와 Bloom 필터를 쓴다(저장소를 바꾸는 유일한 명령).
+/// 진행은 `on_progress`로 오고, 끝나면 새 상태를 돌려준다.
+#[tauri::command]
+pub async fn accelerate(
+    git: State<'_, Arc<GitState>>,
+    repo: String,
+    on_progress: Channel<Progress>,
+) -> Result<GraphStatus, String> {
+    blocking(git, move |git| {
+        let repo = git.repos.for_path(Path::new(&repo))?;
+        commit_graph::write(&repo, |progress| {
+            let _ = on_progress.send(progress);
+        })
     })
     .await
 }

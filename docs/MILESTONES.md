@@ -1,6 +1,6 @@
 # parallax 마일스톤
 
-**진행 중: M2** (M0·M1은 Windows·macOS 화면 확인 대기) — 마일스톤을 끝낼 때마다 이 줄과 체크박스를 갱신한다.
+**진행 중: M3** (M0~M2는 Windows·macOS 화면 확인 대기) — 마일스톤을 끝낼 때마다 이 줄과 체크박스를 갱신한다.
 
 ## 성능 예산
 baseline은 M0에서 같은 머신·같은 저장소로 git CLI를 직접 잰 값이다. 이력 질의 목표는 "baseline + 우리 오버헤드"로 정의한다.
@@ -45,8 +45,9 @@ baseline 표가 `bench/results.md`에 있다.
 - [x] 라인/범위 히스토리 (`git log -L`), 코드 뷰 선택 영역에서 바로 진입(`L`, `J`/`K`로 선택) — Windows·macOS 실기 확인 필요
 - [x] 커밋 상세: gix 트리 diff + `@codemirror/merge` (분할/통합 전환), 히스토리에서 열면 해당 파일 diff만
       — Windows·macOS 실기 확인 필요
-- [ ] Bloom 필터 감지 → 없으면 "가속 설정" 버튼
-      (사용자 확인 후 `git commit-graph write --reachable --changed-paths`, `commitGraph.changedPaths=true`)
+- [x] Bloom 필터 감지 → 없으면 "가속 설정" 버튼
+      (사용자 확인 후 `git commit-graph write --reachable --changed-paths`, git 2.46 이상이면 필터 v2.
+      `commitGraph.changedPaths` 설정은 git에 없어 쓰지 않는다: CLAUDE.md 결정 기록) — Windows·macOS 실기 확인 필요
 
 **완료 기준:** 히스토리·커밋 상세 예산 충족. Bloom 필터 유무별 측정을 `bench/results.md`에 추가.
 

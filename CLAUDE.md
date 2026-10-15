@@ -140,6 +140,11 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
   날짜 순 워크 도중 경로를 바꿔 다른 브랜치 커밋이 빠지거나 낀다. 구간마다 git의 기본 이력 단순화를 그대로 따른다.
   rename 원본은 그 파일 하나만 git과 같은 유사도(diffcore의 spanhash를 옮긴 `plx_core::similarity`, 50%)로 찾는다.
   gix의 rename 추적은 짝 수(추가×삭제)가 1,000을 넘으면 유사도 비교를 건너뛰어 파일을 많이 옮긴 커밋을 놓친다.
+- 2026-10-15: "가속 설정"은 히스토리 머리줄의 버튼을 눌러 확인한 뒤 `git commit-graph write --reachable --changed-paths`만
+  실행한다(`plx_core::commit_graph`). git 2.46 이상이면 `-c commitGraph.changedPathsVersion=2`로 필터 v2를 쓴다
+  (v1은 0x80 이상 바이트가 든 경로, 즉 한글 경로의 해시가 `char` 부호에 따라 달라진다). 저장소 설정은 바꾸지 않는다:
+  MILESTONES 초안의 `commitGraph.changedPaths`는 git에 없는 설정이고, `--changed-paths`로 쓴 뒤의 commit-graph 쓰기
+  (git gc 포함)는 필터를 유지한다. 상태는 commit-graph 파일 머리(청크 표, BDAT 버전)와 HEAD가 그래프에 있는지로 본다.
 - 2026-10-15: 단일 인스턴스는 `tauri-plugin-single-instance` 대신 직접 구현한다(`plx_core::instance`).
   `main()` 맨 앞, Tauri 초기화 전에 로컬 소켓(Windows named pipe, Unix 소켓)으로 argv·cwd·t0를 넘기고 끝낸다.
   primary 판정은 락 파일(`File::try_lock`). 이유: 두 번째 호출이 WebView 초기화를 거치지 않는다,

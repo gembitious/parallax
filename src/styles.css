@@ -688,6 +688,46 @@ button.toggle {
   cursor: pointer;
 }
 
+button.toggle.warn {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+button.toggle.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.help.confirm {
+  max-width: 560px;
+  font-size: 12px;
+}
+
+.help.confirm pre {
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--panel);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.help.confirm ul {
+  padding-left: 18px;
+}
+
+.confirm-buttons {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.confirm-buttons button.toggle {
+  padding: 2px 12px;
+  font-size: 12px;
+}
+
 /* ---------------------------------------------------------------- 카드·도움말·알림 */
 
 .card {
