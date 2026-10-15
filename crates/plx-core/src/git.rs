@@ -204,7 +204,8 @@ impl Streaming {
         self.cancelled.load(Ordering::SeqCst)
     }
 
-    #[cfg(test)]
+    /// `dropping_reaps_the_child`(Unix)에서만 쓴다.
+    #[cfg(all(test, unix))]
     fn pid(&self) -> u32 {
         self.child.lock().unwrap().id()
     }
