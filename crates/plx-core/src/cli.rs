@@ -38,9 +38,10 @@ pub enum Request {
 }
 
 impl Request {
-    /// 창 제목·화면 표시용 한 줄 요약. 경로는 `cwd` 아래면 상대 경로로 줄인다.
+    /// 창 제목·화면 표시용 한 줄 요약. 경로는 `cwd` 아래면 상대 경로로 줄이고, 화면의 다른 경로(git처럼
+    /// 저장소 기준, `/` 구분)와 같게 Windows에서도 `/`로 쓴다.
     pub fn label(&self, cwd: &Path) -> String {
-        let show = |path: &Path| path.strip_prefix(cwd).unwrap_or(path).display().to_string();
+        let show = |path: &Path| slashed(path.strip_prefix(cwd).unwrap_or(path));
         match self {
             Request::Graph => "그래프".to_owned(),
             Request::Blame { path, line: None } => format!("blame {}", show(path)),
@@ -52,6 +53,16 @@ impl Request {
             Request::LineLog { path, start, end } => format!("log -L {start},{end}:{}", show(path)),
             Request::Show { rev } => format!("show {rev}"),
         }
+    }
+}
+
+/// 경로를 `/` 구분으로 쓴다. Unix에서 `\`는 파일 이름의 일부일 수 있으므로 Windows에서만 바꾼다.
+fn slashed(path: &Path) -> String {
+    let text = path.display().to_string();
+    if cfg!(windows) {
+        text.replace('\\', "/")
+    } else {
+        text
     }
 }
 
@@ -584,10 +595,10 @@ mod tests {
     fn labels_are_relative_to_cwd() {
         let fs = Fs::new();
         assert_eq!(fs.request(&[]).label(&fs.cwd), "그래프");
-        let sep = std::path::MAIN_SEPARATOR;
+        // Windows에서도 `/`(화면의 다른 경로, 앱 지연 측정 스크립트가 찾는 기록과 같게)
         assert_eq!(
             fs.request(&["src/lib.rs:42"]).label(&fs.cwd),
-            format!("blame src{sep}lib.rs:42")
+            "blame src/lib.rs:42"
         );
         assert_eq!(
             fs.request(&["log", "-L", "1,2:main.rs"]).label(&fs.cwd),
@@ -646,6 +657,11 @@ mod tests {
                 start: 1,
                 end: 2
             }
+        );
+        // cwd 밖의 경로는 절대 경로 그대로, 구분자만 `/`
+        assert_eq!(
+            fs.request(&[r"C:\other\a.rs:10"]).label(&fs.cwd),
+            "blame C:/other/a.rs:10"
         );
     }
 }

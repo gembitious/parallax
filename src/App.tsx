@@ -1,35 +1,13 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { BlameView } from "./blame/BlameView";
 import { Hud } from "./Hud";
 import { call } from "./ipc";
+import { backDirectionOf, titleOf, viewReducer, type PlxRequest, type Shown, type ViewRequest } from "./nav";
 import { afterPaint, getPerfInfo, initPerf, nowMs, phasesBetween, record } from "./perf";
 
 type AppInfo = { version: string; coreVersion: string };
-
-/** 열 뷰. plx-core/src/cli.rs의 Request와 같은 모양. */
-type ViewRequest =
-  | { kind: "graph" }
-  | { kind: "blame"; path: string; line: number | null }
-  | { kind: "log"; path: string }
-  | { kind: "lineLog"; path: string; start: number; end: number }
-  | { kind: "show"; rev: string };
-
-/** `plx` 호출 하나. src-tauri/src/instance.rs의 PlxRequest와 같은 모양. */
-type PlxRequest = {
-  id: number;
-  request: ViewRequest;
-  label: string;
-  args: string[];
-  cwd: string;
-  t0Ms: number;
-  recvMs: number;
-  cold: boolean;
-};
-
-/** 화면에 띄운 요청과 프론트엔드가 그 요청을 받은 시각. */
-type Shown = { request: PlxRequest; receivedMs: number };
 
 // docs/MILESTONES.md 성능 예산
 const COLD_BUDGET_MS = 1000;
@@ -138,7 +116,7 @@ const hideWindow = () => invoke("hide_window").catch((e) => console.error("창 �
 
 export default function App() {
   const [info, setInfo] = useState<AppInfo | null>(null);
-  const [shown, setShown] = useState<Shown | null>(null);
+  const [{ shown, stack }, dispatch] = useReducer(viewReducer, { shown: null, stack: [] });
   const shownRef = useRef<Shown | null>(null);
   shownRef.current = shown;
   const readySent = useRef(false);
@@ -153,11 +131,7 @@ export default function App() {
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    // 이벤트와 current_request가 같은 요청을 두 번 줄 수 있다. 더 최근 것만 받는다.
-    const accept = (request: PlxRequest) => {
-      const receivedMs = nowMs();
-      setShown((cur) => (cur && cur.request.id >= request.id ? cur : { request, receivedMs }));
-    };
+    const accept = (request: PlxRequest) => dispatch({ type: "request", request, receivedMs: nowMs() });
     (async () => {
       await initPerf();
       // 먼저 듣기 시작한 뒤 놓친 요청을 가져온다. 순서를 바꾸면 그 사이에 온 요청을 잃는다.
@@ -197,21 +171,43 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 탐색으로 화면이 바뀌면 창 제목도 바꾼다(plx 호출로 연 화면은 백엔드가 이미 정했다).
+  const top = stack[stack.length - 1];
+  useEffect(() => {
+    if (top && top.via !== "request") {
+      invoke("set_window_title", { title: titleOf(top) }).catch(() => {});
+    }
+  }, [top]);
+
+  const back = () => {
+    if (stack.length > 1) dispatch({ type: "back" });
+    else hideWindow();
+  };
+
   const request = shown?.request;
   return (
     <div className="app">
       {request ? (
         <main className="view">
           {request.request.kind === "blame" ? (
-            <BlameView
-              key={request.id}
-              path={request.request.path}
-              rev={null}
-              line={request.request.line}
-              cold={request.cold}
-              onShown={(ms) => onShown(request.id, ms)}
-              onBack={hideWindow}
-            />
+            stack.map((entry, i) => {
+              const isTop = i === stack.length - 1;
+              return (
+                <div key={entry.key} className="stack-entry" hidden={!isTop}>
+                  <BlameView
+                    target={entry.target}
+                    line={entry.line}
+                    active={isTop}
+                    depth={i + 1}
+                    backDirection={backDirectionOf(entry.via)}
+                    cold={entry.via === "request" && request.cold}
+                    onShown={entry.via === "request" ? (ms) => onShown(request.id, ms) : undefined}
+                    onBack={back}
+                    onNavigate={(navigation) => dispatch({ type: "navigate", navigation })}
+                  />
+                </div>
+              );
+            })
           ) : (
             <Placeholder key={request.id} request={request} onShown={(ms) => onShown(request.id, ms)} />
           )}

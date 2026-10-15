@@ -600,3 +600,113 @@ fn session_events_serialize_for_the_ui() {
         serde_json::json!({"kind": "cancelled"})
     );
 }
+
+// ---------------------------------------------------------------- 캐시
+
+use plx_core::blame::Chunk;
+use plx_core::cache::BlameCache;
+
+/// 요청 하나의 (줄별 결과, 캐시에서 읽었는가).
+fn cached_session(
+    sessions: &Sessions,
+    path: &Path,
+    rev: Option<&str>,
+) -> (Vec<(String, u32)>, bool) {
+    let id = sessions.register();
+    let events = events_with(sessions, id, path, rev, |_| true);
+    let mut all = Chunk::default();
+    let mut cached = None;
+    for event in events {
+        match event {
+            SessionEvent::Chunk(chunk) => all.blocks.extend(chunk.blocks),
+            SessionEvent::Done { stats, .. } => cached = Some(stats.cached),
+            SessionEvent::Error { message } => panic!("{}: {message}", path.display()),
+            _ => {}
+        }
+    }
+    let mut lines: Vec<(u32, String, u32)> = all
+        .blocks
+        .iter()
+        .flat_map(|b| {
+            (0..b.num_lines).map(move |i| (b.final_line + i, b.sha.clone(), b.orig_line + i))
+        })
+        .collect();
+    lines.sort();
+    (
+        lines
+            .into_iter()
+            .map(|(_, sha, orig)| (sha, orig))
+            .collect(),
+        cached.expect("done"),
+    )
+}
+
+#[test]
+fn commit_blame_is_cached() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions = Sessions::with_cache(BlameCache::new(dir.path().to_path_buf(), 1 << 30));
+    let file = history().join("src/lib.rs");
+    let (first, cached) = cached_session(&sessions, &file, Some("HEAD~1"));
+    assert!(!cached);
+    let (second, cached) = cached_session(&sessions, &file, Some("HEAD~1"));
+    assert!(cached, "두 번째는 캐시에서");
+    assert_eq!(first, second);
+    // 다른 리비전은 다른 결과
+    let (_, cached) = cached_session(&sessions, &file, Some("HEAD~2"));
+    assert!(!cached);
+    // 바이너리·없는 파일은 넣지 않는다
+    let (_, cached) = cached_session(&sessions, &history().join("assets/logo.bin"), Some("HEAD"));
+    assert!(!cached);
+}
+
+#[test]
+fn worktree_blame_cache_follows_the_file() {
+    // 수정 시각을 직접 정하므로 공유 fixtures 대신 저장소를 따로 만든다.
+    let repo = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("cache-worktree");
+    let _ = std::fs::remove_dir_all(&repo);
+    std::fs::create_dir_all(&repo).unwrap();
+    let file = repo.join("파일.txt");
+    std::fs::write(&file, "하나\n둘\n").unwrap();
+    git(&repo, &["init", "-q"]);
+    git(&repo, &["add", "."]);
+    git(
+        &repo,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@e",
+            "commit",
+            "-q",
+            "-m",
+            "first",
+        ],
+    );
+    let set_mtime = |ago: u64| {
+        let f = std::fs::File::options().write(true).open(&file).unwrap();
+        f.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(ago))
+            .unwrap();
+    };
+    std::fs::write(&file, "하나\n둘\n셋\n").unwrap();
+    set_mtime(3600);
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let sessions = Sessions::with_cache(BlameCache::new(cache_dir.path().to_path_buf(), 1 << 30));
+    let (first, cached) = cached_session(&sessions, &file, None);
+    assert!(!cached);
+    assert_eq!(
+        first.iter().filter(|(sha, _)| is_uncommitted(sha)).count(),
+        1
+    );
+    let (second, cached) = cached_session(&sessions, &file, None);
+    assert!(cached);
+    assert_eq!(first, second);
+
+    // 내용이 바뀌면(크기·시각이 바뀐다) 다시 계산하고, 막 고친 파일은 넣지 않는다.
+    std::fs::write(&file, "하나\n둘\n셋\n넷\n").unwrap();
+    let (third, cached) = cached_session(&sessions, &file, None);
+    assert!(!cached);
+    assert_eq!(third.len(), 4);
+    let (_, cached) = cached_session(&sessions, &file, None);
+    assert!(!cached, "방금 고친 파일의 결과는 캐시에 넣지 않았다");
+}

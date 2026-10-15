@@ -37,6 +37,12 @@ pub fn hide_window(window: Window) {
     hide(&window);
 }
 
+/// 탐색으로 화면이 바뀌면 창 제목을 바꾼다.
+#[tauri::command]
+pub fn set_window_title(app: AppHandle, title: String) {
+    set_title(&app, &title);
+}
+
 pub fn set_title(app: &AppHandle, title: &str) {
     if let Some(window) = app.get_webview_window(MAIN) {
         let _ = window.set_title(&format!("{title} — parallax"));

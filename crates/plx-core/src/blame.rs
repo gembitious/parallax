@@ -20,12 +20,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::git;
 
 /// 블록이 가리키는 커밋. 같은 커밋은 처음 한 번만 나온다.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlameCommit {
     pub sha: String,
@@ -45,7 +45,7 @@ pub struct BlameCommit {
 }
 
 /// 블록 원인 커밋의 부모와 그 부모에서의 경로(`,` 부모 리비전 blame에 쓴다).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Previous {
     pub sha: String,
@@ -53,7 +53,7 @@ pub struct Previous {
 }
 
 /// 연속된 줄 묶음과 그 원인 커밋.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlameBlock {
     pub sha: String,
@@ -237,7 +237,7 @@ fn path_text(raw: &[u8]) -> String {
 }
 
 /// 화면에 보내는 묶음. 처음 나온 커밋을 블록보다 먼저 담는다.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Chunk {
     pub commits: Vec<BlameCommit>,
@@ -260,6 +260,8 @@ pub struct Stats {
     pub total_ms: f64,
     pub blocks: usize,
     pub commits: usize,
+    /// git을 띄우지 않고 캐시에서 읽었다.
+    pub cached: bool,
 }
 
 /// 실행 중인 blame. 다른 스레드에서 [`Canceller`]로 멈출 수 있다.

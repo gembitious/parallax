@@ -20,6 +20,12 @@ import { blameGutter, type GutterContext } from "./gutter";
 export type EditorKeys = {
   copySha(): boolean;
   enter(): boolean;
+  /** `,` 부모 리비전 blame */
+  parent(): boolean;
+  /** `<` 이전 리비전 */
+  older(): boolean;
+  /** `>` 다음 리비전 */
+  newer(): boolean;
   back(): boolean;
   help(): boolean;
   escape(): boolean;
@@ -127,6 +133,9 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
           { key: "n", run: findNext },
           { key: "N", run: findPrevious },
           { key: "Enter", run: run(keys.enter) },
+          { key: ",", run: run(keys.parent) },
+          { key: "<", run: run(keys.older) },
+          { key: ">", run: run(keys.newer) },
           { key: "q", run: run(keys.back) },
           { key: "?", run: run(keys.help) },
           { key: "Escape", run: run(keys.escape) },

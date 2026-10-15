@@ -8,11 +8,12 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use serde::Serialize;
 
 use crate::blame::{Blame, BlameBlock, BlameCommit, BlameError, Canceller, Chunk, Stats};
+use crate::cache::{BlameCache, CacheKey};
 use crate::repo::RepoCache;
 use crate::text::{self, Decoded};
 
@@ -64,7 +65,10 @@ impl SessionEvent {
 
 /// 내용 다음에 보낼 blame.
 enum Source {
-    Git(Blame),
+    /// git blame을 돌린다. 끝까지 오면 열쇠로 캐시에 넣는다.
+    Git(Blame, Option<CacheKey>),
+    /// 캐시에서 읽었다.
+    Cached(Chunk),
     /// 작업트리 파일이 HEAD에 없다(새 파일·추적하지 않는 파일). 모든 줄이 커밋 안 됨이다.
     /// git blame은 이 경우 실패하므로 띄우지 않고 직접 만든다.
     Uncommitted(Chunk),
@@ -72,8 +76,13 @@ enum Source {
     Nothing,
 }
 
-/// 요청을 열고 git blame을 띄운다. git을 먼저 띄우고 그동안 파일을 읽는다.
-fn start(repos: &RepoCache, path: &Path, rev: Option<&str>) -> Result<(BlameMeta, Source), String> {
+/// 요청을 열고 git blame을 띄운다. git을 먼저 띄우고 그동안 파일을 읽는다. 캐시에 있으면 git을 띄우지 않는다.
+fn start(
+    repos: &RepoCache,
+    cache: Option<&BlameCache>,
+    path: &Path,
+    rev: Option<&str>,
+) -> Result<(BlameMeta, Source), String> {
     let repo = repos.for_path(path).map_err(|e| e.to_string())?;
     let rel = repo.relative_path(path).map_err(|e| e.to_string())?;
     let commit = rev
@@ -81,16 +90,38 @@ fn start(repos: &RepoCache, path: &Path, rev: Option<&str>) -> Result<(BlameMeta
         .transpose()
         .map_err(|e| e.to_string())?;
     let sha = commit.map(|c| c.to_string());
-    let tracked = match commit {
-        Some(_) => true,
-        None => match repo.head().map_err(|e| e.to_string())? {
-            Some(head) => repo.has_file(head, &rel).map_err(|e| e.to_string())?,
-            None => false,
-        },
+    let head = match commit {
+        Some(_) => None,
+        None => repo.head().map_err(|e| e.to_string())?,
+    };
+    let tracked = match (commit, head) {
+        (Some(_), _) => true,
+        (None, Some(head)) => repo.has_file(head, &rel).map_err(|e| e.to_string())?,
+        (None, None) => false,
     };
 
+    // 열쇠: 커밋 고정이면 (커밋, 경로), 작업트리면 파일을 읽기 전의 크기·수정 시각까지.
+    let key = match (&sha, head) {
+        _ if !tracked || cache.is_none() => None,
+        (Some(sha), _) => Some(CacheKey::commit(repo.workdir(), sha, &rel)),
+        (None, Some(head)) => std::fs::metadata(path).ok().map(|meta| {
+            CacheKey::worktree(
+                repo.workdir(),
+                &head.to_string(),
+                &rel,
+                &meta,
+                SystemTime::now(),
+            )
+        }),
+        (None, None) => None,
+    };
+    let cached = key
+        .as_ref()
+        .zip(cache)
+        .and_then(|(key, cache)| cache.get(key));
+
     // 파일을 읽는 동안 git이 일을 시작하도록 먼저 띄운다.
-    let blame = tracked
+    let blame = (tracked && cached.is_none())
         .then(|| Blame::spawn(repo.workdir(), &rel, sha.as_deref()))
         .transpose()
         .map_err(|e| format!("git blame 실행 실패: {e}"))?;
@@ -111,10 +142,11 @@ fn start(repos: &RepoCache, path: &Path, rev: Option<&str>) -> Result<(BlameMeta
     let bytes = bytes.map_err(|e| e.to_string())?;
     let binary = text::is_binary(&bytes);
     let content = (!binary).then(|| text::decode(&bytes));
-    let source = match (blame, &content) {
-        (_, None) => Source::Nothing,
-        (Some(blame), Some(_)) => Source::Git(blame),
-        (None, Some(content)) => Source::Uncommitted(uncommitted(&rel, content.line_count)),
+    let source = match (blame, cached, &content) {
+        (_, _, None) => Source::Nothing,
+        (Some(blame), _, Some(_)) => Source::Git(blame, key),
+        (None, Some(chunk), Some(_)) => Source::Cached(chunk),
+        (None, None, Some(content)) => Source::Uncommitted(uncommitted(&rel, content.line_count)),
     };
     let meta = BlameMeta {
         repo: repo.workdir().to_string_lossy().into_owned(),
@@ -165,6 +197,7 @@ fn uncommitted(path: &str, lines: u32) -> Chunk {
 pub struct Sessions {
     next_id: AtomicU64,
     slots: Mutex<HashMap<u64, Slot>>,
+    cache: Option<BlameCache>,
 }
 
 enum Slot {
@@ -178,6 +211,18 @@ enum Slot {
 impl Sessions {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 끝까지 온 blame을 `cache`에 넣고, 같은 요청은 git을 띄우지 않고 캐시에서 읽는다.
+    pub fn with_cache(cache: BlameCache) -> Self {
+        Sessions {
+            cache: Some(cache),
+            ..Self::default()
+        }
+    }
+
+    pub fn cache(&self) -> Option<&BlameCache> {
+        self.cache.as_ref()
     }
 
     /// 새 요청 id. 이 id로 [`Sessions::run`]을 부르고 [`Sessions::cancel`]로 멈춘다.
@@ -231,7 +276,7 @@ impl Sessions {
         if self.is_cancelled(id) {
             return SessionEvent::Cancelled;
         }
-        let (meta, source) = match start(repos, path, rev) {
+        let (meta, source) = match start(repos, self.cache.as_ref(), path, rev) {
             Ok(started) => started,
             Err(message) => return SessionEvent::Error { message },
         };
@@ -241,25 +286,16 @@ impl Sessions {
             if matches!(slots.get(&id), Some(Slot::Cancelled)) {
                 return SessionEvent::Cancelled;
             }
-            if let Source::Git(blame) = &source {
+            if let Source::Git(blame, _) = &source {
                 slots.insert(id, Slot::Running(blame.canceller()));
             }
         }
         let meta_ms = started.elapsed().as_secs_f64() * 1000.0;
         let sent = on_event(SessionEvent::Meta(meta));
-        let blame = match source {
-            Source::Git(blame) => blame,
-            Source::Uncommitted(chunk) => {
-                let stats = Stats {
-                    blocks: chunk.blocks.len(),
-                    commits: chunk.commits.len(),
-                    ..Stats::default()
-                };
-                if sent && !on_event(SessionEvent::Chunk(chunk)) {
-                    return SessionEvent::Cancelled;
-                }
-                return SessionEvent::Done { meta_ms, stats };
-            }
+        let (blame, key) = match source {
+            Source::Git(blame, key) => (blame, key),
+            Source::Cached(chunk) => return whole(chunk, true, sent, meta_ms, on_event),
+            Source::Uncommitted(chunk) => return whole(chunk, false, sent, meta_ms, on_event),
             Source::Nothing => {
                 return SessionEvent::Done {
                     meta_ms,
@@ -271,13 +307,26 @@ impl Sessions {
         if !sent {
             canceller.cancel();
         }
+        // 캐시에 넣을 결과를 모은다.
+        let mut all = key.as_ref().map(|_| Chunk::default());
         let result = blame.stream(|chunk| {
+            if let Some(all) = &mut all {
+                all.commits.extend_from_slice(&chunk.commits);
+                all.blocks.extend_from_slice(&chunk.blocks);
+            }
             if !on_event(SessionEvent::Chunk(chunk)) {
                 canceller.cancel();
             }
         });
         match result {
-            Ok(stats) => SessionEvent::Done { meta_ms, stats },
+            Ok(stats) => {
+                if let (Some(cache), Some(key), Some(all)) = (&self.cache, &key, &all)
+                    && let Err(e) = cache.put(key, all)
+                {
+                    eprintln!("plx: blame 캐시에 쓰지 못했다: {e}");
+                }
+                SessionEvent::Done { meta_ms, stats }
+            }
             Err(BlameError::Cancelled) => SessionEvent::Cancelled,
             Err(e) => SessionEvent::Error {
                 message: e.to_string(),
@@ -288,6 +337,26 @@ impl Sessions {
     fn is_cancelled(&self, id: u64) -> bool {
         matches!(self.slots.lock().unwrap().get(&id), Some(Slot::Cancelled))
     }
+}
+
+/// 한 번에 다 있는 결과(캐시, 모두 미커밋)를 묶음 하나로 보낸다.
+fn whole(
+    chunk: Chunk,
+    cached: bool,
+    sent: bool,
+    meta_ms: f64,
+    on_event: &mut impl FnMut(SessionEvent) -> bool,
+) -> SessionEvent {
+    let stats = Stats {
+        blocks: chunk.blocks.len(),
+        commits: chunk.commits.len(),
+        cached,
+        ..Stats::default()
+    };
+    if sent && !on_event(SessionEvent::Chunk(chunk)) {
+        return SessionEvent::Cancelled;
+    }
+    SessionEvent::Done { meta_ms, stats }
 }
 
 fn short(sha: &str) -> &str {

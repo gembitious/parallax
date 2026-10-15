@@ -7,6 +7,7 @@ mod window;
 use std::sync::Arc;
 
 use serde::Serialize;
+use tauri::Manager;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,15 +33,17 @@ pub fn run() {
     let app = tauri::Builder::default()
         .manage(requests.clone())
         .manage(perf::Perf::from_env(t_main_ms))
-        .manage(Arc::new(git::GitState::default()))
         .invoke_handler(tauri::generate_handler![
             app_info,
             git::blame_open,
             git::blame_cancel,
+            git::blame_map_line,
+            git::blame_neighbor,
             git::commit_info,
             instance::current_request,
             window::app_ready,
             window::hide_window,
+            window::set_window_title,
             perf::perf_info,
             perf::perf_record,
             perf::perf_ping,
@@ -53,6 +56,14 @@ pub fn run() {
             }
         })
         .setup(move |app| {
+            // blame 캐시는 OS 캐시 위치(Linux ~/.cache, macOS ~/Library/Caches, Windows %LOCALAPPDATA%)에 둔다.
+            // PLX_CACHE_DIR로 바꿀 수 있다(측정·자동 확인이 사용자 캐시와 섞이지 않게).
+            let cache_dir = std::env::var_os("PLX_CACHE_DIR")
+                .map(std::path::PathBuf::from)
+                .or_else(|| app.path().app_cache_dir().ok());
+            let git = Arc::new(git::GitState::new(cache_dir));
+            app.manage(git.clone());
+            std::thread::spawn(move || git.prune_cache());
             tray::create(app)?;
             window::show_if_not_ready(app.handle().clone());
             requests.attach(app.handle().clone());
