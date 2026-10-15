@@ -58,7 +58,9 @@ baseline 표가 `bench/results.md`에 있다.
 - [x] 가상 스크롤, 브랜치·태그·HEAD 라벨. 인자 없는 `plx`가 cwd 저장소의 그래프를 열고(HEAD 커밋을 골라 둔다),
       blame·히스토리·커밋 상세의 `G`는 그 커밋을 고른 그래프로 간다. 범위는 HEAD / 브랜치(로컬 + upstream, 기본) /
       원격 포함(`R`) — Windows·macOS 실기 확인 필요
-- [ ] 검색: 메시지·작성자·경로
+- [x] 검색: 메시지·작성자·경로. `/`에 글을 넣으면 메시지(모든 줄)·작성자·메일·sha 앞부분을 행 순서대로 찾고,
+      `path:경로`면 그 경로를 바꾼 커밋(`git log --full-history --no-merges`, Bloom 필터)을 모두 강조한다. `n`/`N` 다음·이전
+      — Windows·macOS 실기 확인 필요
 - [ ] orrery의 SVG 렌더링 재사용 검토 (성능 미달이면 canvas) — 지금은 캔버스 하나에 보이는 행만 다시 그린다
       (행마다 DOM이 없다). orrery는 이 저장소 밖이라 아직 비교하지 못했다.
 

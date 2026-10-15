@@ -211,6 +211,35 @@ pub async fn graph_find(
         .map_err(|e| e.to_string())?
 }
 
+/// 메시지·작성자·sha로 `from` 다음(`forward`가 아니면 이전) 행부터 찾는다. 없으면 `null`.
+/// 같은 그래프에서 새 검색을 시작하면 이 검색은 "취소했다" 오류로 끝난다.
+#[tauri::command]
+pub async fn graph_search(
+    git: State<'_, Arc<GitState>>,
+    id: u64,
+    query: String,
+    from: usize,
+    forward: bool,
+) -> Result<Option<usize>, String> {
+    let git = git.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || git.graphs.search(id, &query, from, forward))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// 경로(파일·디렉터리, git pathspec)를 바꾼 커밋의 행들(오름차순).
+#[tauri::command]
+pub async fn graph_search_path(
+    git: State<'_, Arc<GitState>>,
+    id: u64,
+    path: String,
+) -> Result<Vec<usize>, String> {
+    let git = git.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || git.graphs.search_path(id, &path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// 그래프를 닫는다. 이미 닫혔으면 `false`.
 #[tauri::command]
 pub fn graph_close(git: State<'_, Arc<GitState>>, id: u64) -> bool {

@@ -505,3 +505,111 @@ fn shallow_clones_are_not_put_in_the_table() {
     // 경계 커밋을 부모 없는 커밋으로 적어 두면 나중에 이력을 더 받았을 때 틀린다.
     assert!(!cache_dir.exists() || std::fs::read_dir(&cache_dir).unwrap().next().is_none());
 }
+
+/// 행마다 git이 보는 (메시지, 작성자, 메일)로 기대 결과를 만든다.
+fn text_matches(repo: &Path, rows: &[GraphRow], query: &str) -> Vec<usize> {
+    let query = query.to_lowercase();
+    rows.iter()
+        .enumerate()
+        .filter(|(_, row)| {
+            let text = git_text(repo, &["log", "-1", "--format=%B%n%an%n%ae", &row.sha]);
+            row.sha.starts_with(&query) || text.to_lowercase().contains(&query)
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
+#[test]
+fn search_messages_authors_and_shas() {
+    let repo = history();
+    let sessions = GraphSessions::new();
+    let (id, opened) = open_with(&sessions, &repo, GraphOptions::default());
+    let n = opened.rows.len();
+    for query in ["feature", "LINE", "fixture author", "notes"] {
+        let expected = text_matches(&repo, &opened.rows, query);
+        assert!(!expected.is_empty(), "{query}");
+        // 앞으로: 0번 행 다음부터 차례로, 끝에 닿으면 처음으로
+        let mut found = Vec::new();
+        let mut from = n - 1;
+        for _ in 0..expected.len() {
+            let row = sessions
+                .search(id, query, from, true)
+                .unwrap()
+                .expect(query);
+            found.push(row);
+            from = row;
+        }
+        assert_eq!(found, expected, "{query}");
+        // 뒤로
+        let back = sessions.search(id, query, expected[0], false).unwrap();
+        assert_eq!(
+            back,
+            expected.last().copied(),
+            "{query}: 처음에서 뒤로 가면 마지막"
+        );
+    }
+    // sha 앞부분
+    let sha = &opened.rows[5].sha;
+    assert_eq!(sessions.search(id, &sha[..7], 0, true).unwrap(), Some(5));
+    assert_eq!(sessions.search(id, "없는 말", 0, true).unwrap(), None);
+    assert_eq!(sessions.search(id, "   ", 0, true).unwrap(), None);
+    sessions.close(id);
+    assert!(
+        sessions.search(id, "feature", 0, true).is_err(),
+        "닫은 그래프"
+    );
+
+    // 커밋 인코딩(EUC-KR) 메시지도 찾는다.
+    let sessions = GraphSessions::new();
+    let (id, opened) = open_with(&sessions, &encoding(), GraphOptions::default());
+    let row = sessions
+        .search(id, "인코딩 테스트", 0, true)
+        .unwrap()
+        .unwrap();
+    assert!(opened.rows[row].summary.starts_with("인코딩 테스트"));
+}
+
+#[test]
+fn search_paths_like_git_log() {
+    for (repo, paths) in [
+        (
+            history(),
+            vec![
+                "src/lib.rs",
+                "src",
+                "src/new_name.rs",
+                "core/*.rs",
+                "없는/경로",
+            ],
+        ),
+        (encoding(), vec!["한글/파일 이름.txt", "문서"]),
+    ] {
+        let sessions = GraphSessions::new();
+        let (id, opened) = open_with(&sessions, &repo, GraphOptions::default());
+        let row_of: HashMap<&str, usize> = opened
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (r.sha.as_str(), i))
+            .collect();
+        for path in paths {
+            let shas = git_text(
+                &repo,
+                &[
+                    "log",
+                    "--format=%H",
+                    "--full-history",
+                    "--no-merges",
+                    "HEAD",
+                    "--branches",
+                    "--",
+                    path,
+                ],
+            );
+            let mut expected: Vec<usize> = shas.lines().map(|sha| row_of[sha]).collect();
+            expected.sort_unstable();
+            assert_eq!(sessions.search_path(id, path).unwrap(), expected, "{path}");
+        }
+        sessions.close(id);
+    }
+}

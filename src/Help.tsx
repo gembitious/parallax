@@ -60,7 +60,8 @@ const KEYS: Record<HelpView, Key[]> = {
     { keys: "Enter", what: "커밋 상세" },
     { keys: "y", what: "커밋 sha 복사" },
     { keys: "R", what: "원격 브랜치 모두 ↔ 로컬 브랜치와 upstream만" },
-    { keys: "/", what: "검색 (메시지·작성자·경로)", note: "M3", planned: true },
+    { keys: "/", what: "검색 (메시지·작성자·sha)", note: "path:경로면 그 경로를 바꾼 커밋" },
+    { keys: "n / N", what: "다음·이전 검색 결과" },
   ],
 };
 
