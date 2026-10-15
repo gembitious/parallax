@@ -1216,3 +1216,10 @@ mark.quick-open-hit {
   color: var(--accent);
   font-weight: 700;
 }
+
+/* 명령 팔레트: 단축키는 줄 끝에 */
+.palette-item .palette-keys {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 11px;
+}

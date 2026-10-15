@@ -115,6 +115,10 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
   `PLX_PERF_LOG=<파일>`을 함께 주면 끝난 요청을 JSON 한 줄씩 기록한다(`bench/app-latency.sh`가 쓴다).
 - `PLX_CACHE_DIR=<디렉터리>`: blame 캐시 위치(기본: OS 캐시 위치의 `com.gembitious.parallax/blame`, 한도 512MB).
   측정·자동 확인 스크립트는 임시 디렉터리를 줘서 사용자 캐시와 섞지 않는다.
+- `PLX_EDITOR`: `o`(에디터로 열기)가 띄울 에디터. 이름·경로(`code`, `zed`, `cursor`, `subl`, `idea` …, 줄 넘기는 법을
+  안다) 또는 `{file}`·`{line}`·`{col}`을 넣은 명령 틀(`"my-editor --line {line} {file}"`). 없으면 `VISUAL`·`EDITOR`가
+  아는 GUI 에디터일 때 그것, 다음은 PATH의 `code`·`cursor`·`windsurf`·`zed`·`subl`, 그다음 설치 위치(Windows VS Code,
+  macOS VS Code 앱)를 쓴다.
 
 ## 키맵
 - 탐색은 tig와 같게: `j`/`k` 이동, `Enter` 커밋 상세, `,` 부모 리비전 blame, `/` 검색, `q` 뒤로
@@ -130,6 +134,11 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
 - 그래프: 어느 화면에서든 `G`는 그 커밋(blame은 커서 줄의 커밋)을 고른 그래프다. 그래프에서 `Enter` 커밋 상세,
   `y` sha 복사, `R` 원격 브랜치 모두 ↔ 로컬 브랜치와 upstream만, `/` 검색(메시지·작성자·sha, `path:경로`는 그 경로를
   바꾼 커밋), `n`/`N` 다음·이전 결과, `Esc` 강조 지우기.
+- 명령 팔레트: 어느 화면에서든 `:`·Ctrl+Shift+P(macOS ⌘⇧P). 그 화면에서 할 수 있는 일(키가 없는 그래프 범위·가속 설정,
+  성능 HUD 포함)을 이름·초성으로 찾아 `Enter`로 실행하고 옆에 단축키를 보인다.
+- 에디터로 열기 `o`: blame은 커서 줄, 커밋 상세는 고른 파일의 첫 바뀐 줄, 히스토리는 그 파일(라인 히스토리면 범위의
+  첫 줄), 그래프는 작업트리 폴더. 리비전의 줄은 작업트리 파일의 줄로 옮기고, 그 뒤 이름이 바뀌었으면 새 이름을 연다.
+- blame의 `i`: 커서 줄의 커밋 카드를 고정해 보이고 다시 누르면 닫는다(마우스의 거터 클릭과 같다).
 - 파일 찾기(Quick Open): 어느 화면에서든 `f`(입력란·코드 뷰 밖이면)·Ctrl+P(macOS ⌘P). 추적 파일을 퍼지 검색한다
   (파일 이름 일치 먼저, 초성 `ㅍㅇ`, 공백으로 나눈 낱말은 모두 맞아야 한다, `파일:줄`이면 그 줄로). `↑`/`↓`·Ctrl+N/J/K로
   고르고 `Enter`는 작업트리 blame, `Shift+Enter`는 파일 히스토리. 빈 검색어는 최근 연 파일부터 보인다.
@@ -172,6 +181,11 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
   들 수 없는 등급의 경로는 점수를 세지 않고, 이어 친 검색어는 앞 결과 안에서만 찾는다(bench/results.md: vscode
   2만 파일 글자마다 8ms 이하, 49만 파일 32ms 이하). 목록은 gix로 읽은 인덱스이고(skip-worktree·서브모듈 제외)
   인덱스 파일 크기·수정 시각이 바뀌면 다시 읽는다.
+- 2026-10-15: 에디터로 열기는 에디터를 띄우기만 하고 기다리지 않는다(`plx_core::editor`). 읽기 전용 원칙과 맞게
+  작업트리 파일을 여는 것뿐이고 편집은 그 에디터의 몫이다. VS Code 계열은 `--goto 파일:줄:열`, Zed·Sublime은
+  `파일:줄:열`, JetBrains는 `--line`·`--column`. vim 같은 터미널 에디터는 GUI 앱이 띄울 터미널이 없어 자동으로
+  고르지 않는다(명령 틀로 터미널 에뮬레이터를 감싸면 쓸 수 있다). 과거 리비전의 파일이 작업트리에 없으면 그 뒤의
+  rename을 `git log --diff-filter=D --ancestry-path`로 찾은 지점에서만 따라간다(리비전마다 걷지 않는다).
 - 2026-10-15: 단일 인스턴스는 `tauri-plugin-single-instance` 대신 직접 구현한다(`plx_core::instance`).
   `main()` 맨 앞, Tauri 초기화 전에 로컬 소켓(Windows named pipe, Unix 소켓)으로 argv·cwd·t0를 넘기고 끝낸다.
   primary 판정은 락 파일(`File::try_lock`). 이유: 두 번째 호출이 WebView 초기화를 거치지 않는다,

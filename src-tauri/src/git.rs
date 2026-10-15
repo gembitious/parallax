@@ -339,6 +339,46 @@ pub async fn files_touch(
     .await
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Opened {
+    /// 에디터 이름(VS Code, Zed …)
+    editor: String,
+    /// 연 줄(리비전의 줄을 작업트리 파일의 줄로 옮긴 것). 폴더면 `null`.
+    line: Option<u32>,
+}
+
+/// 작업트리 파일을 에디터(`PLX_EDITOR`, PATH의 code·zed …)로 연다. `path`(저장소 기준)가 없으면 작업트리 폴더를
+/// 연다. `rev`의 `line`은 작업트리 파일의 줄로 옮긴다. 저장소는 바꾸지 않는다.
+#[tauri::command]
+pub async fn open_in_editor(
+    git: State<'_, Arc<GitState>>,
+    repo: String,
+    path: Option<String>,
+    rev: Option<String>,
+    line: Option<u32>,
+) -> Result<Opened, String> {
+    let git = git.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = git
+            .repos
+            .for_path(Path::new(&repo))
+            .map_err(|e| e.to_string())?;
+        let target = plx_core::editor::locate(&repo, path.as_deref(), rev.as_deref(), line)
+            .map_err(|e| e.to_string())?;
+        let editor = plx_core::editor::Editor::find()?;
+        editor
+            .open(&target)
+            .map_err(|e| format!("{}를 띄우지 못했다: {e}", editor.name))?;
+        Ok(Opened {
+            editor: editor.name,
+            line: target.line,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// 감시 구독(저장소·파일)을 끝낸다. 이미 끝났으면 `false`.
 #[tauri::command]
 pub fn unwatch_repo(git: State<'_, Arc<GitState>>, id: u64) -> bool {
