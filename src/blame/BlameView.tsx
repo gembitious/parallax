@@ -9,22 +9,30 @@ import { createEditor, type Editor } from "./editor";
 import { formatCount, isUncommitted, shortSha } from "./format";
 import { blameChanged } from "./gutter";
 import { BlameModel } from "./model";
-import { openBlame } from "./session";
-import type { BlameMeta, BlameStats, CommitInfo } from "./types";
+import { openBlame, type BlameTarget } from "./session";
+import type { BlameMeta, BlameStats, CommitInfo, Neighbor, Version } from "./types";
+
+/** 다른 blame 화면으로 가자는 요청. `,`는 부모 리비전, `<`·`>`는 이전·다음 리비전이다. */
+export type Navigation = { kind: "parent" | "older" | "newer"; target: BlameTarget; line: number };
 
 type Props = {
-  /** 파일 절대 경로(plx 호출에서 온다) */
-  path: string;
-  /** 커밋 고정 blame이면 리비전, 작업트리면 null */
-  rev: string | null;
+  /** 열 파일과 리비전(작업트리면 rev가 null) */
+  target: BlameTarget;
   /** 처음 선택할 줄 */
   line: number | null;
+  /** 탐색 스택 맨 위(보이는 화면)인가. 아래 화면은 숨긴 채 살려 둔다. */
+  active: boolean;
+  /** 탐색 스택 깊이. 1이면 맨 아래다. */
+  depth: number;
+  /** 이 방향으로 가면 바로 아래 화면이다(`<`로 왔으면 `>`). 새로 쌓지 않고 뒤로 간다. */
+  backDirection?: "older" | "newer";
   /** 콜드 스타트의 첫 요청. 창이 보일 때까지 페인트가 없어 blame 예산과 비교하지 않는다. */
   cold?: boolean;
-  /** 첫 화면(내용 또는 오류)을 DOM에 넣었다. App이 첫 페인트를 잰다. */
-  onShown(committedMs: number): void;
+  /** 첫 화면(내용 또는 오류)을 DOM에 넣었다. App이 plx 호출의 첫 페인트를 잰다. */
+  onShown?(committedMs: number): void;
   /** `q`: 뒤로. 더 돌아갈 곳이 없으면 창을 숨긴다. */
   onBack(): void;
+  onNavigate(navigation: Navigation): void;
 };
 
 type Progress =
@@ -41,6 +49,9 @@ type Actions = {
   pin(line: number): void;
   copySha(): boolean;
   enter(): boolean;
+  parent(): boolean;
+  older(): boolean;
+  newer(): boolean;
   back(): boolean;
   help(): boolean;
   escape(): boolean;
@@ -49,8 +60,9 @@ type Actions = {
 const SHOW_DELAY_MS = 150;
 const HIDE_DELAY_MS = 250;
 const TOAST_MS = 1800;
-/** 성능 예산(docs/MILESTONES.md): blame 첫 줄 표시 ≤ git 첫 출력 + 30ms */
+/** 성능 예산(docs/MILESTONES.md): blame 첫 줄 표시 ≤ git 첫 출력 + 30ms, 캐시 히트 재표시 ≤ 16ms */
 const FIRST_LINE_SLACK_MS = 30;
+const CACHE_HIT_BUDGET_MS = 16;
 
 /** git blame과 같은 줄 수로 보이게 한다: CRLF는 LF로, 끝의 개행 하나는 빈 줄을 만들지 않게 뗀다. */
 export function displayText(text: string): { text: string; crlf: boolean } {
@@ -77,7 +89,8 @@ async function copyText(text: string): Promise<void> {
   }
 }
 
-export function BlameView({ path, rev, line, cold = false, onShown, onBack }: Props) {
+export function BlameView({ target, line, active, depth, backDirection, cold = false, onShown, onBack, onNavigate }: Props) {
+  const { path, rev } = target;
   const container = useRef<HTMLDivElement>(null);
   const editor = useRef<Editor | null>(null);
   const model = useRef<BlameModel | null>(null);
@@ -93,8 +106,10 @@ export function BlameView({ path, rev, line, cold = false, onShown, onBack }: Pr
 
   const timers = useRef({ show: 0, hide: 0, toast: 0 });
   const pointerInCard = useRef(false);
-  const latest = useRef({ hover, help, meta, infos });
-  latest.current = { hover, help, meta, infos };
+  /** 이동 요청을 보내 놓고 답을 기다리는 중(키를 여러 번 눌러도 한 번만 간다) */
+  const navigating = useRef(false);
+  const latest = useRef({ hover, help, meta, infos, active });
+  latest.current = { hover, help, meta, infos, active };
 
   const showToast = (message: string) => {
     setToast(message);
@@ -140,6 +155,40 @@ export function BlameView({ path, rev, line, cold = false, onShown, onBack }: Pr
     window.clearTimeout(timers.current.hide);
     setHover(null);
     editor.current?.view.focus();
+  };
+
+  /** 이동할 곳을 받아 App에 넘긴다. 없으면(null) 알린다. */
+  const navigate = (request: Promise<Navigation | null>, none = "") => {
+    if (navigating.current) return;
+    navigating.current = true;
+    request
+      .then((navigation) => {
+        if (navigation) onNavigate(navigation);
+        else if (none) showToast(none);
+      })
+      .catch((e: unknown) => showToast(String(e)))
+      .finally(() => {
+        navigating.current = false;
+      });
+  };
+
+  const neighbor = (direction: "older" | "newer") => {
+    if (direction === backDirection) {
+      onBack();
+      return true;
+    }
+    const m = latest.current.meta;
+    if (!m) return true;
+    const current: Version = { rev: m.rev, path: m.path };
+    navigate(
+      call<Neighbor | null>("blame_neighbor", { repo: m.repo, current, direction, line: cursorLine() }).then((found) =>
+        found
+          ? { kind: direction, target: { repo: m.repo, path: found.version.path, rev: found.version.rev }, line: found.line }
+          : null,
+      ),
+      direction === "older" ? "더 이전 리비전이 없다" : "더 최근 리비전이 없다(작업트리다)",
+    );
+    return true;
   };
 
   // 에디터·거터가 부르는 동작. 렌더마다 새로 만들어 최신 상태를 쓴다.
@@ -188,6 +237,38 @@ export function BlameView({ path, rev, line, cold = false, onShown, onBack }: Pr
       if (!anchor || !openCard(n, anchor, true)) showToast("이 줄은 아직 blame 정보가 없다");
       return true;
     },
+    parent() {
+      const m = latest.current.meta;
+      const n = cursorLine();
+      const block = model.current?.block(n);
+      if (!m || !block) {
+        showToast("이 줄은 아직 blame 정보가 없다");
+        return true;
+      }
+      if (!block.previous) {
+        showToast("이 줄은 이 파일이 처음 생긴 커밋에서 왔다(부모에 이 파일이 없다)");
+        return true;
+      }
+      // 미커밋 줄은 작업트리 버전의 줄, 커밋된 줄은 그 커밋 버전의 줄에서 부모로 옮긴다.
+      const uncommitted = isUncommitted(block.sha);
+      const from: Version = uncommitted ? { rev: null, path: m.path } : { rev: block.sha, path: block.path };
+      const fromLine = uncommitted ? n : block.origLine + (n - block.finalLine);
+      const to: Version = { rev: block.previous.sha, path: block.previous.path };
+      navigate(
+        call<number>("blame_map_line", { repo: m.repo, from, to, line: fromLine }).then((mapped) => ({
+          kind: "parent",
+          target: { repo: m.repo, path: to.path, rev: to.rev },
+          line: mapped,
+        })),
+      );
+      return true;
+    },
+    older() {
+      return neighbor("older");
+    },
+    newer() {
+      return neighbor("newer");
+    },
     back() {
       onBack();
       return true;
@@ -228,19 +309,25 @@ export function BlameView({ path, rev, line, cold = false, onShown, onBack }: Pr
         { label: "첫 줄 표시", ms: (gutter ?? NaN) - t0 },
         { label: "끝", ms: doneMs - t0 },
       ].filter((p) => Number.isFinite(p.ms));
+      const budgetMs = cold
+        ? undefined
+        : stats.cached
+          ? CACHE_HIT_BUDGET_MS
+          : stats.firstByteMs === null
+            ? undefined
+            : Math.round(stats.firstByteMs + FIRST_LINE_SLACK_MS);
       record({
         kind: "blame",
-        label: `blame ${relPath}${rev ? ` @${shortSha(rev)}` : ""}${cold ? " (콜드 스타트)" : ""}`,
+        label: `blame ${relPath}${rev ? ` @${shortSha(rev)}` : ""}${stats.cached ? " (캐시)" : ""}${cold ? " (콜드 스타트)" : ""}`,
         totalMs: firstLine - t0,
-        budgetMs:
-          cold || stats.firstByteMs === null ? undefined : Math.round(stats.firstByteMs + FIRST_LINE_SLACK_MS),
+        budgetMs,
         phases,
-        detail: `git 첫 출력 ${stats.firstByteMs?.toFixed(1) ?? "—"} · 블록 ${stats.blocks} · 커밋 ${stats.commits}`,
+        detail: `${stats.cached ? "캐시" : `git 첫 출력 ${stats.firstByteMs?.toFixed(1) ?? "—"}`} · 블록 ${stats.blocks} · 커밋 ${stats.commits}`,
         ok: gutter !== null || stats.blocks === 0,
       });
     };
 
-    const session = openBlame(path, rev, (event) => {
+    const session = openBlame(target, (event) => {
       switch (event.kind) {
         case "meta": {
           gotMeta = true;
@@ -267,6 +354,9 @@ export function BlameView({ path, rev, line, cold = false, onShown, onBack }: Pr
               keys: {
                 copySha: () => actions.current.copySha(),
                 enter: () => actions.current.enter(),
+                parent: () => actions.current.parent(),
+                older: () => actions.current.older(),
+                newer: () => actions.current.newer(),
                 back: () => actions.current.back(),
                 help: () => actions.current.help(),
                 escape: () => actions.current.escape(),
@@ -277,7 +367,7 @@ export function BlameView({ path, rev, line, cold = false, onShown, onBack }: Pr
           } else {
             setProgress({ kind: "done" });
           }
-          onShown(nowMs());
+          onShown?.(nowMs());
           contentPainted = afterPaint();
           break;
         }
@@ -302,7 +392,7 @@ export function BlameView({ path, rev, line, cold = false, onShown, onBack }: Pr
             setProgress({ kind: "failed", message: event.message });
           } else {
             setFatal(event.message);
-            onShown(nowMs());
+            onShown?.(nowMs());
           }
           break;
         case "cancelled":
@@ -324,10 +414,21 @@ export function BlameView({ path, rev, line, cold = false, onShown, onBack }: Pr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 다시 맨 위 화면이 되면(뒤로 와서) 키 입력을 받게 에디터에 포커스를 준다. 숨길 때는 떠 있는 것을 닫는다.
+  useEffect(() => {
+    if (active) {
+      editor.current?.view.focus();
+    } else {
+      window.clearTimeout(timers.current.show);
+      setHover(null);
+      setHelp(false);
+    }
+  }, [active]);
+
   // 에디터 밖(카드, 머리줄)에 포커스가 있어도 q·?·Esc는 먹게 한다.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (!latest.current.active || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
       const target = e.target as HTMLElement | null;
       if (target?.closest(".cm-editor") || target?.closest("input, textarea")) return;
       const handled =
@@ -347,7 +448,7 @@ export function BlameView({ path, rev, line, cold = false, onShown, onBack }: Pr
       <header className="blame-header">
         <FilePath path={meta?.path ?? path} />
         <span className="badge" title={meta?.rev ?? "작업트리 파일"}>
-          {meta?.rev ? shortSha(meta.rev) : rev ? rev : "작업트리"}
+          {meta?.rev ? shortSha(meta.rev) : rev ? shortSha(rev) : "작업트리"}
         </span>
         {meta?.content && meta.content.encoding !== "UTF-8" && (
           <span className="badge warn" title="파일 인코딩">
@@ -355,6 +456,11 @@ export function BlameView({ path, rev, line, cold = false, onShown, onBack }: Pr
           </span>
         )}
         {crlf && <span className="badge">CRLF</span>}
+        {depth > 1 && (
+          <span className="badge" title="q로 앞 화면으로 돌아간다">
+            뒤로 q · {depth - 1}
+          </span>
+        )}
         <span className="blame-status" aria-live="polite">
           <ProgressText progress={progress} blamed={blame?.blamedLines ?? 0} lines={lineCount} commits={blame?.commits.size ?? 0} />
         </span>

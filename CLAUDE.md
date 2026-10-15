@@ -111,15 +111,22 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
 - `PLX_T0`: 호출 시작 시각(epoch ms). 없으면 OS가 plx 프로세스를 만든 시각이 지연 측정 기준점이다.
 - `PLX_PERF=1`: 릴리스 빌드에서도 성능 HUD를 켠다(개발 빌드는 항상 켜짐. `` ` `` 키로 보이기·숨기기).
   `PLX_PERF_LOG=<파일>`을 함께 주면 끝난 요청을 JSON 한 줄씩 기록한다(`bench/app-latency.sh`가 쓴다).
+- `PLX_CACHE_DIR=<디렉터리>`: blame 캐시 위치(기본: OS 캐시 위치의 `com.gembitious.parallax/blame`, 한도 512MB).
+  측정·자동 확인 스크립트는 임시 디렉터리를 줘서 사용자 캐시와 섞지 않는다.
 
 ## 키맵
 - 탐색은 tig와 같게: `j`/`k` 이동, `Enter` 커밋 상세, `,` 부모 리비전 blame, `/` 검색, `q` 뒤로
 - 추가 키: `<`/`>` 이전·다음 리비전, `H` 파일 히스토리, `L` 라인 히스토리, `G` 그래프, `y` sha 복사, `o` 에디터로 열기, `?` 도움말
+- 탐색 스택: `,`·`<`·`>`는 새 화면을 쌓고 `q`가 하나씩 돌아간다(아래 화면은 숨긴 채 유지해 커서·스크롤이 남는다).
+  `<`로 온 화면에서 `>`(또는 반대)는 새로 쌓지 않고 돌아간다. 맨 아래에서 `q`는 창을 숨긴다.
+- 리비전 이동은 첫 부모를 따라 파일을 바꾼 커밋 단위다(`git log --first-parent --follow`). merge가 바꾼 버전도 포함한다.
 
 ## 결정 기록
 - 2026-10-15: 범위를 읽기 전용 git 뷰어로 한정. 편집·터미널·LSP는 제외.
 - 2026-10-15: blame·라인 히스토리는 git CLI로 시작. gix-blame은 골든 테스트 통과 시 전환 검토.
 - 2026-10-15: 코드 뷰는 Monaco 대신 CodeMirror 6.
+- 2026-10-15: blame 결과 캐시는 파일(JSON) 하나에 결과 하나, 이름은 열쇠의 FNV 해시이고 파일 안의 열쇠로 충돌을 거른다.
+  작업트리 blame은 수정 2초 안의 파일을 넣지 않는다(크기·수정 시각이 같은 채로 바뀌는 racy 문제).
 - 2026-10-15: 단일 인스턴스는 `tauri-plugin-single-instance` 대신 직접 구현한다(`plx_core::instance`).
   `main()` 맨 앞, Tauri 초기화 전에 로컬 소켓(Windows named pipe, Unix 소켓)으로 argv·cwd·t0를 넘기고 끝낸다.
   primary 판정은 락 파일(`File::try_lock`). 이유: 두 번째 호출이 WebView 초기화를 거치지 않는다,

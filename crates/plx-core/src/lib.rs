@@ -5,10 +5,12 @@
 
 pub mod blame;
 pub mod blame_session;
+pub mod cache;
 pub mod cli;
 pub mod git;
 pub mod instance;
 pub mod linemap;
+pub mod navigate;
 pub mod repo;
 pub mod text;
 pub mod time;

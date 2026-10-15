@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # 앱 지연 측정: 콜드 스타트 1회 + 상주 인스턴스에 plx 호출 N회, 그 호출들의 blame 첫 줄 표시.
+# 호출은 저장소의 파일 N/2개를 두 번씩 연다. 처음은 git blame, 두 번째는 캐시 히트다(캐시는 임시 디렉터리).
 #
 # 릴리스 빌드로 잰다. 개발 빌드 수치는 성능 예산 판단에 쓰지 않는다.
 #   npm run tauri build -- --no-bundle
@@ -47,7 +48,7 @@ cleanup() {
     # 다음 측정이 이 인스턴스에 넘어가지 않게 끝날 때까지 기다린다.
     wait "$primary" 2>/dev/null || true
   fi
-  rm -f "$log"
+  rm -rf "$log" "$log.files" "$log.cache"
 }
 trap cleanup EXIT
 
@@ -81,11 +82,21 @@ summary() {
     printf "%.1f %.1f %.1f\n", m, p, v[NR] }'
 }
 
-cd "$here"
-target="app-latency.sh" # blame 대상: 이 스크립트 자신(항상 있는 파일)
+cd "$root"
+target="bench/app-latency.sh" # 콜드 스타트 대상: 이 스크립트 자신(항상 있는 파일)
+# 사용자 캐시와 섞이지 않게, 그리고 처음 여는 파일은 반드시 git blame을 돌게 빈 캐시로 시작한다.
+cache_dir="$log.cache"
+half=$(((runs + 1) / 2))
+files="$log.files"
+git -c core.quotepath=false ls-files -- '*.rs' '*.ts' '*.tsx' '*.sh' '*.md' '*.toml' |
+  LC_ALL=C grep -vxF "$target" | head -n "$half" >"$files"
+if [ "$(wc -l <"$files" | tr -d ' ')" -lt "$half" ]; then
+  echo "blame할 파일이 ${half}개보다 적다($root)" >&2
+  exit 1
+fi
 
 # 콜드 스타트. 분리 실행을 끄고 셸의 자식으로 띄워 끝날 때 정리한다.
-PLX_PERF=1 PLX_PERF_LOG="$log" PLX_DETACH=0 "$bin" "$target" >/dev/null 2>&1 &
+PLX_PERF=1 PLX_PERF_LOG="$log" PLX_CACHE_DIR="$cache_dir" PLX_DETACH=0 "$bin" "$target" >/dev/null 2>&1 &
 primary=$!
 if ! wait_for '"kind":"cold"'; then
   if kill -0 "$primary" 2>/dev/null; then
@@ -104,29 +115,37 @@ if ! wait_for '"kind":"cold"'; then
 fi
 cold="$(grep '"kind":"cold"' "$log" | total_of | awk '{ printf "%.1f", $1 }')"
 
-# 상주 인스턴스에 호출. 앞 호출이 그려진 뒤 다음 호출을 보낸다.
+# 상주 인스턴스에 호출. 앞 호출이 그려지고 blame이 끝난 뒤 다음 호출을 보낸다
+# (먼저 보내면 앞 blame이 취소되어 기록이 없다). 두 번째 바퀴는 줄 번호를 바꿔 기록 이름을 구분한다.
 shell_ms=""
-for i in $(seq 1 "$runs"); do
-  start="$(now_ms)"
-  "$bin" "$target:$i" >/dev/null
-  end="$(now_ms)"
-  shell_ms="$shell_ms$(awk -v s="$start" -v e="$end" 'BEGIN { printf "%.1f", e - s }')
+calls=0
+for pass in 1 2; do
+  while IFS= read -r file; do
+    calls=$((calls + 1))
+    start="$(now_ms)"
+    "$bin" "$file:$pass" >/dev/null
+    end="$(now_ms)"
+    shell_ms="$shell_ms$(awk -v s="$start" -v e="$end" 'BEGIN { printf "%.1f", e - s }')
 "
-  if ! wait_for "\"label\":\"blame $target:$i\""; then
-    echo "${i}번째 호출 기록이 나오지 않았다." >&2
-    exit 1
-  fi
-  # 다음 호출은 이 호출의 blame이 끝난 뒤에 보낸다(먼저 보내면 앞 blame이 취소되어 기록이 없다).
-  if ! wait_lines '"kind":"blame"' $((i + 1)); then
-    echo "${i}번째 호출의 blame 기록이 나오지 않았다." >&2
-    exit 1
-  fi
+    if ! wait_for "\"label\":\"blame $file:$pass\""; then
+      echo "$file:$pass 호출 기록이 나오지 않았다." >&2
+      exit 1
+    fi
+    if ! wait_lines '"kind":"blame"' $((calls + 1)); then
+      echo "$file:$pass 호출의 blame 기록이 나오지 않았다." >&2
+      exit 1
+    fi
+  done <"$files"
 done
 read -r warm_med warm_p90 warm_max <<<"$(grep '"kind":"plx"' "$log" | total_of | summary)"
 read -r shell_med shell_p90 shell_max <<<"$(printf '%s' "$shell_ms" | summary)"
 warm_blame="$(LC_ALL=C grep -F '"kind":"blame"' "$log" | LC_ALL=C grep -vF '(콜드 스타트)' || true)"
-read -r blame_med blame_p90 blame_max <<<"$(printf '%s\n' "$warm_blame" | total_of | summary)"
-git_first="$(printf '%s\n' "$warm_blame" | sed -n 's/.*git 첫 출력 \([0-9.]*\).*/\1/p' | summary | awk '{ print $1 }')"
+git_blame="$(printf '%s\n' "$warm_blame" | LC_ALL=C grep -vF '(캐시)' || true)"
+cached_blame="$(printf '%s\n' "$warm_blame" | LC_ALL=C grep -F '(캐시)' || true)"
+count_of() { printf '%s' "$1" | LC_ALL=C grep -c . || true; }
+read -r blame_med blame_p90 blame_max <<<"$(printf '%s\n' "$git_blame" | total_of | summary)"
+read -r cache_med cache_p90 cache_max <<<"$(printf '%s\n' "$cached_blame" | total_of | summary)"
+git_first="$(printf '%s\n' "$git_blame" | sed -n 's/.*git 첫 출력 \([0-9.]*\).*/\1/p' | summary | awk '{ print $1 }')"
 
 unpainted="$(LC_ALL=C grep -c '"ok":false' "$log" || true)"
 echo "- 환경: $(uname -srm), $(date '+%Y-%m-%d'), $("$bin" --version 2>/dev/null || echo plx)"
@@ -137,6 +156,7 @@ echo
 echo "| 항목 | 값 (ms) | 예산 |"
 echo "|---|---|---|"
 echo "| 콜드 스타트 → 첫 페인트 | $cold | ≤ 1000 |"
-echo "| 상주 인스턴스에 plx 호출 → 대상 뷰 첫 페인트 (중앙값 / p90 / 최대, n=$runs) | $warm_med / $warm_p90 / $warm_max | ≤ 100 |"
+echo "| 상주 인스턴스에 plx 호출 → 대상 뷰 첫 페인트 (중앙값 / p90 / 최대, n=$calls) | $warm_med / $warm_p90 / $warm_max | ≤ 100 |"
 echo "| 두 번째 plx 프로세스, 셸에서 본 시간 (중앙값 / p90 / 최대) | $shell_med / $shell_p90 / $shell_max | — |"
-echo "| 같은 호출의 blame 첫 줄 표시 (중앙값 / p90 / 최대) | $blame_med / $blame_p90 / $blame_max | ≤ git 첫 출력 + 30 (git 첫 출력 중앙값 $git_first) |"
+echo "| blame 첫 줄 표시, 처음 여는 파일 (n=$(count_of "$git_blame")) | $blame_med / $blame_p90 / $blame_max | ≤ git 첫 출력 + 30 (git 첫 출력 중앙값 $git_first) |"
+echo "| blame 첫 줄 표시, 다시 여는 파일·캐시 (n=$(count_of "$cached_blame")) | $cache_med / $cache_p90 / $cache_max | ≤ 16 |"

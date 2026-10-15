@@ -77,7 +77,8 @@ cleanup() {
   rm -rf "$work"
 }
 trap cleanup EXIT
-export PLX_PERF=1 PLX_PERF_LOG="$log"
+# 사용자의 blame 캐시와 섞이지 않게 캐시도 임시 디렉터리에 둔다.
+export PLX_PERF=1 PLX_PERF_LOG="$log" PLX_CACHE_DIR="$work/cache"
 
 # 기록에 문자열이 나타날 때까지 기다린다(최대 약 15초).
 wait_for() {
@@ -165,7 +166,10 @@ status=0
 "$bin" package.json:2 || status=$?
 check "두 번째 호출 → 종료 코드 0, 셸 $(($(now_ms) - start))ms" test "$status" -eq 0
 check "두 번째 호출 → 상주 인스턴스가 그림" wait_for '"label":"blame package.json:2"'
-check "blame이 끝까지 와서 거터를 그림 (package.json)" wait_for_all '"kind":"blame"' '"label":"blame package.json"' '"ok":true'
+check "blame이 끝까지 와서 거터를 그림 (콜드 스타트, package.json)" \
+  wait_for_all '"kind":"blame"' '"label":"blame package.json (콜드 스타트)"' '"ok":true'
+check "같은 파일을 다시 열면 캐시에서 (package.json)" \
+  wait_for_all '"kind":"blame"' '"label":"blame package.json (캐시)"' '"ok":true'
 
 status=0
 (cd "$repo" && "$bin" "소스/파일 이름.rs:3") || status=$?

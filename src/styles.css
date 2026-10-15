@@ -128,6 +128,14 @@ kbd,
   min-height: 0;
 }
 
+.stack-entry {
+  height: 100%;
+}
+
+.stack-entry[hidden] {
+  display: none;
+}
+
 .empty {
   flex: 1;
   display: flex;
