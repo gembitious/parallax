@@ -38,7 +38,12 @@ log="$(mktemp "${TMPDIR:-/tmp}/plx-perf.XXXXXX")"
 primary=""
 cleanup() {
   if [ -n "$primary" ]; then
-    kill "$primary" 2>/dev/null || true
+    # Git Bash의 kill은 네이티브 Windows 프로세스를 끝내지 못할 수 있어 Windows PID로 끝낸다.
+    if [ -r "/proc/$primary/winpid" ]; then
+      taskkill //F //PID "$(cat "/proc/$primary/winpid")" >/dev/null 2>&1 || true
+    else
+      kill "$primary" 2>/dev/null || true
+    fi
     # 다음 측정이 이 인스턴스에 넘어가지 않게 끝날 때까지 기다린다.
     wait "$primary" 2>/dev/null || true
   fi
@@ -46,12 +51,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# 기록에 패턴이 나타날 때까지 기다린다(최대 10초).
+# 기록에 문자열이 나타날 때까지 기다린다(최대 약 15초).
 wait_for() {
   local i=0
-  while ! grep -q "$1" "$log" 2>/dev/null; do
+  while ! LC_ALL=C grep -qF "$1" "$log" 2>/dev/null; do
     i=$((i + 1))
-    if [ "$i" -gt 1000 ]; then return 1; fi
+    if [ "$i" -gt 1500 ]; then return 1; fi
     sleep 0.01
   done
 }
@@ -74,7 +79,7 @@ PLX_PERF=1 PLX_PERF_LOG="$log" PLX_DETACH=0 "$bin" "$target" >/dev/null 2>&1 &
 primary=$!
 if ! wait_for '"kind":"cold"'; then
   if kill -0 "$primary" 2>/dev/null; then
-    echo "콜드 스타트 기록이 10초 안에 나오지 않았다." >&2
+    echo "콜드 스타트 기록이 15초 안에 나오지 않았다." >&2
   else
     status=0
     wait "$primary" || status=$?
@@ -105,7 +110,11 @@ done
 read -r warm_med warm_p90 warm_max <<<"$(grep '"kind":"plx"' "$log" | total_of | summary)"
 read -r shell_med shell_p90 shell_max <<<"$(printf '%s' "$shell_ms" | summary)"
 
-echo "### 앱 지연: $(uname -srm), $(date '+%Y-%m-%d')"
+unpainted="$(LC_ALL=C grep -c '"ok":false' "$log" || true)"
+echo "- 환경: $(uname -srm), $(date '+%Y-%m-%d'), $("$bin" --version 2>/dev/null || echo plx)"
+if [ "$unpainted" -gt 0 ]; then
+  echo "- 주의: 페인트를 측정하지 못한 기록 ${unpainted}건(창이 화면에 그려지지 않는 환경). 그 기록은 렌더까지만 잰 값이다."
+fi
 echo
 echo "| 항목 | 값 (ms) | 예산 |"
 echo "|---|---|---|"

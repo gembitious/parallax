@@ -16,7 +16,7 @@ const ENCODING_HEAD: &str = "1b48386e5d6f32919d7c85347ab5cd49f8dcd889";
 const NULL_DEVICE: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 
 fn bash() -> PathBuf {
-    if let Some(path) = std::env::var_os("PLX_BASH") {
+    if let Some(path) = std::env::var_os("PLX_BASH").filter(|p| !p.is_empty()) {
         return path.into();
     }
     // Windows의 PATH에는 WSL의 bash.exe가 먼저 있을 수 있다. git과 같이 설치된 bash를 쓴다.

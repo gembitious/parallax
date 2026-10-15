@@ -45,7 +45,8 @@ GitLens의 핵심 흐름(줄 → 커밋 → 부모 리비전 blame → 파일·�
 crates/plx-core/   gix·git CLI 래퍼, 출력 파서, 캐시, 그래프 레인 레이아웃, plx 인자 파서, 인스턴스 간 전달(로컬 소켓)
                    (UI 무관, 단위 테스트 필수)
 src-tauri/         Tauri 명령·채널, 단일 인스턴스·CLI 호출을 창·트레이에 연결
-scripts/           설치 보조 스크립트 (macOS shim)
+scripts/           설치·확인 스크립트 (macOS shim, 앱 자동 확인 check-app.sh)
+.github/workflows/ CI: Windows·macOS·Linux에서 검사(포맷·clippy·테스트)와 앱 확인(릴리스 빌드 + check-app.sh)
 src/               React UI
 bench/             참조 저장소 준비 스크립트, git 측정 하네스(plx-bench), 앱 지연 측정, 측정 결과(results.md)
 fixtures/          테스트 저장소 생성 스크립트 (rename, 이동, merge, CRLF, 한글 경로·내용)
@@ -69,8 +70,18 @@ docs/              MILESTONES.md
 - 코어 테스트: `cargo test -p plx-core` / 전체: `cargo test --workspace`
   (fixtures 결정성 테스트가 `fixtures/make-repos.sh`를 실행하므로 bash와 git이 필요하다. Windows는 Git for Windows의 bash, `PLX_BASH`로 지정 가능)
 - 테스트 저장소 만들기: `fixtures/make-repos.sh <출력 디렉터리>` → `history`, `encoding` 저장소 (어느 플랫폼에서든 같은 sha)
-- 앱 지연 측정(릴리스 빌드 후): `bench/app-latency.sh [실행 파일] [반복 횟수]` → 콜드 스타트, plx 호출 → 첫 페인트
+- 앱 자동 확인(릴리스 빌드 후): `scripts/check-app.sh [실행 파일]` → 단일 인스턴스 전달·CLI 오류·동시 실행·분리 실행 확인과 지연 측정.
+  `PLX_CHECK_RECORD=<이름>`이면 지연 표를 `bench/results.md`에 넣는다. CI도 이 스크립트를 돌린다.
+- 앱 지연만 측정: `bench/app-latency.sh [실행 파일] [반복 횟수]` → 콜드 스타트, plx 호출 → 첫 페인트
 - git baseline: `bench/setup.sh`(참조 저장소 준비, 한 번) → `bench/run.sh [이름]`(측정 → `bench/results.md`)
+
+## 작업 방식
+- 적당한 작업 단위마다 PR을 만든다. 앞 PR이 아직 머지되지 않았으면 그 브랜치 위에 쌓고 PR 설명에 머지 순서를 적는다.
+- CI(`.github/workflows/ci.yml`)가 Windows·macOS·Linux에서 검사와 앱 확인을 돌린다. 초록이어야 머지한다.
+  CI가 확인한 기능은 그 플랫폼에서 확인한 것으로 친다. 화면을 봐야 하는 확인(창 포커스, 닫기 = 숨기기, 트레이 등)은
+  PR 설명의 "수동 확인"에 남긴다.
+- 저장소가 비공개라 Actions 사용 시간이 든다(macOS 러너는 보통 10배로 계산). 같은 브랜치의 이전 실행은 자동 취소되고,
+  문서(`*.md`, `docs/`)만 바뀐 푸시는 CI를 돌리지 않는다.
 
 ## CLI 인터페이스 (목표)
 ```
