@@ -609,6 +609,9 @@ fn report(opts: &Options, cases: &[Case]) -> io::Result<()> {
     println!(
         "`plx blame 세션`의 첫 출력은 내용(meta), 레코드는 블록 수, 출력은 화면으로 보내는 JSON 양이다."
     );
+    println!(
+        "`plx 파일 히스토리`의 첫 출력은 meta, 첫 N은 50개째를 보낸 때, 레코드는 커밋 수(rename 앞 구간 포함)다."
+    );
     Ok(())
 }
 
