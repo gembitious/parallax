@@ -88,6 +88,8 @@ pub fn run() {
             app.manage(git.clone());
             std::thread::spawn(move || git.prune_cache());
             tray::create(app)?;
+            #[cfg(target_os = "macos")]
+            window::show_early(app.handle());
             window::show_if_not_ready(app.handle().clone());
             requests.attach(app.handle().clone());
             Ok(())

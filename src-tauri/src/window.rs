@@ -7,7 +7,7 @@ use tauri::{AppHandle, Manager, Window};
 
 pub const MAIN: &str = "main";
 
-/// 콜드 스타트에서 프론트엔드가 첫 화면을 그리기 전에는 창을 숨겨 둔다(빈 화면 깜빡임 방지).
+/// 콜드 스타트에서 프론트엔드가 첫 화면을 그리기 전에는 창을 숨겨 둔다(빈 화면 깜빡임 방지). macOS는 예외([`show_early`]).
 static READY: AtomicBool = AtomicBool::new(false);
 /// 프론트엔드가 끝내 준비를 알리지 못해도 이 시간이 지나면 창을 보인다.
 const READY_FALLBACK: Duration = Duration::from_secs(3);
@@ -58,6 +58,22 @@ pub fn app_ready(app: AppHandle) {
 
 pub fn is_ready() -> bool {
     READY.load(Ordering::SeqCst)
+}
+
+/// macOS: 창을 처음부터 보인다. 숨긴 창의 WKWebView는 그리지 않아서, 첫 내용을 그린 뒤 창을 보이면 보인 뒤에야
+/// 첫 페인트가 시작된다(CI macOS에서 창을 보이고 0.6초). 처음부터 보이면 그 준비가 WebView·JS 시작과 겹친다.
+/// 내용이 오기 전의 빈 창은 화면 배경색(styles.css의 --bg)으로 칠해 흰 화면이 번쩍이지 않게 한다.
+#[cfg(target_os = "macos")]
+pub fn show_early(app: &AppHandle) {
+    use tauri::window::Color;
+    if let Some(window) = app.get_webview_window(MAIN) {
+        let color = match window.theme() {
+            Ok(tauri::Theme::Dark) => Color(0x0d, 0x11, 0x17, 0xff),
+            _ => Color(0xff, 0xff, 0xff, 0xff),
+        };
+        let _ = window.set_background_color(Some(color));
+    }
+    show_main(app);
 }
 
 pub fn show_if_not_ready(app: AppHandle) {
