@@ -32,14 +32,23 @@ GitLens의 핵심 흐름(줄 → 커밋 → 부모 리비전 blame → 파일·�
 - git: `gix` + 시스템 `git` CLI
 - 파일 감시: `notify` (`.git`의 HEAD, refs/, packed-refs, logs/HEAD)
 - Node는 Volta로 고정한다. 각 의존성 버전은 M0에서 확인해 아래에 기록한다.
-  - (M0에서 기록)
+  정확한 버전은 `Cargo.lock`·`package-lock.json`이 고정한다(`.npmrc`의 `save-exact`). 2026-10-15 확인.
+  - 툴체인: Rust 1.97.0 + edition 2024 (`rust-toolchain.toml`), Node 24.22.0 LTS + npm 11.19.1 (`package.json`의 `volta`), Volta 2.0.2
+  - Tauri: `tauri` 2.12.4, `tauri-build` 2.7.3, `@tauri-apps/api` 2.12.4, `@tauri-apps/cli` 2.12.3 (3.0은 alpha라 보류)
+  - 프런트: React 19.3.1, Vite 8.3.4, `@vitejs/plugin-react` 6.1.2, TypeScript 6.0.3 (7.0은 Go 포트라 도구 호환성 확인 전까지 보류)
+  - Rust 공통: `serde` 1.0.229, `serde_json` 1.0.154, `libc` 0.2.190(Unix), `windows-sys` 0.61.2(Windows, Tauri와 같은 버전),
+    `tempfile` 3.27.0(테스트)
+  - 도입 예정 (그 마일스톤에서 다시 확인): `gix` 0.89.0 (M1), `codemirror` 6.0.2·`@codemirror/view` 6.43.14·`@codemirror/merge` 6.12.2 (M1·M2), `notify` 8.2.0 (M4, 9.0은 RC)
 
 ## 디렉터리
 ```
-crates/plx-core/   gix·git CLI 래퍼, 출력 파서, 캐시, 그래프 레인 레이아웃 (UI 무관, 단위 테스트 필수)
-src-tauri/         Tauri 명령·채널, 단일 인스턴스, 트레이, CLI 인자 처리
+crates/plx-core/   gix·git CLI 래퍼, 출력 파서, 캐시, 그래프 레인 레이아웃, plx 인자 파서, 인스턴스 간 전달(로컬 소켓)
+                   (UI 무관, 단위 테스트 필수)
+src-tauri/         Tauri 명령·채널, 단일 인스턴스·CLI 호출을 창·트레이에 연결
+scripts/           설치·확인 스크립트 (macOS shim, 앱 자동 확인 check-app.sh)
+.github/workflows/ CI: Windows·macOS·Linux에서 검사(포맷·clippy·테스트)와 앱 확인(릴리스 빌드 + check-app.sh)
 src/               React UI
-bench/             참조 저장소 준비 스크립트와 측정 결과(results.md)
+bench/             참조 저장소 준비 스크립트, git 측정 하네스(plx-bench), 앱 지연 측정, 측정 결과(results.md)
 fixtures/          테스트 저장소 생성 스크립트 (rename, 이동, merge, CRLF, 한글 경로·내용)
 docs/              MILESTONES.md
 ```
@@ -53,10 +62,26 @@ docs/              MILESTONES.md
 - **읽기 전용:** 저장소를 바꾸는 git 명령은 호출하지 않는다. 유일한 예외는 사용자가 확인한 "가속 설정"(commit-graph 작성).
 - **파서 정확성:** git 출력 파서마다 fixtures 기반 골든 테스트(`git blame --porcelain` 등 git 결과와 비교)를 둔다.
 
-## 명령 (스캐폴딩 후 실제 값으로 갱신)
+## 명령
+- 처음 한 번: `npm install` (Node·npm 버전은 Volta가, Rust 버전은 rustup이 `rust-toolchain.toml`로 맞춘다)
 - 개발: `npm run tauri dev`
-- 코어 테스트: `cargo test -p plx-core`
-- 벤치: `bench/` 스크립트 (M0에서 작성)
+- 릴리스 빌드: `npm run tauri build` (번들 없이 실행 파일만: `npm run tauri build -- --no-bundle` → `target/release/plx`)
+- 프런트 타입 검사 + 빌드: `npm run build`
+- 코어 테스트: `cargo test -p plx-core` / 전체: `cargo test --workspace`
+  (fixtures 결정성 테스트가 `fixtures/make-repos.sh`를 실행하므로 bash와 git이 필요하다. Windows는 Git for Windows의 bash, `PLX_BASH`로 지정 가능)
+- 테스트 저장소 만들기: `fixtures/make-repos.sh <출력 디렉터리>` → `history`, `encoding` 저장소 (어느 플랫폼에서든 같은 sha)
+- 앱 자동 확인(릴리스 빌드 후): `scripts/check-app.sh [실행 파일]` → 단일 인스턴스 전달·CLI 오류·동시 실행·분리 실행 확인과 지연 측정.
+  `PLX_CHECK_RECORD=<이름>`이면 지연 표를 `bench/results.md`에 넣는다. CI도 이 스크립트를 돌린다.
+- 앱 지연만 측정: `bench/app-latency.sh [실행 파일] [반복 횟수]` → 콜드 스타트, plx 호출 → 첫 페인트
+- git baseline: `bench/setup.sh`(참조 저장소 준비, 한 번) → `bench/run.sh [이름]`(측정 → `bench/results.md`)
+
+## 작업 방식
+- 적당한 작업 단위마다 PR을 만든다. 앞 PR이 아직 머지되지 않았으면 그 브랜치 위에 쌓고 PR 설명에 머지 순서를 적는다.
+- CI(`.github/workflows/ci.yml`)가 Windows·macOS·Linux에서 검사와 앱 확인을 돌린다. 초록이어야 머지한다.
+  CI가 확인한 기능은 그 플랫폼에서 확인한 것으로 친다. 화면을 봐야 하는 확인(창 포커스, 닫기 = 숨기기, 트레이 등)은
+  PR 설명의 "수동 확인"에 남긴다.
+- 저장소가 비공개라 Actions 사용 시간이 든다(macOS 러너는 보통 10배로 계산). 같은 브랜치의 이전 실행은 자동 취소되고,
+  문서(`*.md`, `docs/`)만 바뀐 푸시는 CI를 돌리지 않는다.
 
 ## CLI 인터페이스 (목표)
 ```
@@ -66,7 +91,19 @@ plx log <file>               파일 히스토리
 plx log -L <a>,<b>:<file>    라인 범위 히스토리
 plx show <rev>               커밋 상세
 ```
-macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다.
+`-h`/`--help`, `-V`/`--version`, `--`(뒤 인자를 파일 이름으로: `plx -- log`)도 받는다.
+blame은 작업트리에 있는 파일만 받고, `log`는 삭제된 경로도 받는다. 잘못된 인자는 상주 인스턴스에 넘기지 않고
+호출한 터미널에 알린 뒤 종료 코드 2로 끝난다.
+
+macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `scripts/install-macos-shim.sh [앱 경로] [설치 디렉터리]`.
+
+인스턴스가 없을 때 릴리스 빌드를 셸에서 실행하면 스스로 분리 실행하고 셸을 바로 돌려준다.
+
+환경 변수
+- `PLX_DETACH=0|1`: 분리 실행 끄기·강제 (개발 빌드는 기본적으로 분리하지 않는다. `tauri dev`가 자식 프로세스로 잡고 있어야 한다)
+- `PLX_T0`: 호출 시작 시각(epoch ms). 없으면 OS가 plx 프로세스를 만든 시각이 지연 측정 기준점이다.
+- `PLX_PERF=1`: 릴리스 빌드에서도 성능 HUD를 켠다(개발 빌드는 항상 켜짐. `` ` `` 키로 보이기·숨기기).
+  `PLX_PERF_LOG=<파일>`을 함께 주면 끝난 요청을 JSON 한 줄씩 기록한다(`bench/app-latency.sh`가 쓴다).
 
 ## 키맵
 - 탐색은 tig와 같게: `j`/`k` 이동, `Enter` 커밋 상세, `,` 부모 리비전 blame, `/` 검색, `q` 뒤로
@@ -76,3 +113,7 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다.
 - 2026-10-15: 범위를 읽기 전용 git 뷰어로 한정. 편집·터미널·LSP는 제외.
 - 2026-10-15: blame·라인 히스토리는 git CLI로 시작. gix-blame은 골든 테스트 통과 시 전환 검토.
 - 2026-10-15: 코드 뷰는 Monaco 대신 CodeMirror 6.
+- 2026-10-15: 단일 인스턴스는 `tauri-plugin-single-instance` 대신 직접 구현한다(`plx_core::instance`).
+  `main()` 맨 앞, Tauri 초기화 전에 로컬 소켓(Windows named pipe, Unix 소켓)으로 argv·cwd·t0를 넘기고 끝낸다.
+  primary 판정은 락 파일(`File::try_lock`). 이유: 두 번째 호출이 WebView 초기화를 거치지 않는다,
+  터미널에서 처음 실행할 때 셸을 돌려주려면(분리 재실행) Tauri 전에 판정해야 한다, 측정용 t0를 함께 넘길 수 있다.

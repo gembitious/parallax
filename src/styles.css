@@ -1,0 +1,161 @@
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --fg: #1f2328;
+  --muted: #656d76;
+  --border: #d0d7de;
+  --panel: #f6f8fa;
+  font-family: system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --fg: #e6edf3;
+    --muted: #8d96a0;
+    --border: #30363d;
+    --panel: #161b22;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.titlebar {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.brand {
+  font-weight: 600;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.placeholder {
+  flex: 1;
+  padding: 24px;
+}
+
+.request {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0;
+}
+
+.request dt {
+  color: var(--muted);
+}
+
+.request dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+.hud {
+  position: fixed;
+  right: 8px;
+  bottom: 8px;
+  width: min(520px, calc(100vw - 16px));
+  max-height: 45vh;
+  overflow: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  font-size: 11px;
+  line-height: 1.4;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 15%);
+}
+
+.hud header {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+.hud header span {
+  flex: 1;
+}
+
+.hud button {
+  font: inherit;
+  padding: 0 6px;
+}
+
+.hud ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hud li + li {
+  border-top: 1px solid var(--border);
+}
+
+.hud-row {
+  display: flex;
+  gap: 8px;
+}
+
+.hud-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hud-total {
+  font-weight: 600;
+}
+
+.hud-over {
+  color: #cf222e;
+}
+
+.hud-budget,
+.hud-phases,
+.hud-empty {
+  color: var(--muted);
+  font-weight: normal;
+}
+
+.hud-failed .hud-label {
+  text-decoration: line-through;
+}
+
+code,
+pre,
+.mono {
+  font-family: ui-monospace, "SF Mono", "Cascadia Mono", "D2Coding", Consolas, monospace;
+}

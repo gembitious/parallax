@@ -1,0 +1,160 @@
+name: CI
+
+# 플랫폼별 확인을 사람 손에서 떼어 낸다. Windows·macOS·Linux 모두에서
+# 1) 포맷·clippy·테스트(fixtures sha 결정성 포함), 2) 릴리스 빌드 + 앱 자동 확인(scripts/check-app.sh)을 돌린다.
+# 화면을 봐야 하는 확인(창 포커스, 닫기 = 숨기기, 트레이)은 여기서 하지 못한다.
+
+on:
+  pull_request:
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+  workflow_dispatch:
+
+# 같은 브랜치에 새 푸시가 오면 이전 실행을 취소한다(Windows·macOS 러너 사용 시간을 아낀다).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  check:
+    name: 검사 (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Linux, os: ubuntu-24.04 }
+          - { name: Windows, os: windows-latest }
+          - { name: macOS, os: macos-latest }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Linux 시스템 라이브러리
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev shellcheck
+
+      # package.json의 volta.node 버전을 쓴다.
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: package.json
+          cache: npm
+
+      # rust-toolchain.toml의 버전을 rustup이 설치한다.
+      - name: Rust 툴체인
+        run: cargo --version && rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: npm ci
+
+      - name: 프런트 타입 검사·빌드
+        run: npm run build
+
+      - name: 포맷
+        if: runner.os == 'Linux'
+        run: cargo fmt --all -- --check
+
+      - name: shellcheck
+        if: runner.os == 'Linux'
+        run: shellcheck bench/*.sh fixtures/*.sh scripts/*.sh
+
+      # macOS 기본 bash 3.2는 `$dir가`처럼 변수 바로 뒤에 붙은 한글 바이트까지 변수 이름으로 읽는다(unbound variable).
+      # shellcheck는 잡지 못한다. 변수 뒤에 ASCII가 아닌 글자가 오면 `${dir}가`처럼 감싼다.
+      - name: bash 3.2 호환 (변수 뒤 한글)
+        if: runner.os == 'Linux'
+        run: |
+          if grep -nP '\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7F]' bench/*.sh fixtures/*.sh scripts/*.sh; then
+            echo "::error::변수 바로 뒤에 ASCII가 아닌 글자가 있다. \${이름}처럼 감싼다(macOS bash 3.2)."
+            exit 1
+          fi
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: 테스트
+        run: cargo test --workspace
+        env:
+          # macOS는 기본 bash 3.2로 fixtures 스크립트를 돌려 호환성을 함께 확인한다.
+          PLX_BASH: ${{ runner.os == 'macOS' && '/bin/bash' || '' }}
+
+  app:
+    name: 앱 확인 (${{ matrix.name }})
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Linux, os: ubuntu-24.04 }
+          - { name: Windows, os: windows-latest }
+          - { name: macOS, os: macos-latest }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Linux 시스템 라이브러리
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev xvfb dbus
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: package.json
+          cache: npm
+
+      - name: Rust 툴체인
+        run: cargo --version && rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: npm ci
+
+      # macOS는 shim이 가리킬 실제 앱 번들(.app)을 만든다. 나머지는 실행 파일만.
+      - name: 릴리스 빌드
+        run: npm run tauri build -- ${{ runner.os == 'macOS' && '--bundles app' || '--no-bundle' }}
+
+      - name: 앱 확인 (Linux, 가상 화면)
+        if: runner.os == 'Linux'
+        timeout-minutes: 10
+        env:
+          NO_AT_BRIDGE: 1
+        run: dbus-run-session -- xvfb-run -a scripts/check-app.sh
+
+      - name: 앱 확인 (Windows, Git Bash)
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        run: scripts/check-app.sh
+
+      # 사용자가 쓰는 경로 그대로: shim 설치 → shim으로 실행. 스크립트는 기본 bash 3.2로 돌린다.
+      - name: 앱 확인 (macOS, shim 경유)
+        if: runner.os == 'macOS'
+        timeout-minutes: 10
+        run: |
+          /bin/bash scripts/install-macos-shim.sh target/release/bundle/macos/parallax.app "$RUNNER_TEMP/bin"
+          /bin/bash scripts/check-app.sh "$RUNNER_TEMP/bin/plx"

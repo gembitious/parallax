@@ -1,0 +1,18 @@
+# 텍스트 파일은 저장소와 작업트리 모두 LF로 둔다.
+# Git for Windows 기본값(core.autocrlf=true)에서도 .sh가 CRLF로 바뀌지 않게 하려는 것.
+* text=auto eol=lf
+*.sh text eol=lf
+
+# cmd.exe 배치 파일은 CRLF여야 레이블·goto가 올바르게 동작한다.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 바이너리
+*.png binary
+*.ico binary
+*.icns binary
+*.jpg binary
+*.gif binary
+*.webp binary
+*.woff binary
+*.woff2 binary
