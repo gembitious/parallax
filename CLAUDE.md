@@ -66,6 +66,7 @@ docs/              MILESTONES.md
 - 릴리스 빌드: `npm run tauri build` (번들 없이 실행 파일만: `npm run tauri build -- --no-bundle` → `target/release/plx`)
 - 프런트 타입 검사 + 빌드: `npm run build`
 - 코어 테스트: `cargo test -p plx-core` / 전체: `cargo test --workspace`
+- 앱 지연 측정(릴리스 빌드 후): `bench/app-latency.sh [실행 파일] [반복 횟수]` → 콜드 스타트, plx 호출 → 첫 페인트
 - 벤치: `bench/` 스크립트 (M0에서 작성)
 
 ## CLI 인터페이스 (목표)
@@ -83,8 +84,12 @@ blame은 작업트리에 있는 파일만 받고, `log`는 삭제된 경로도 �
 macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `scripts/install-macos-shim.sh [앱 경로] [설치 디렉터리]`.
 
 인스턴스가 없을 때 릴리스 빌드를 셸에서 실행하면 스스로 분리 실행하고 셸을 바로 돌려준다.
+
+환경 변수
 - `PLX_DETACH=0|1`: 분리 실행 끄기·강제 (개발 빌드는 기본적으로 분리하지 않는다. `tauri dev`가 자식 프로세스로 잡고 있어야 한다)
-- `PLX_T0`: 호출 시작 시각(epoch ms). 지연 측정 기준점으로, 벤치 스크립트가 넘긴다.
+- `PLX_T0`: 호출 시작 시각(epoch ms). 없으면 OS가 plx 프로세스를 만든 시각이 지연 측정 기준점이다.
+- `PLX_PERF=1`: 릴리스 빌드에서도 성능 HUD를 켠다(개발 빌드는 항상 켜짐. `` ` `` 키로 보이기·숨기기).
+  `PLX_PERF_LOG=<파일>`을 함께 주면 끝난 요청을 JSON 한 줄씩 기록한다(`bench/app-latency.sh`가 쓴다).
 
 ## 키맵
 - 탐색은 tig와 같게: `j`/`k` 이동, `Enter` 커밋 상세, `,` 부모 리비전 blame, `/` 검색, `q` 뒤로

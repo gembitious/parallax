@@ -80,6 +80,80 @@ body {
   word-break: break-all;
 }
 
+.hud {
+  position: fixed;
+  right: 8px;
+  bottom: 8px;
+  width: min(520px, calc(100vw - 16px));
+  max-height: 45vh;
+  overflow: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  font-size: 11px;
+  line-height: 1.4;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 15%);
+}
+
+.hud header {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+.hud header span {
+  flex: 1;
+}
+
+.hud button {
+  font: inherit;
+  padding: 0 6px;
+}
+
+.hud ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hud li + li {
+  border-top: 1px solid var(--border);
+}
+
+.hud-row {
+  display: flex;
+  gap: 8px;
+}
+
+.hud-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hud-total {
+  font-weight: 600;
+}
+
+.hud-over {
+  color: #cf222e;
+}
+
+.hud-budget,
+.hud-phases,
+.hud-empty {
+  color: var(--muted);
+  font-weight: normal;
+}
+
+.hud-failed .hud-label {
+  text-decoration: line-through;
+}
+
 code,
 pre,
 .mono {

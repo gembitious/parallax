@@ -84,7 +84,7 @@ impl Requests {
         match inner.app.clone() {
             Some(app) => {
                 drop(inner);
-                deliver(&app, &request);
+                deliver(&app, &request, true);
             }
             None => inner.pending = true,
         }
@@ -100,7 +100,8 @@ impl Requests {
             .flatten();
         drop(inner);
         if let Some(request) = pending {
-            deliver(&app, &request);
+            // 콜드 스타트: 창은 프론트엔드가 첫 화면을 그린 뒤(app_ready) 보인다.
+            deliver(&app, &request, window::is_ready());
         }
     }
 
@@ -109,11 +110,14 @@ impl Requests {
     }
 }
 
-fn deliver(app: &AppHandle, request: &PlxRequest) {
-    window::show_main(app);
+fn deliver(app: &AppHandle, request: &PlxRequest, show: bool) {
     window::set_title(app, &request.label);
     // 프론트엔드가 아직 듣기 전이면 이벤트는 사라지지만, 뜨자마자 current_request로 가져간다.
     let _ = app.emit_to(window::MAIN, "plx-request", request);
+    // 이벤트를 먼저 보내 숨겨진 창이 보이기 전에 새 화면을 그릴 기회를 준다.
+    if show {
+        window::show_main(app);
+    }
 }
 
 /// 프론트엔드가 뜨면서 놓친 요청을 가져간다.
@@ -127,9 +131,18 @@ pub fn current_request(requests: tauri::State<'_, Arc<Requests>>) -> Option<PlxR
 pub fn start(t_main_ms: f64, requests: Arc<Requests>) -> Server {
     let detached = std::env::var_os(ENV_DETACHED).is_some();
     let detach = std::env::var(ENV_DETACH).ok();
+    // 측정 기준점: 넘겨받은 시각, 없으면 OS가 이 프로세스를 만든 시각(실행 파일 로딩 포함).
+    // 단, `cargo run`(tauri dev)은 Unix에서 exec로 자기 자신을 plx로 바꾸므로 생성 시각에 빌드 시간이
+    // 들어간다. cargo가 넣어 주는 CARGO 변수가 있으면 main 시각을 쓴다.
     let t0_ms = std::env::var(ENV_T0)
         .ok()
         .and_then(|v| v.parse().ok())
+        .or_else(|| {
+            std::env::var_os("CARGO")
+                .is_none()
+                .then(plx_core::time::process_start_ms)
+                .flatten()
+        })
         .unwrap_or(t_main_ms);
     // 이 값들이 앱이 띄우는 프로세스(에디터 → 그 안의 터미널 → plx)로 새지 않게 지운다.
     // SAFETY: main 맨 앞, 다른 스레드가 생기기 전이다.

@@ -1,4 +1,5 @@
 mod instance;
+mod perf;
 mod tray;
 mod window;
 
@@ -29,9 +30,15 @@ pub fn run() {
 
     let app = tauri::Builder::default()
         .manage(requests.clone())
+        .manage(perf::Perf::from_env(t_main_ms))
         .invoke_handler(tauri::generate_handler![
             app_info,
-            instance::current_request
+            instance::current_request,
+            window::app_ready,
+            perf::perf_info,
+            perf::perf_record,
+            perf::perf_ping,
+            perf::perf_stream,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -41,6 +48,7 @@ pub fn run() {
         })
         .setup(move |app| {
             tray::create(app)?;
+            window::show_if_not_ready(app.handle().clone());
             requests.attach(app.handle().clone());
             Ok(())
         })
