@@ -66,12 +66,7 @@ fn git_as_user(repo: &Path, args: &[&str]) -> std::process::Output {
 #[test]
 fn tracked_files_match_git_ls_files() {
     for repo in [history(), encoding()] {
-        assert_eq!(
-            tracked(&repo),
-            ls_files(&repo, &[]),
-            "{}",
-            repo.display()
-        );
+        assert_eq!(tracked(&repo), ls_files(&repo, &[]), "{}", repo.display());
     }
 }
 
@@ -108,13 +103,25 @@ fn conflicted_paths_appear_once() {
     git(&repo, &["init", "--quiet", "--initial-branch=main"]);
     std::fs::write(repo.join("a.txt"), "base\n").unwrap();
     git(&repo, &["add", "a.txt"]);
-    assert!(git_as_user(&repo, &["commit", "--quiet", "-m", "base"]).status.success());
+    assert!(
+        git_as_user(&repo, &["commit", "--quiet", "-m", "base"])
+            .status
+            .success()
+    );
     git(&repo, &["checkout", "--quiet", "-b", "other"]);
     std::fs::write(repo.join("a.txt"), "other\n").unwrap();
-    assert!(git_as_user(&repo, &["commit", "--quiet", "-am", "other"]).status.success());
+    assert!(
+        git_as_user(&repo, &["commit", "--quiet", "-am", "other"])
+            .status
+            .success()
+    );
     git(&repo, &["checkout", "--quiet", "main"]);
     std::fs::write(repo.join("a.txt"), "main\n").unwrap();
-    assert!(git_as_user(&repo, &["commit", "--quiet", "-am", "main"]).status.success());
+    assert!(
+        git_as_user(&repo, &["commit", "--quiet", "-am", "main"])
+            .status
+            .success()
+    );
     let merge = git_as_user(&repo, &["merge", "--quiet", "other"]);
     assert!(!merge.status.success(), "충돌이 나야 한다");
     assert!(git_text(&repo, &["ls-files", "--stage"]).lines().count() >= 3);
@@ -203,7 +210,10 @@ fn reloads_when_the_index_changes() {
     assert!(found.load_ms.is_some(), "처음은 읽는다");
     assert!(found.items.is_empty());
     let again = lists.search(&repo, "새로운", 10).unwrap();
-    assert!(again.load_ms.is_none(), "인덱스가 그대로면 다시 읽지 않는다");
+    assert!(
+        again.load_ms.is_none(),
+        "인덱스가 그대로면 다시 읽지 않는다"
+    );
 
     std::fs::write(repo_dir.join("새로운 파일.txt"), "내용\n").unwrap();
     git(&repo_dir, &["add", "-A"]);
