@@ -73,3 +73,33 @@ describe("BlameModel", () => {
     expect(model.sha(1)).toBeUndefined();
   });
 });
+
+describe("BlameModel.aiAt", () => {
+  it("블록의 원래 커밋·경로·줄로 AI 작성자를 찾는다", () => {
+    const model = new BlameModel(6);
+    // 지금 파일의 3~5줄은 커밋 a의 옛이름.rs 10~12줄에서 왔다.
+    model.add({
+      commits: [],
+      blocks: [
+        { sha: "a", origLine: 10, finalLine: 3, numLines: 3, path: "옛이름.rs", previous: null },
+        { sha: "b", origLine: 1, finalLine: 1, numLines: 2, path: "새이름.rs", previous: null },
+      ],
+    });
+    const claude = {
+      kind: "agent" as const,
+      tool: "claude",
+      model: "opus",
+      id: "1",
+      human: null,
+      messagesUrl: null,
+      attributes: [],
+      stats: null,
+    };
+    model.ai.merge({ notes: true, authors: [claude], files: [{ sha: "a", path: "옛이름.rs", spans: [[11, 12, 0]] }] });
+    expect(model.aiAt(3)).toBeNull(); // 원래 10줄
+    expect(model.aiAt(4)).toEqual(claude); // 원래 11줄
+    expect(model.aiAt(5)).toEqual(claude); // 원래 12줄
+    expect(model.aiAt(1)).toBeNull(); // 다른 커밋
+    expect(model.aiAt(6)).toBeNull(); // 아직 모르는 줄
+  });
+});

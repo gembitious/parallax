@@ -1,6 +1,6 @@
 # parallax 마일스톤
 
-**진행 중: M5(선택)** (M0~M4는 Windows·macOS 화면 확인 대기, M3의 orrery 렌더링 비교는 남음) — 마일스톤을 끝낼 때마다 이 줄과 체크박스를 갱신한다.
+**M0~M5 구현 완료** (모두 Windows·macOS 화면 확인 대기, M3의 orrery 렌더링 비교와 M5의 실제 git-ai 대조는 남음) — 마일스톤을 끝낼 때마다 이 줄과 체크박스를 갱신한다.
 
 ## 성능 예산
 baseline은 M0에서 같은 머신·같은 저장소로 git CLI를 직접 잰 값이다. 이력 질의 목표는 "baseline + 우리 오버헤드"로 정의한다.
@@ -87,10 +87,15 @@ baseline 표가 `bench/results.md`에 있다.
 키(`i`)와 명령 팔레트로 옮겼다. Windows·macOS 확인 대기.
 
 ## M5 — (선택) AI 출처 오버레이
-- [ ] `refs/notes/ai` 읽기 (git-ai 노트 포맷 스펙 확인 후 구현)
-- [ ] AI 작성 줄 거터 표시, hover에 에이전트·세션·프롬프트 정보
+- [x] `refs/notes/ai` 읽기 (git-ai 노트 포맷 스펙 확인 후 구현): Git AI Standard v3.0.0(`authorship/3.0.0`)의 세션·사람·옛
+      프롬프트 키, 따옴표 경로, fanout 노트 트리. 규칙은 git-ai의 표준 문서와 `git-ai blame` 소스에 맞췄다
+      (`plx_core::ai_notes`, CLAUDE.md 결정 기록) — Windows·macOS 실기 확인 필요
+- [x] AI 작성 줄 거터 표시, hover에 에이전트·세션·프롬프트 정보: 보라 줄과 `✦ 도구`, 카드에 모델·시킨 사람·(옛 형식이면)
+      받아들인 줄 수, 머리줄에 AI 줄 수 — Windows·macOS 실기 확인 필요
 
 **완료 기준:** `git-ai blame` 결과와 줄 단위로 일치.
+→ 같은 규칙(원래 커밋·원래 경로·원래 줄, 뒤 항목 우선, 없는 키 건너뛰기)을 표준 예제와 손으로 만든 노트로 확인했다.
+실제 `git-ai blame`과의 대조는 git-ai를 쓰는 저장소에서 `docs/MANUAL_CHECKS.md` 13번으로 한다.
 
 ## 하지 않는 것
 편집 · LSP · 내장 터미널 · 스테이징/커밋/푸시 · PR 등 원격 호스팅 연동.

@@ -139,6 +139,8 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
 - 에디터로 열기 `o`: blame은 커서 줄, 커밋 상세는 고른 파일의 첫 바뀐 줄, 히스토리는 그 파일(라인 히스토리면 범위의
   첫 줄), 그래프는 작업트리 폴더. 리비전의 줄은 작업트리 파일의 줄로 옮기고, 그 뒤 이름이 바뀌었으면 새 이름을 연다.
 - blame의 `i`: 커서 줄의 커밋 카드를 고정해 보이고 다시 누르면 닫는다(마우스의 거터 클릭과 같다).
+- AI 출처: 저장소에 git-ai 노트(`refs/notes/ai`)가 있으면 blame 거터의 AI가 쓴 줄에 보라 줄과 `✦ 도구` 이름이 붙고,
+  카드에 에이전트·모델·시킨 사람, 머리줄에 `✦ AI n줄`이 보인다. 따로 켜는 키는 없다.
 - 파일 찾기(Quick Open): 어느 화면에서든 `f`(입력란·코드 뷰 밖이면)·Ctrl+P(macOS ⌘P). 추적 파일을 퍼지 검색한다
   (파일 이름 일치 먼저, 초성 `ㅍㅇ`, 공백으로 나눈 낱말은 모두 맞아야 한다, `파일:줄`이면 그 줄로). `↑`/`↓`·Ctrl+N/J/K로
   고르고 `Enter`는 작업트리 blame, `Shift+Enter`는 파일 히스토리. 빈 검색어는 최근 연 파일부터 보인다.
@@ -186,6 +188,12 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
   `파일:줄:열`, JetBrains는 `--line`·`--column`. vim 같은 터미널 에디터는 GUI 앱이 띄울 터미널이 없어 자동으로
   고르지 않는다(명령 틀로 터미널 에뮬레이터를 감싸면 쓸 수 있다). 과거 리비전의 파일이 작업트리에 없으면 그 뒤의
   rename을 `git log --diff-filter=D --ancestry-path`로 찾은 지점에서만 따라간다(리비전마다 걷지 않는다).
+- 2026-10-15: AI 출처(M5)는 git-ai가 커밋마다 붙이는 `refs/notes/ai` 노트(Git AI Standard v3.0.0, `authorship/3.0.0`)를
+  읽어 blame에 겹친다(`plx_core::ai_notes`). 노트는 그 커밋 버전의 줄 번호라 `git-ai blame`과 같이 blame 블록의 원래 커밋·
+  원래 경로·원래 줄로 찾고, 뒤 항목이 이기며 메타데이터에 없는 키는 건너뛴다(`s_…::t_…` 세션, `h_` 사람, 16자 옛
+  프롬프트는 다른 노트에서도 찾는다). 규칙은 git-ai 저장소의 표준 문서와 `get_line_attribution`을 읽어 맞췄다(git-ai를
+  빌드·실행하지는 않았다). 노트 트리는 gix로 직접 읽고(fanout 무관, git 스폰 없음) notes 참조가 바뀌면 다시 읽는다.
+  아직 커밋하지 않은 줄의 AI 작업 상태(`.git/ai`)는 git-ai 내부 형식이라 보지 않는다.
 - 2026-10-15: 단일 인스턴스는 `tauri-plugin-single-instance` 대신 직접 구현한다(`plx_core::instance`).
   `main()` 맨 앞, Tauri 초기화 전에 로컬 소켓(Windows named pipe, Unix 소켓)으로 argv·cwd·t0를 넘기고 끝낸다.
   primary 판정은 락 파일(`File::try_lock`). 이유: 두 번째 호출이 WebView 초기화를 거치지 않는다,
