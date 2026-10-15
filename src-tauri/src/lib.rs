@@ -41,6 +41,7 @@ pub fn run() {
             git::blame_neighbor,
             git::history_open,
             git::history_cancel,
+            git::line_history_open,
             git::commit_info,
             git::commit_detail,
             git::file_versions,

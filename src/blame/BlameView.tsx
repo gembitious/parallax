@@ -53,6 +53,7 @@ type Actions = {
   older(): boolean;
   newer(): boolean;
   history(): boolean;
+  lineHistory(): boolean;
   back(): boolean;
   help(): boolean;
   escape(): boolean;
@@ -256,6 +257,22 @@ export function BlameView({ target, line, active, depth, backDirection, cold = f
       else onNavigate({ kind: "history", target: { repo: m.repo, path: m.path, rev: m.rev } });
       return true;
     },
+    lineHistory() {
+      const m = latest.current.meta;
+      const view = editor.current?.view;
+      if (!m || !view) {
+        showToast(m?.binary ? "바이너리 파일은 라인 히스토리를 보지 않는다" : "아직 파일을 여는 중이다");
+        return true;
+      }
+      // 선택한 줄들(끝이 줄 맨 앞이면 그 줄은 뺀다), 선택이 없으면 커서 줄
+      const { from, to } = view.state.selection.main;
+      const doc = view.state.doc;
+      const start = doc.lineAt(from).number;
+      const last = doc.lineAt(to);
+      const end = to > from && to === last.from ? Math.max(start, last.number - 1) : last.number;
+      onNavigate({ kind: "history", target: { repo: m.repo, path: m.path, rev: m.rev }, lines: { start, end } });
+      return true;
+    },
     back() {
       onBack();
       return true;
@@ -345,6 +362,7 @@ export function BlameView({ target, line, active, depth, backDirection, cold = f
                 older: () => actions.current.older(),
                 newer: () => actions.current.newer(),
                 history: () => actions.current.history(),
+                lineHistory: () => actions.current.lineHistory(),
                 back: () => actions.current.back(),
                 help: () => actions.current.help(),
                 escape: () => actions.current.escape(),

@@ -15,7 +15,7 @@ use std::process::{Command, ExitCode, Stdio};
 use std::time::Instant;
 
 use plx_core::blame_session::{SessionEvent, Sessions};
-use plx_core::history::{HistoryEvent, HistorySessions};
+use plx_core::history::{HistoryEvent, HistorySessions, LineRange};
 use plx_core::repo::RepoCache;
 
 struct Options {
@@ -58,6 +58,9 @@ enum Kind {
     /// 앱의 파일 히스토리 요청: `git log -- <path>` 구간을 rename마다 이어 붙인다. `log`·`follow`와 비교한다.
     /// 첫 출력은 meta, 첫 N은 50개째를 보낸 때다. 캐시는 쓰지 않는다.
     PlxLog,
+    /// 앱의 라인 히스토리 요청(`git log -L` + hunk 해석). `line-log`와 비교한다. 대상은 `a,b:path`.
+    /// 첫 출력은 meta, 첫 N은 첫 커밋을 보낸 때다.
+    PlxLineLog,
 }
 
 impl Kind {
@@ -73,6 +76,7 @@ impl Kind {
             "plx-blame" => Kind::PlxBlame,
             "plx-show" => Kind::PlxShow,
             "plx-log" => Kind::PlxLog,
+            "plx-line-log" => Kind::PlxLineLog,
             _ => return None,
         })
     }
@@ -89,6 +93,7 @@ impl Kind {
             Kind::PlxBlame => "plx blame 세션",
             Kind::PlxShow => "plx 커밋 상세",
             Kind::PlxLog => "plx 파일 히스토리",
+            Kind::PlxLineLog => "plx 라인 히스토리",
         }
     }
 
@@ -98,6 +103,7 @@ impl Kind {
             Kind::Blame => Some((1, "첫 블록")),
             Kind::PlxBlame => Some((1, "첫 묶음")),
             Kind::Log | Kind::Follow | Kind::PlxLog => Some((50, "첫 50개")),
+            Kind::PlxLineLog => Some((1, "첫 커밋")),
             Kind::Graph => Some((100, "첫 100개")),
             Kind::Spawn | Kind::LineLog | Kind::Show | Kind::PlxShow => None,
         }
@@ -128,7 +134,7 @@ impl Kind {
                 "--format=%H%x1f%P%x1f%an%x1f%at%x1f%s",
                 "HEAD",
             ],
-            Kind::PlxBlame | Kind::PlxShow | Kind::PlxLog => {
+            Kind::PlxBlame | Kind::PlxShow | Kind::PlxLog | Kind::PlxLineLog => {
                 unreachable!("git을 직접 띄우지 않는다")
             }
         };
@@ -155,7 +161,8 @@ fn count_records(kind: Kind, chunk: &[u8], carry: &mut Vec<u8>) -> usize {
         | Kind::Show
         | Kind::PlxBlame
         | Kind::PlxShow
-        | Kind::PlxLog => 0,
+        | Kind::PlxLog
+        | Kind::PlxLineLog => 0,
     }
 }
 
@@ -327,7 +334,27 @@ fn run_session_once(repo: &Path, target: &str, condition: Condition) -> io::Resu
     }
 }
 
-fn run_history_once(repo: &Path, target: &str, condition: Condition) -> io::Result<Sample> {
+/// `a,b:path` → (범위, 경로)
+fn parse_line_target(target: &str) -> io::Result<(LineRange, &str)> {
+    let bad = || {
+        io::Error::other(format!(
+            "라인 히스토리 대상은 a,b:path 꼴이어야 한다: {target}"
+        ))
+    };
+    let (range, path) = target.split_once(':').ok_or_else(bad)?;
+    let (start, end) = range.split_once(',').ok_or_else(bad)?;
+    let start = start.parse().map_err(|_| bad())?;
+    let end = end.parse().map_err(|_| bad())?;
+    Ok((LineRange { start, end }, path))
+}
+
+/// 파일 히스토리(`lines`가 있으면 라인 히스토리) 요청 한 번. 첫 N은 파일은 50개째, 라인은 첫 커밋을 보낸 때다.
+fn run_history_once(
+    repo: &Path,
+    target: &str,
+    lines: Option<LineRange>,
+    condition: Condition,
+) -> io::Result<Sample> {
     set_git_config(condition);
     let sessions = HistorySessions::new();
     let repos = RepoCache::new();
@@ -339,21 +366,26 @@ fn run_history_once(repo: &Path, target: &str, condition: Condition) -> io::Resu
     let (mut first_byte, mut first_n) = (None, None);
     let (mut records, mut bytes) = (0usize, 0usize);
     let mut end = None;
-    sessions.run(id, &repos, &path, None, |event| {
+    let page = if lines.is_some() { 1 } else { 50 };
+    let on_event = |event: HistoryEvent| {
         bytes += serde_json::to_vec(&event).map_or(0, |json| json.len());
         let now = Instant::now();
         match event {
             HistoryEvent::Meta(_) => first_byte = Some(ms(now)),
             HistoryEvent::Entries { entries } => {
                 records += entries.len();
-                if records >= 50 {
+                if records >= page {
                     first_n.get_or_insert_with(|| ms(now));
                 }
             }
             other => end = Some(other),
         }
         true
-    });
+    };
+    match lines {
+        Some(lines) => sessions.run_lines(id, &repos, &path, None, lines, on_event),
+        None => sessions.run(id, &repos, &path, None, on_event),
+    }
     let total = ms(Instant::now());
     match end {
         Some(HistoryEvent::Done { .. }) => Ok(Sample {
@@ -404,7 +436,11 @@ fn measure(opts: &Options, repo: &Path, case: &Case, condition: Condition) -> io
     let run = || match case.kind {
         Kind::PlxBlame => run_session_once(repo, &case.target, condition),
         Kind::PlxShow => run_show_once(repo, &case.target),
-        Kind::PlxLog => run_history_once(repo, &case.target, condition),
+        Kind::PlxLog => run_history_once(repo, &case.target, None, condition),
+        Kind::PlxLineLog => {
+            let (lines, path) = parse_line_target(&case.target)?;
+            run_history_once(repo, path, Some(lines), condition)
+        }
         kind => run_once(repo, kind, &case.target, condition),
     };
     for _ in 0..opts.warmup {
@@ -611,6 +647,9 @@ fn report(opts: &Options, cases: &[Case]) -> io::Result<()> {
     );
     println!(
         "`plx 파일 히스토리`의 첫 출력은 meta, 첫 N은 50개째를 보낸 때, 레코드는 커밋 수(rename 앞 구간 포함)다."
+    );
+    println!(
+        "`plx 라인 히스토리`의 첫 출력은 meta, 첫 N은 첫 커밋(hunk 포함)을 보낸 때다. `log -L`의 첫 출력과 비교한다."
     );
     Ok(())
 }

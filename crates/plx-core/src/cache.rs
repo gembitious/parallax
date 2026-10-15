@@ -48,6 +48,17 @@ impl CacheKey {
         }
     }
 
+    /// `start` 커밋의 `path` 파일 `first`..=`last`줄의 라인 히스토리.
+    pub fn line_history(repo: &Path, start: &str, path: &str, first: u32, last: u32) -> CacheKey {
+        CacheKey {
+            text: format!(
+                "{FORMAT}\nlines\n{}\n{start}\n{first},{last}\n{path}",
+                repo.display()
+            ),
+            storable: true,
+        }
+    }
+
     /// 작업트리 blame. `head`가 바뀌거나 파일의 크기·수정 시각이 바뀌면 다른 열쇠다.
     pub fn worktree(
         repo: &Path,

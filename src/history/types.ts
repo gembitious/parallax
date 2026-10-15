@@ -18,7 +18,22 @@ export type LogEntry = {
   path: string;
   /** 이 커밋에서 이름이 바뀌었으면 원래 경로 */
   oldPath: string | null;
+  /** 라인 히스토리에서만: 그 줄 범위의 변경. merge는 빈 목록일 수 있다. */
+  hunks?: Hunk[];
 };
+
+/** plx-core/src/line_log.rs Hunk */
+export type Hunk = {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  /** 줄마다 첫 글자가 " "(같음)·"-"(뺌)·"+"(더함)·"\\"(끝 개행 없음) */
+  lines: string[];
+};
+
+/** plx-core/src/history.rs LineRange: 1부터, 양쪽 포함 */
+export type LineRange = { start: number; end: number };
 
 /** plx-core/src/history.rs HistoryMeta */
 export type HistoryMeta = {
@@ -30,6 +45,8 @@ export type HistoryMeta = {
   rev: string | null;
   /** 거슬러 올라가기 시작한 커밋. 커밋이 없는 저장소면 null */
   start: string | null;
+  /** 라인 히스토리면 시작 커밋 버전의 줄 범위(작업트리 줄로 요청했으면 HEAD 버전으로 옮긴 범위) */
+  lines: LineRange | null;
 };
 
 /** plx-core/src/history.rs HistoryStats. 시각은 요청을 받은 때부터(ms) */

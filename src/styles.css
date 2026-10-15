@@ -20,6 +20,8 @@
   --search-match: #fff8c5;
   --search-current: #f2cc60;
   --blame-active: #0969da0f;
+  --diff-add: #dafbe1;
+  --diff-del: #ffebe9;
 
   /* 커밋 나이 히트맵: 0이 가장 오래됨(차가움), 7이 가장 최근(뜨거움) */
   --heat-0: #dbe4ef;
@@ -65,6 +67,8 @@
     --search-match: #bb800926;
     --search-current: #bb800966;
     --blame-active: #4493f814;
+    --diff-add: #2ea04326;
+    --diff-del: #f8514926;
 
     --heat-0: #1e2a3a;
     --heat-1: #24426a;
@@ -604,6 +608,62 @@ button.link {
 .status-merge {
   background: transparent;
   color: var(--muted);
+}
+
+.line-history .history-list {
+  flex: 1 1 50%;
+}
+
+.history-hunks {
+  flex: 1 1 50%;
+  min-height: 0;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.history-hunks > p {
+  padding: 12px;
+}
+
+.hunk {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  line-height: 20px;
+}
+
+.hunk-header {
+  padding: 0 8px;
+  background: var(--panel);
+  color: var(--syn-meta);
+}
+
+.hunk td.ln {
+  width: 1%;
+  padding: 0 8px;
+  color: var(--muted);
+  text-align: right;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.hunk td.code {
+  padding: 0 8px;
+  white-space: pre;
+}
+
+.hunk tr.add {
+  background: var(--diff-add);
+}
+
+.hunk tr.del {
+  background: var(--diff-del);
+}
+
+.hunk tr.note td.code {
+  color: var(--muted);
+  font-style: italic;
 }
 
 .history-detail {

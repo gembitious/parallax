@@ -6,7 +6,7 @@ use std::sync::Arc;
 use plx_core::blame_session::{SessionEvent, Sessions};
 use plx_core::cache::DiskCache;
 use plx_core::commit::{self, CommitDetail, FileVersions};
-use plx_core::history::{HistoryEvent, HistorySessions};
+use plx_core::history::{HistoryEvent, HistorySessions, LineRange};
 use plx_core::navigate::{self, Direction, Version};
 use plx_core::repo::{CommitInfo, RepoCache};
 use serde::Serialize;
@@ -115,7 +115,37 @@ pub async fn history_open(
     Ok(id)
 }
 
-/// 진행 중인 히스토리를 멈춘다. 이미 끝났으면 `false`.
+/// 라인 히스토리(`git log -L`)를 시작하고 요청 id를 바로 돌려준다. 이벤트는 파일 히스토리와 같고 커밋마다
+/// 그 줄 범위의 hunk가 붙는다. `rev`가 없으면 `start`..=`end`는 작업트리 파일의 줄이다(HEAD 버전의 줄로 옮긴다).
+/// 멈출 때는 `history_cancel`을 쓴다.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn line_history_open(
+    git: State<'_, Arc<GitState>>,
+    repo: Option<String>,
+    path: String,
+    rev: Option<String>,
+    start: u32,
+    end: u32,
+    on_event: Channel<HistoryEvent>,
+) -> Result<u64, String> {
+    let git = git.inner().clone();
+    let id = git.histories.register();
+    let path = resolve(repo.as_deref(), &path);
+    tauri::async_runtime::spawn_blocking(move || {
+        git.histories.run_lines(
+            id,
+            &git.repos,
+            &path,
+            rev.as_deref(),
+            LineRange { start, end },
+            |event| on_event.send(event).is_ok(),
+        );
+    });
+    Ok(id)
+}
+
+/// 진행 중인 히스토리(파일·라인)를 멈춘다. 이미 끝났으면 `false`.
 #[tauri::command]
 pub fn history_cancel(git: State<'_, Arc<GitState>>, id: u64) -> bool {
     git.histories.cancel(id)

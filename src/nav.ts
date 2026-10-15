@@ -1,7 +1,7 @@
 // 화면 상태: 받은 plx 요청과 탐색 스택(blame·커밋 상세·파일 히스토리). 순수 함수라 단위 테스트한다(nav.test.ts).
 import { shortSha } from "./blame/format";
 import type { BlameTarget } from "./blame/session";
-import type { HistoryTarget } from "./history/types";
+import type { HistoryTarget, LineRange } from "./history/types";
 
 /** 화면이 다른 화면으로 가자는 요청. */
 export type Navigation =
@@ -11,8 +11,8 @@ export type Navigation =
   | { kind: "commit"; repo: string; rev: string; path: string | null; only?: boolean }
   /** 커밋 상세·히스토리 → 그 리비전의 파일 blame */
   | { kind: "file"; target: BlameTarget; line: number | null }
-  /** blame → 파일 히스토리(`H`) */
-  | { kind: "history"; target: HistoryTarget };
+  /** blame → 파일 히스토리(`H`), `lines`가 있으면 라인 히스토리(`L`) */
+  | { kind: "history"; target: HistoryTarget; lines?: LineRange };
 
 /** 열 뷰. plx-core/src/cli.rs의 Request와 같은 모양. */
 export type ViewRequest =
@@ -66,6 +66,8 @@ export type HistoryEntry = {
   key: number;
   view: "history";
   target: HistoryTarget;
+  /** 있으면 그 줄 범위의 라인 히스토리 */
+  lines: LineRange | null;
   via: "request" | "history";
 };
 
@@ -93,8 +95,14 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
           ? { key, view: "blame", target: { repo: null, path: view.path, rev: null }, line: view.line, via: "request" }
           : view.kind === "show"
             ? { key, view: "commit", repo: request.cwd, rev: view.rev, path: null, only: false, via: "request" }
-            : view.kind === "log"
-              ? { key, view: "history", target: { repo: null, path: view.path, rev: null }, via: "request" }
+            : view.kind === "log" || view.kind === "lineLog"
+              ? {
+                  key,
+                  view: "history",
+                  target: { repo: null, path: view.path, rev: null },
+                  lines: view.kind === "lineLog" ? { start: view.start, end: view.end } : null,
+                  via: "request",
+                }
               : null;
       return { shown: { request, receivedMs: action.receivedMs }, stack: root ? [root] : [] };
     }
@@ -113,7 +121,7 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
               via: "commit",
             }
           : navigation.kind === "history"
-            ? { key, view: "history", target: navigation.target, via: "history" }
+            ? { key, view: "history", target: navigation.target, lines: navigation.lines ?? null, via: "history" }
             : { key, view: "blame", target: navigation.target, line: navigation.line, via: navigation.kind };
       return { ...state, stack: [...state.stack, entry].slice(-MAX_STACK) };
     }
@@ -131,5 +139,8 @@ export function titleOf(entry: StackEntry): string {
   if (entry.view === "commit") return `커밋 ${shortSha(entry.rev)}`;
   const { target } = entry;
   const at = target.rev ? ` @${shortSha(target.rev)}` : "";
-  return entry.view === "history" ? `히스토리 ${target.path}${at}` : `blame ${target.path}${at}`;
+  if (entry.view === "blame") return `blame ${target.path}${at}`;
+  return entry.lines
+    ? `라인 히스토리 ${target.path}:${entry.lines.start}-${entry.lines.end}${at}`
+    : `히스토리 ${target.path}${at}`;
 }

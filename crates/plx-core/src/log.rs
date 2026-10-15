@@ -40,6 +40,9 @@ pub struct LogEntry {
     pub path: String,
     /// 이 커밋에서 이름이 바뀌었으면 원래 경로
     pub old_path: Option<String>,
+    /// 라인 히스토리에서만: 그 줄 범위의 변경. merge는 빈 목록일 수 있다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hunks: Option<Vec<crate::line_log::Hunk>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,6 +192,7 @@ impl LogParser {
                         status: None,
                         path: text(&self.path),
                         old_path: None,
+                        hunks: None,
                     });
                     self.state = State::Header(1);
                     return Ok(());
@@ -283,6 +287,31 @@ fn text(bytes: &[u8]) -> String {
 fn preview(bytes: &[u8]) -> String {
     let text = String::from_utf8_lossy(bytes);
     text.chars().take(40).collect()
+}
+
+/// git 출력을 읽어 커밋을 내놓는 실행기(`git log`, `git log -L`). 파일 히스토리가 다른 스레드에서 읽는다.
+pub trait EntrySource: Send + 'static {
+    fn canceller(&self) -> Canceller;
+    /// git이 내놓은 만큼 커밋을 `out`에 더한다(없을 수도 있다). 출력이 끝났으면 `false`.
+    fn read(&mut self, out: &mut Vec<LogEntry>) -> Result<bool, LogError>;
+    /// 출력을 끝까지 읽은 뒤 git이 성공했는지 본다.
+    fn finish(self) -> Result<(), LogError>
+    where
+        Self: Sized;
+}
+
+impl EntrySource for LogStream {
+    fn canceller(&self) -> Canceller {
+        LogStream::canceller(self)
+    }
+
+    fn read(&mut self, out: &mut Vec<LogEntry>) -> Result<bool, LogError> {
+        LogStream::read(self, out)
+    }
+
+    fn finish(self) -> Result<(), LogError> {
+        LogStream::finish(self)
+    }
 }
 
 /// `git log <starts> -- <path>` 실행. 읽는 쪽은 [`LogStream::read`]로 커밋을 받는다.

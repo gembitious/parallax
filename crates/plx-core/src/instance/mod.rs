@@ -419,6 +419,16 @@ mod tests {
         let leave_stale_socket = |path: &Path| {
             drop(std::os::unix::net::UnixListener::bind(path).unwrap());
             assert!(path.exists(), "drop해도 소켓 파일은 남는다");
+            // macOS는 소켓을 만든 뒤 CLOEXEC를 따로 건다. 그 사이에 다른 테스트가 git을 띄우면 자식이 듣는 소켓을
+            // 물려받아 drop한 뒤에도 연결이 된다(받아 주는 쪽이 없어 응답 대신 EOF). 그 자식이 끝날 때까지 기다린다.
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            while std::os::unix::net::UnixStream::connect(path).is_ok() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "남은 소켓이 닫히지 않는다"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
         };
         let leave_plain_file = |path: &Path| std::fs::write(path, b"").unwrap();
         for leave in [&leave_stale_socket as &dyn Fn(&Path), &leave_plain_file] {
