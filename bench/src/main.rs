@@ -3,8 +3,8 @@
 //! 앱이 git을 띄우는 방식 그대로(`-c core.quotepath=false`, Windows는 `CREATE_NO_WINDOW`) 스폰해
 //! 첫 출력, 첫 N개 레코드, 전체 시간을 잰다. hyperfine 같은 도구는 전체 시간만 재므로 직접 잰다.
 //! 조건은 두 가지다: commit-graph 없음(`-c core.commitGraph=false`), commit-graph + changed-path Bloom 필터 있음.
-//! `plx-blame`·`plx-log`·`plx-graph`는 git이 아니라 앱의 요청(`plx_core::blame_session`, `plx_core::history`,
-//! `plx_core::graph`)을 그대로 돌려 우리 오버헤드를 잰다.
+//! `plx-blame`·`plx-log`·`plx-graph`·`plx-files`는 git이 아니라 앱의 요청(`plx_core::blame_session`, `plx_core::history`,
+//! `plx_core::graph`, `plx_core::files`)을 그대로 돌려 우리 오버헤드를 잰다.
 //!
 //! 사용법: plx-bench --repos <디렉터리> --cases <파일> [--runs 5] [--warmup 1]
 //! 결과는 Markdown으로 표준 출력에 쓴다. bench/run.sh가 bench/results.md에 넣는다.
@@ -17,6 +17,7 @@ use std::time::Instant;
 
 use plx_core::blame_session::{SessionEvent, Sessions};
 use plx_core::cache::DiskCache;
+use plx_core::files::FileLists;
 use plx_core::graph::{GraphEvent, GraphOptions, GraphScope, GraphSessions};
 use plx_core::history::{HistoryEvent, HistorySessions, LineRange};
 use plx_core::repo::RepoCache;
@@ -68,6 +69,10 @@ enum Kind {
     /// 대상은 범위(`head`·`branches`·`all`, 클론마다 같은 것은 `head`뿐)이고 `+table`을 붙이면 앱 캐시의
     /// 커밋 표를 미리 채워 둔다(commit-graph가 없을 때 두 번째 열기부터). 첫 출력은 meta, 첫 N은 첫 화면(100행).
     PlxGraph,
+    /// 앱의 Quick Open(`plx_core::files`): 인덱스의 추적 파일 + 퍼지 점수. 대상은 검색어다.
+    /// 첫 출력은 처음 검색(인덱스 읽기 포함), 첫 N은 목록이 있을 때 검색(좁히기 없이 전체), 전체는 검색어를
+    /// 한 글자씩 칠 때(앞 결과 안에서 좁힌다) 가장 느린 글자다. 레코드는 맞은 파일 수.
+    PlxFiles,
 }
 
 impl Kind {
@@ -85,6 +90,7 @@ impl Kind {
             "plx-log" => Kind::PlxLog,
             "plx-line-log" => Kind::PlxLineLog,
             "plx-graph" => Kind::PlxGraph,
+            "plx-files" => Kind::PlxFiles,
             _ => return None,
         })
     }
@@ -103,6 +109,7 @@ impl Kind {
             Kind::PlxLog => "plx 파일 히스토리",
             Kind::PlxLineLog => "plx 라인 히스토리",
             Kind::PlxGraph => "plx 커밋 그래프",
+            Kind::PlxFiles => "plx 파일 찾기",
         }
     }
 
@@ -114,6 +121,7 @@ impl Kind {
             Kind::Log | Kind::Follow | Kind::PlxLog => Some((50, "첫 50개")),
             Kind::PlxLineLog => Some((1, "첫 커밋")),
             Kind::Graph | Kind::PlxGraph => Some((100, "첫 100개")),
+            Kind::PlxFiles => Some((1, "목록 있음")),
             Kind::Spawn | Kind::LineLog | Kind::Show | Kind::PlxShow => None,
         }
     }
@@ -143,7 +151,12 @@ impl Kind {
                 "--format=%H%x1f%P%x1f%an%x1f%at%x1f%s",
                 "HEAD",
             ],
-            Kind::PlxBlame | Kind::PlxShow | Kind::PlxLog | Kind::PlxLineLog | Kind::PlxGraph => {
+            Kind::PlxBlame
+            | Kind::PlxShow
+            | Kind::PlxLog
+            | Kind::PlxLineLog
+            | Kind::PlxGraph
+            | Kind::PlxFiles => {
                 unreachable!("git을 직접 띄우지 않는다")
             }
         };
@@ -172,7 +185,8 @@ fn count_records(kind: Kind, chunk: &[u8], carry: &mut Vec<u8>) -> usize {
         | Kind::PlxShow
         | Kind::PlxLog
         | Kind::PlxLineLog
-        | Kind::PlxGraph => 0,
+        | Kind::PlxGraph
+        | Kind::PlxFiles => 0,
     }
 }
 
@@ -478,6 +492,42 @@ fn run_graph_once(
     Err(io::Error::other("그래프 이벤트가 끊겼다"))
 }
 
+/// Quick Open 한 번: 새 목록으로 처음 검색, 같은 검색어 다시(목록 있음, 좁히기 없음), 한 글자씩 치기.
+fn run_files_once(repo: &Path, query: &str) -> io::Result<Sample> {
+    let opened = plx_core::repo::Repo::discover(repo).map_err(io::Error::other)?;
+    let lists = FileLists::new();
+    let start = Instant::now();
+    let first = lists
+        .search(&opened, query, 100)
+        .map_err(io::Error::other)?;
+    let cold = start.elapsed().as_secs_f64() * 1000.0;
+    // 빈 검색어로 앞 결과를 지운 뒤 같은 검색어를 목록 전체에서 다시 찾는다.
+    lists.search(&opened, "", 100).map_err(io::Error::other)?;
+    let start = Instant::now();
+    lists
+        .search(&opened, query, 100)
+        .map_err(io::Error::other)?;
+    let warm = start.elapsed().as_secs_f64() * 1000.0;
+    lists.search(&opened, "", 100).map_err(io::Error::other)?;
+    let mut slowest = 0f64;
+    let mut typed = String::new();
+    for c in query.chars() {
+        typed.push(c);
+        let start = Instant::now();
+        lists
+            .search(&opened, &typed, 100)
+            .map_err(io::Error::other)?;
+        slowest = slowest.max(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    Ok(Sample {
+        first_byte: Some(cold),
+        first_n: Some(warm),
+        total: slowest,
+        records: first.matched,
+        bytes: serde_json::to_vec(&first).map_or(0, |json| json.len()),
+    })
+}
+
 fn run_show_once(repo: &Path, rev: &str) -> io::Result<Sample> {
     let start = Instant::now();
     let opened = plx_core::repo::Repo::discover(repo).map_err(io::Error::other)?;
@@ -542,6 +592,7 @@ fn measure_runs(
         }
         Kind::PlxBlame => run_session_once(repo, &case.target, condition),
         Kind::PlxShow => run_show_once(repo, &case.target),
+        Kind::PlxFiles => run_files_once(repo, &case.target),
         Kind::PlxLog => run_history_once(repo, &case.target, None, condition),
         Kind::PlxLineLog => {
             let (lines, path) = parse_line_target(&case.target)?;
@@ -756,6 +807,9 @@ fn report(opts: &Options, cases: &[Case]) -> io::Result<()> {
     );
     println!(
         "`plx 라인 히스토리`의 첫 출력은 meta, 첫 N은 첫 커밋(hunk 포함)을 보낸 때다. `log -L`의 첫 출력과 비교한다."
+    );
+    println!(
+        "`plx 파일 찾기`의 첫 출력은 처음 검색(인덱스 읽기 포함), 첫 N은 목록이 있을 때 전체 검색, 전체는 한 글자씩 칠 때 가장 느린 글자다(commit-graph와 무관)."
     );
     Ok(())
 }

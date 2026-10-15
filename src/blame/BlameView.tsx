@@ -13,6 +13,7 @@ import { BlameModel } from "./model";
 import type { Navigation } from "../nav";
 import { watchFile, watchRepo } from "../watch";
 import { WorktreePicker } from "../worktree/WorktreePicker";
+import { isQuickOpenKey, useQuickOpen } from "../quickopen/QuickOpen";
 import { openBlame, type BlameTarget } from "./session";
 import type { BlameMeta, BlameStats, CommitInfo, Neighbor, Version } from "./types";
 
@@ -60,6 +61,7 @@ type Actions = {
   lineHistory(): boolean;
   graph(): boolean;
   worktrees(): boolean;
+  files(): boolean;
   back(): boolean;
   help(): boolean;
   escape(): boolean;
@@ -106,6 +108,13 @@ export function BlameView({
   const [help, setHelp] = useState(false);
   const [worktrees, setWorktrees] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  // 저장소를 아직 모르면(meta 전) 연 파일 경로로 찾는다(저장소 안의 아무 경로면 된다).
+  const quickOpen = useQuickOpen({
+    repo: meta?.repo ?? target.repo ?? path,
+    current: meta?.path ?? null,
+    onNavigate,
+    onClosed: () => editor.current?.view.focus(),
+  });
 
   const timers = useRef({ show: 0, hide: 0, toast: 0 });
   const pointerInCard = useRef(false);
@@ -326,6 +335,10 @@ export function BlameView({
       setWorktrees(true);
       return true;
     },
+    files() {
+      quickOpen.open();
+      return true;
+    },
     back() {
       onBack();
       return true;
@@ -392,6 +405,8 @@ export function BlameView({
           const { kind: _kind, ...m } = event;
           relPath = m.path;
           setMeta(m);
+          // 빈 검색어 Quick Open의 최근 연 파일
+          call("files_touch", { repo: m.repo, path: m.path }).catch(() => {});
           const parent = container.current;
           if (m.content && parent) {
             const shown = displayText(m.content.text);
@@ -418,6 +433,7 @@ export function BlameView({
                 lineHistory: () => actions.current.lineHistory(),
                 graph: () => actions.current.graph(),
                 worktrees: () => actions.current.worktrees(),
+                files: () => actions.current.files(),
                 back: () => actions.current.back(),
                 help: () => actions.current.help(),
                 escape: () => actions.current.escape(),
@@ -489,7 +505,13 @@ export function BlameView({
   // 에디터 밖(카드, 머리줄)에 포커스가 있어도 q·?·Esc는 먹게 한다.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!latest.current.active || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (!latest.current.active || e.defaultPrevented) return;
+      if (isQuickOpenKey(e)) {
+        actions.current.files();
+        e.preventDefault();
+        return;
+      }
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       const target = e.target as HTMLElement | null;
       if (target?.closest(".cm-editor") || target?.closest("input, textarea")) return;
       const handled =
@@ -604,6 +626,7 @@ export function BlameView({
           }}
         />
       )}
+      {quickOpen.overlay}
       {toast && (
         <div className="toast" role="status">
           {toast}

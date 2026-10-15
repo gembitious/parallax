@@ -32,6 +32,8 @@ export type EditorKeys = {
   graph(): boolean;
   /** `W` 워크트리 고르기 */
   worktrees(): boolean;
+  /** `f`·Ctrl+P(⌘P) 파일 찾기 */
+  files(): boolean;
   back(): boolean;
   help(): boolean;
   escape(): boolean;
@@ -87,6 +89,9 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
           { key: "L", run: run(keys.lineHistory) },
           { key: "G", run: run(keys.graph) },
           { key: "W", run: run(keys.worktrees) },
+          { key: "f", run: run(keys.files) },
+          // 브라우저의 인쇄(Ctrl+P) 대신
+          { key: "Mod-p", run: run(keys.files), preventDefault: true },
           { key: "q", run: run(keys.back) },
           { key: "?", run: run(keys.help) },
           { key: "Escape", run: run(keys.escape) },

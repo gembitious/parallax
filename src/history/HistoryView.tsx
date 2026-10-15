@@ -5,6 +5,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Help } from "../Help";
 import { WorktreePicker } from "../worktree/WorktreePicker";
+import { call } from "../ipc";
+import { isQuickOpenKey, useQuickOpen } from "../quickopen/QuickOpen";
 import { copyText } from "../clipboard";
 import { formatCount, formatDate, parseTz, relativeTime, shortSha } from "../blame/format";
 import { STATUS_LETTER, STATUS_NAME } from "../commit/types";
@@ -76,6 +78,12 @@ export function HistoryView({
   const [worktrees, setWorktrees] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const quickOpen = useQuickOpen({
+    repo: meta?.repo ?? target.repo ?? target.path,
+    current: meta?.path ?? null,
+    onNavigate,
+    onClosed: () => listRef.current?.focus({ preventScroll: true }),
+  });
   /** 숨겼다 다시 보일 때 되돌릴 스크롤 위치(숨긴 요소의 스크롤은 브라우저마다 남지 않을 수 있다) */
   const savedTop = useRef(0);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -88,8 +96,8 @@ export function HistoryView({
     page: null as Promise<number | null> | null,
     reported: false,
   });
-  const latest = useRef({ active, meta, selected, help, search, count });
-  latest.current = { active, meta, selected, help, search, count };
+  const latest = useRef({ active, meta, selected, help, search, count, openFiles: quickOpen.open });
+  latest.current = { active, meta, selected, help, search, count, openFiles: quickOpen.open };
 
   const showToast = (message: string) => {
     setToast(message);
@@ -105,6 +113,7 @@ export function HistoryView({
           const { kind: _kind, ...m } = event;
           setMeta(m);
           setProgress({ kind: "streaming" });
+          call("files_touch", { repo: m.repo, path: m.path }).catch(() => {});
           break;
         }
         case "entries":
@@ -295,7 +304,13 @@ export function HistoryView({
   // 키: 화면이 맨 위일 때만. 검색 입력 중이면 넘긴다(입력 칸이 Enter·Esc를 따로 다룬다).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!latest.current.active || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (!latest.current.active || e.defaultPrevented) return;
+      if (isQuickOpenKey(e)) {
+        latest.current.openFiles();
+        e.preventDefault();
+        return;
+      }
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       if ((e.target as HTMLElement | null)?.closest("input, textarea")) return;
       const { selected: at, help: helpOpen } = latest.current;
       let handled = true;
@@ -516,6 +531,7 @@ export function HistoryView({
           }}
         />
       )}
+      {quickOpen.overlay}
       {toast && (
         <div className="toast" role="status">
           {toast}

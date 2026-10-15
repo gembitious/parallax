@@ -7,6 +7,7 @@ use plx_core::blame_session::{SessionEvent, Sessions};
 use plx_core::cache::DiskCache;
 use plx_core::commit::{self, CommitDetail, FileVersions};
 use plx_core::commit_graph::{self, GraphStatus, Progress};
+use plx_core::files::{FileLists, FileSearch};
 use plx_core::graph::{GraphEvent, GraphOptions, GraphSessions, GraphWindow};
 use plx_core::history::{HistoryEvent, HistorySessions, LineRange};
 use plx_core::navigate::{self, Direction, Version};
@@ -26,6 +27,7 @@ pub struct GitState {
     histories: HistorySessions,
     graphs: GraphSessions,
     watchers: Watchers,
+    files: FileLists,
     cache: Option<Arc<DiskCache>>,
 }
 
@@ -56,6 +58,7 @@ impl GitState {
             histories,
             graphs,
             watchers: Watchers::new(on_change),
+            files: FileLists::new(),
             cache,
         }
     }
@@ -298,6 +301,42 @@ pub async fn worktrees(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Quick Open: 추적 파일을 `query`로 찾아 점수 순 앞 `limit`개(기본 100). 같은 저장소에 새 검색이 오면
+/// 이 검색은 "취소했다" 오류로 끝난다. 빈 검색어는 최근 연 파일(`files_touch`)부터 보인다.
+#[tauri::command]
+pub async fn files_search(
+    git: State<'_, Arc<GitState>>,
+    repo: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<FileSearch, String> {
+    let git = git.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = git
+            .repos
+            .for_path(Path::new(&repo))
+            .map_err(|e| e.to_string())?;
+        git.files.search(&repo, &query, limit.unwrap_or(100))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 파일(저장소 기준 경로)을 최근 연 파일로 기억한다. blame·히스토리 화면이 열 때 부른다.
+#[tauri::command]
+pub async fn files_touch(
+    git: State<'_, Arc<GitState>>,
+    repo: String,
+    path: String,
+) -> Result<(), String> {
+    blocking(git, move |git| {
+        let repo = git.repos.for_path(Path::new(&repo))?;
+        git.files.touch(&repo, &path);
+        Ok(())
+    })
+    .await
 }
 
 /// 감시 구독(저장소·파일)을 끝낸다. 이미 끝났으면 `false`.
