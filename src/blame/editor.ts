@@ -28,6 +28,8 @@ export type EditorKeys = {
   history(): boolean;
   /** `L` 라인 히스토리(선택한 줄들, 없으면 커서 줄) */
   lineHistory(): boolean;
+  /** `G` 커밋 그래프(커서 줄의 커밋을 골라서) */
+  graph(): boolean;
   back(): boolean;
   help(): boolean;
   escape(): boolean;
@@ -81,6 +83,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
           { key: ">", run: run(keys.newer) },
           { key: "H", run: run(keys.history) },
           { key: "L", run: run(keys.lineHistory) },
+          { key: "G", run: run(keys.graph) },
           { key: "q", run: run(keys.back) },
           { key: "?", run: run(keys.help) },
           { key: "Escape", run: run(keys.escape) },

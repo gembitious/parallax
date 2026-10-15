@@ -34,6 +34,16 @@
   --heat-7: #e0640a;
   --uncommitted: #1a7f37;
 
+  /* 그래프 레인 색(plx-core graph::COLORS = 8) */
+  --lane-0: #0969da;
+  --lane-1: #1a7f37;
+  --lane-2: #bc4c00;
+  --lane-3: #8250df;
+  --lane-4: #cf222e;
+  --lane-5: #0e7490;
+  --lane-6: #9a6700;
+  --lane-7: #bf3989;
+
   --syn-keyword: #cf222e;
   --syn-string: #0a3069;
   --syn-comment: #6e7781;
@@ -79,6 +89,15 @@
     --heat-6: #cc7424;
     --heat-7: #f0883e;
     --uncommitted: #3fb950;
+
+    --lane-0: #4493f8;
+    --lane-1: #3fb950;
+    --lane-2: #f0883e;
+    --lane-3: #a371f7;
+    --lane-4: #f85149;
+    --lane-5: #39c5cf;
+    --lane-6: #d29922;
+    --lane-7: #db61a2;
 
     --syn-keyword: #ff7b72;
     --syn-string: #a5d6ff;
@@ -941,4 +960,96 @@ kbd {
 
 .hud-failed .hud-label {
   text-decoration: line-through;
+}
+
+/* ---------------------------------------------------------------- 커밋 그래프 */
+
+.graph {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.graph-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.graph-list {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  outline: none;
+}
+
+.graph-rows {
+  position: relative;
+}
+
+/* 행 높이는 graph/draw.ts의 ROW_HEIGHT(24px)와 같다. 왼쪽 여백(레인 칸)은 행마다 준다. */
+.graph-row {
+  position: absolute;
+  right: 0;
+  left: 0;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding-right: 12px;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.graph-row.selected {
+  background: var(--selection);
+}
+
+/* 레인은 목록 위에 겹친 캔버스 하나에 그린다(클릭은 목록이 받는다). */
+.graph-lanes {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+.label {
+  flex-shrink: 0;
+  max-width: 200px;
+  overflow: hidden;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+}
+
+.label-branch {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.label-branch.current,
+.label-head {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+}
+
+.label-tag {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.label-more {
+  border-color: transparent;
+}
+
+.segmented {
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 2px;
 }

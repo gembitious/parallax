@@ -445,7 +445,7 @@ pub struct CommitInfo {
     pub changed_files: usize,
 }
 
-fn person(signature: gix::actor::SignatureRef<'_>, encoding: Option<&BStr>) -> Person {
+pub(crate) fn person(signature: gix::actor::SignatureRef<'_>, encoding: Option<&BStr>) -> Person {
     let signature = signature.trim();
     let time = signature.time().unwrap_or_default();
     Person {

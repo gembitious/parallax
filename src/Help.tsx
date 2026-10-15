@@ -8,9 +8,14 @@ const COMMON: Key[] = [
   { keys: "Esc", what: "닫기" },
 ];
 
-export type HelpView = "blame" | "commit" | "history";
+export type HelpView = "blame" | "commit" | "history" | "graph";
 
-const TITLES: Record<HelpView, string> = { blame: "blame", commit: "커밋 상세", history: "파일 히스토리" };
+const TITLES: Record<HelpView, string> = {
+  blame: "blame",
+  commit: "커밋 상세",
+  history: "파일 히스토리",
+  graph: "커밋 그래프",
+};
 
 const KEYS: Record<HelpView, Key[]> = {
   blame: [
@@ -25,7 +30,7 @@ const KEYS: Record<HelpView, Key[]> = {
     { keys: "거터 클릭", what: "커밋 카드 고정" },
     { keys: "H", what: "파일 히스토리 (이 리비전부터)" },
     { keys: "L", what: "라인 히스토리 (선택한 줄, 없으면 커서 줄)" },
-    { keys: "G", what: "커밋 그래프", note: "M3", planned: true },
+    { keys: "G", what: "커밋 그래프 (이 줄의 커밋을 골라서)" },
   ],
   commit: [
     { keys: "j / k", what: "다음·이전 파일" },
@@ -34,6 +39,7 @@ const KEYS: Record<HelpView, Key[]> = {
     { keys: "Enter", what: "이 리비전의 파일 blame" },
     { keys: "a", what: "이 파일만 ↔ 모든 파일", note: "히스토리에서 열었을 때" },
     { keys: "y", what: "커밋 sha 복사" },
+    { keys: "G", what: "커밋 그래프 (이 커밋을 골라서)" },
   ],
   history: [
     { keys: "j / k", what: "아래·위 커밋" },
@@ -45,6 +51,16 @@ const KEYS: Record<HelpView, Key[]> = {
     { keys: "y", what: "커밋 sha 복사" },
     { keys: "/", what: "검색 (요약·작성자·sha·경로)" },
     { keys: "n / N", what: "다음·이전 검색 결과" },
+    { keys: "G", what: "커밋 그래프 (고른 커밋을 골라서)" },
+  ],
+  graph: [
+    { keys: "j / k", what: "아래·위 커밋" },
+    { keys: "PageDown / PageUp", what: "한 화면씩" },
+    { keys: "Home / End", what: "처음·끝" },
+    { keys: "Enter", what: "커밋 상세" },
+    { keys: "y", what: "커밋 sha 복사" },
+    { keys: "R", what: "원격 브랜치 모두 ↔ 로컬 브랜치와 upstream만" },
+    { keys: "/", what: "검색 (메시지·작성자·경로)", note: "M3", planned: true },
   ],
 };
 

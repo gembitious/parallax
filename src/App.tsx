@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { BlameView } from "./blame/BlameView";
 import { CommitView } from "./commit/CommitView";
+import { GraphView } from "./graph/GraphView";
 import { HistoryView } from "./history/HistoryView";
 import { Hud } from "./Hud";
 import { call } from "./ipc";
@@ -14,7 +15,6 @@ import {
   type PlxRequest,
   type Shown,
   type StackEntry,
-  type ViewRequest,
 } from "./nav";
 import { afterPaint, getPerfInfo, initPerf, nowMs, phasesBetween, record } from "./perf";
 
@@ -23,67 +23,6 @@ type AppInfo = { version: string; coreVersion: string };
 // docs/MILESTONES.md 성능 예산
 const COLD_BUDGET_MS = 1000;
 const PLX_BUDGET_MS = 100;
-
-const VIEW_NAMES: Record<ViewRequest["kind"], string> = {
-  graph: "커밋 그래프 (M3)",
-  blame: "blame",
-  log: "파일 히스토리",
-  lineLog: "라인 히스토리",
-  show: "커밋 상세",
-};
-
-function ViewDetails({ request }: { request: ViewRequest }) {
-  switch (request.kind) {
-    case "graph":
-    case "blame":
-      return null;
-    case "log":
-      return (
-        <>
-          <dt>파일</dt>
-          <dd className="mono">{request.path}</dd>
-        </>
-      );
-    case "lineLog":
-      return (
-        <>
-          <dt>파일</dt>
-          <dd className="mono">{request.path}</dd>
-          <dt>범위</dt>
-          <dd className="mono">
-            {request.start}–{request.end}
-          </dd>
-        </>
-      );
-    case "show":
-      return (
-        <>
-          <dt>리비전</dt>
-          <dd className="mono">{request.rev}</dd>
-        </>
-      );
-  }
-}
-
-/** 아직 만들지 않은 뷰. 받은 요청만 보여 준다. */
-function Placeholder({ request, onShown }: { request: PlxRequest; onShown(committedMs: number): void }) {
-  // 요청마다 새 컴포넌트다(key). 처음 그렸을 때 한 번만 알린다.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useLayoutEffect(() => onShown(nowMs()), []);
-  return (
-    <div className="placeholder">
-      <dl className="request">
-        <dt>뷰</dt>
-        <dd>{VIEW_NAMES[request.request.kind]}</dd>
-        <ViewDetails request={request.request} />
-        <dt>호출</dt>
-        <dd className="mono">plx {request.args.join(" ")}</dd>
-        <dt>위치</dt>
-        <dd className="mono">{request.cwd}</dd>
-      </dl>
-    </div>
-  );
-}
 
 /** plx 호출(또는 콜드 스타트)부터 대상 뷰의 첫 화면(내용 또는 오류)이 그려지기까지를 구간별로 남긴다. */
 function recordShown({ request, receivedMs }: Shown, committedMs: number, paintedMs: number | null) {
@@ -205,42 +144,36 @@ export default function App() {
     <div className="app">
       {request ? (
         <main className="view">
-          {stack.length > 0 ? (
-            stack.map((entry, i) => {
-              const isTop = i === stack.length - 1;
-              const common = {
-                active: isTop,
-                depth: i + 1,
-                onShown: entry.via === "request" ? (ms: number) => onShown(request.id, ms) : undefined,
-                onBack: back,
-                onNavigate: (navigation: Navigation) => dispatch({ type: "navigate", navigation }),
-              };
-              return (
-                <div key={entry.key} className="stack-entry" hidden={!isTop}>
-                  {entry.view === "blame" ? (
-                    <BlameView
-                      {...common}
-                      target={entry.target}
-                      line={entry.line}
-                      backDirection={backDirectionOf(entry.via)}
-                      cold={entry.via === "request" && request.cold}
-                    />
-                  ) : entry.view === "history" ? (
-                    <HistoryView
-                      {...common}
-                      target={entry.target}
-                      lines={entry.lines}
-                      cold={entry.via === "request" && request.cold}
-                    />
-                  ) : (
-                    <CommitView {...common} repo={entry.repo} rev={entry.rev} path={entry.path} only={entry.only} />
-                  )}
-                </div>
-              );
-            })
-          ) : (
-            <Placeholder key={request.id} request={request} onShown={(ms) => onShown(request.id, ms)} />
-          )}
+          {stack.map((entry, i) => {
+            const isTop = i === stack.length - 1;
+            const common = {
+              active: isTop,
+              depth: i + 1,
+              onShown: entry.via === "request" ? (ms: number) => onShown(request.id, ms) : undefined,
+              onBack: back,
+              onNavigate: (navigation: Navigation) => dispatch({ type: "navigate", navigation }),
+            };
+            const cold = entry.via === "request" && request.cold;
+            return (
+              <div key={entry.key} className="stack-entry" hidden={!isTop}>
+                {entry.view === "blame" ? (
+                  <BlameView
+                    {...common}
+                    target={entry.target}
+                    line={entry.line}
+                    backDirection={backDirectionOf(entry.via)}
+                    cold={cold}
+                  />
+                ) : entry.view === "history" ? (
+                  <HistoryView {...common} target={entry.target} lines={entry.lines} cold={cold} />
+                ) : entry.view === "graph" ? (
+                  <GraphView {...common} repo={entry.repo} focus={entry.focus} cold={cold} />
+                ) : (
+                  <CommitView {...common} repo={entry.repo} rev={entry.rev} path={entry.path} only={entry.only} />
+                )}
+              </div>
+            );
+          })}
         </main>
       ) : (
         <main className="empty">

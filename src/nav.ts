@@ -1,4 +1,4 @@
-// 화면 상태: 받은 plx 요청과 탐색 스택(blame·커밋 상세·파일 히스토리). 순수 함수라 단위 테스트한다(nav.test.ts).
+// 화면 상태: 받은 plx 요청과 탐색 스택(blame·커밋 상세·파일 히스토리·그래프). 순수 함수라 단위 테스트한다(nav.test.ts).
 import { shortSha } from "./blame/format";
 import type { BlameTarget } from "./blame/session";
 import type { HistoryTarget, LineRange } from "./history/types";
@@ -12,7 +12,9 @@ export type Navigation =
   /** 커밋 상세·히스토리 → 그 리비전의 파일 blame */
   | { kind: "file"; target: BlameTarget; line: number | null }
   /** blame → 파일 히스토리(`H`), `lines`가 있으면 라인 히스토리(`L`) */
-  | { kind: "history"; target: HistoryTarget; lines?: LineRange };
+  | { kind: "history"; target: HistoryTarget; lines?: LineRange }
+  /** 어느 화면에서든 → 커밋 그래프(`G`). `rev`가 있으면 그 커밋을 골라 둔다. */
+  | { kind: "graph"; repo: string; rev: string | null };
 
 /** 열 뷰. plx-core/src/cli.rs의 Request와 같은 모양. */
 export type ViewRequest =
@@ -38,7 +40,7 @@ export type PlxRequest = {
 export type Shown = { request: PlxRequest; receivedMs: number };
 
 /** 탐색 스택의 화면 하나. 아래 화면은 숨긴 채 살려 둬 뒤로 오면 커서·스크롤이 그대로다. */
-export type StackEntry = BlameEntry | CommitEntry | HistoryEntry;
+export type StackEntry = BlameEntry | CommitEntry | HistoryEntry | GraphEntry;
 
 export type BlameEntry = {
   key: number;
@@ -71,6 +73,16 @@ export type HistoryEntry = {
   via: "request" | "history";
 };
 
+export type GraphEntry = {
+  key: number;
+  view: "graph";
+  /** 저장소 안의 아무 경로(작업트리 또는 plx 호출의 cwd) */
+  repo: string;
+  /** 처음 고를 커밋 */
+  focus: string | null;
+  via: "request" | "graph";
+};
+
 export type ViewState = { shown: Shown | null; stack: StackEntry[] };
 
 export type ViewAction =
@@ -90,7 +102,7 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
       const { request } = action;
       const view = request.request;
       const key = nextEntryKey++;
-      const root: StackEntry | null =
+      const root: StackEntry =
         view.kind === "blame"
           ? { key, view: "blame", target: { repo: null, path: view.path, rev: null }, line: view.line, via: "request" }
           : view.kind === "show"
@@ -103,8 +115,8 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
                   lines: view.kind === "lineLog" ? { start: view.start, end: view.end } : null,
                   via: "request",
                 }
-              : null;
-      return { shown: { request, receivedMs: action.receivedMs }, stack: root ? [root] : [] };
+              : { key, view: "graph", repo: request.cwd, focus: null, via: "request" };
+      return { shown: { request, receivedMs: action.receivedMs }, stack: [root] };
     }
     case "navigate": {
       const { navigation } = action;
@@ -122,7 +134,9 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
             }
           : navigation.kind === "history"
             ? { key, view: "history", target: navigation.target, lines: navigation.lines ?? null, via: "history" }
-            : { key, view: "blame", target: navigation.target, line: navigation.line, via: navigation.kind };
+            : navigation.kind === "graph"
+              ? { key, view: "graph", repo: navigation.repo, focus: navigation.rev, via: "graph" }
+              : { key, view: "blame", target: navigation.target, line: navigation.line, via: navigation.kind };
       return { ...state, stack: [...state.stack, entry].slice(-MAX_STACK) };
     }
     case "back":
@@ -137,10 +151,17 @@ export const backDirectionOf = (via: StackEntry["via"]) =>
 /** 탐색으로 연 화면의 창 제목. 경로는 저장소 기준이다. */
 export function titleOf(entry: StackEntry): string {
   if (entry.view === "commit") return `커밋 ${shortSha(entry.rev)}`;
+  if (entry.view === "graph") return `그래프 ${lastName(entry.repo)}`;
   const { target } = entry;
   const at = target.rev ? ` @${shortSha(target.rev)}` : "";
   if (entry.view === "blame") return `blame ${target.path}${at}`;
   return entry.lines
     ? `라인 히스토리 ${target.path}:${entry.lines.start}-${entry.lines.end}${at}`
     : `히스토리 ${target.path}${at}`;
+}
+
+/** 경로의 마지막 이름(Windows 경로도) */
+export function lastName(path: string): string {
+  const trimmed = path.replace(/[\\/]+$/, "");
+  return trimmed.slice(Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\")) + 1) || trimmed || path;
 }

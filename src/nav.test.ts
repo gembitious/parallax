@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_STACK, backDirectionOf, titleOf, viewReducer, type PlxRequest, type ViewState } from "./nav";
+import { MAX_STACK, backDirectionOf, lastName, titleOf, viewReducer, type PlxRequest, type ViewState } from "./nav";
 
 const request = (id: number, request: PlxRequest["request"]): PlxRequest => ({
   id,
@@ -40,9 +40,9 @@ describe("viewReducer", () => {
     expect(next.stack[0].key).not.toBe(state.stack[0].key);
   });
 
-  it("화면이 아직 없는 요청은 스택을 비우고, plx show는 커밋 상세로 시작한다", () => {
+  it("인자 없는 plx는 cwd의 그래프로, plx show는 커밋 상세로 시작한다", () => {
     const state = viewReducer(empty, { type: "request", request: request(1, { kind: "graph" }), receivedMs: 0 });
-    expect(state.stack).toEqual([]);
+    expect(state.stack).toMatchObject([{ view: "graph", repo: "/repo", focus: null, via: "request" }]);
     expect(state.shown?.request.id).toBe(1);
     const show = viewReducer(state, { type: "request", request: request(2, { kind: "show", rev: "HEAD~1" }), receivedMs: 0 });
     expect(show.stack).toMatchObject([{ view: "commit", repo: "/repo", rev: "HEAD~1", path: null, only: false, via: "request" }]);
@@ -144,5 +144,24 @@ describe("탐색 도우미", () => {
     };
     expect(titleOf(entry)).toBe("blame src/한글.rs @1b019344");
     expect(titleOf({ ...entry, target: { ...entry.target, rev: null } })).toBe("blame src/한글.rs");
+  });
+
+  it("G는 어느 화면에서든 그 커밋을 고른 그래프로 간다", () => {
+    let state = viewReducer(empty, { type: "request", request: blame(1), receivedMs: 0 });
+    state = viewReducer(state, { type: "navigate", navigation: { kind: "graph", repo: "/repo/sub", rev: "c1" } });
+    expect(state.stack[1]).toMatchObject({ view: "graph", repo: "/repo/sub", focus: "c1", via: "graph" });
+    expect(titleOf(state.stack[1])).toBe("그래프 sub");
+    state = viewReducer(state, { type: "navigate", navigation: { kind: "commit", repo: "/repo", rev: "c1", path: null } });
+    expect(state.stack.map((e) => e.view)).toEqual(["blame", "graph", "commit"]);
+    expect(viewReducer(state, { type: "back" }).stack.map((e) => e.view)).toEqual(["blame", "graph"]);
+  });
+});
+
+describe("lastName", () => {
+  it("takes the last path component on every platform", () => {
+    expect(lastName("/home/me/한글 저장소")).toBe("한글 저장소");
+    expect(lastName("C:\\work\\repo\\")).toBe("repo");
+    expect(lastName("repo")).toBe("repo");
+    expect(lastName("/")).toBe("/");
   });
 });

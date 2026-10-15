@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 앱 지연 측정: 콜드 스타트 1회 + 상주 인스턴스에 plx 호출 N회, 그 호출들의 blame 첫 줄 표시,
-# 커밋 상세(plx show), 파일 히스토리(plx log) 첫 50개 표시.
+# 커밋 상세(plx show), 파일 히스토리(plx log) 첫 50개 표시, 커밋 그래프(인자 없는 plx) 첫 화면 표시.
 # blame은 저장소의 파일 N/2개를, 히스토리는 그중 5개를 두 번씩 연다. 처음은 git, 두 번째는 캐시 히트다(캐시는 임시 디렉터리).
 #
 # 릴리스 빌드로 잰다. 개발 빌드 수치는 성능 예산 판단에 쓰지 않는다.
@@ -171,6 +171,18 @@ read -r hist_med hist_p90 hist_max <<<"$(printf '%s\n' "$git_history" | total_of
 read -r hcache_med hcache_p90 hcache_max <<<"$(printf '%s\n' "$cached_history" | total_of | summary)"
 git_page="$(printf '%s\n' "$git_history" | sed -n 's/.*git 50개째 \([0-9.]*\).*/\1/p' | summary | awk '{ print $1 }')"
 
+# 커밋 그래프: 인자 없는 plx(이 저장소의 그래프)를 몇 번 연다. 매번 새 화면이라 DAG부터 다시 읽는다.
+graphs=5
+for i in $(seq 1 "$graphs"); do
+  "$bin" >/dev/null
+  if ! wait_lines '"kind":"graph"' "$i"; then
+    echo "${i}번째 plx(그래프)의 기록이 나오지 않았다." >&2
+    exit 1
+  fi
+done
+read -r graph_med graph_p90 graph_max <<<"$(LC_ALL=C grep -F '"kind":"graph"' "$log" | total_of | summary)"
+graph_rows="$(LC_ALL=C grep -F '"kind":"graph"' "$log" | head -n 1 | sed -n 's/.*"detail":"커밋 \([0-9]*\).*/\1/p')"
+
 warm_blame="$(LC_ALL=C grep -F '"kind":"blame"' "$log" | LC_ALL=C grep -vF '(콜드 스타트)' || true)"
 git_blame="$(printf '%s\n' "$warm_blame" | LC_ALL=C grep -vF '(캐시)' || true)"
 cached_blame="$(printf '%s\n' "$warm_blame" | LC_ALL=C grep -F '(캐시)' || true)"
@@ -195,13 +207,14 @@ echo
 echo "| 항목 | 값 (ms) | 예산 |"
 echo "|---|---|---|"
 echo "| 콜드 스타트 → 첫 페인트 | $cold | ≤ 1000 |"
-echo "| 상주 인스턴스에 plx 호출 → 대상 뷰 첫 페인트 (중앙값 / p90 / 최대, n=$((calls + shows + logs))) | $warm_med / $warm_p90 / $warm_max | ≤ 100 |"
+echo "| 상주 인스턴스에 plx 호출 → 대상 뷰 첫 페인트 (중앙값 / p90 / 최대, n=$((calls + shows + logs + graphs))) | $warm_med / $warm_p90 / $warm_max | ≤ 100 |"
 echo "| 두 번째 plx 프로세스, 셸에서 본 시간 (중앙값 / p90 / 최대) | $shell_med / $shell_p90 / $shell_max | — |"
 echo "| blame 첫 줄 표시, 처음 여는 파일 (n=$(count_of "$git_blame")) | $blame_med / $blame_p90 / $blame_max | ≤ git 첫 출력 + 30 (git 첫 출력 중앙값 $git_first) |"
 echo "| blame 첫 줄 표시, 다시 여는 파일·캐시 (n=$(count_of "$cached_blame")) | $cache_med / $cache_p90 / $cache_max | ≤ 16 |"
 echo "| 커밋 상세 → 파일 목록 + 첫 diff 표시 (HEAD, n=$shows) | $commit_med / $commit_p90 / $commit_max | ≤ 50 |"
 echo "| 파일 히스토리 첫 50개(적으면 전부) 표시, 처음 여는 파일 (n=$(count_of "$git_history")) | $hist_med / $hist_p90 / $hist_max | ≤ git 50개째 + 30 (git 중앙값 $git_page) |"
 echo "| 파일 히스토리, 다시 여는 파일·캐시 (n=$(count_of "$cached_history")) | $hcache_med / $hcache_p90 / $hcache_max | ≤ 16 |"
+echo "| 커밋 그래프 첫 화면 표시 (이 저장소 커밋 ${graph_rows:-?}개, n=$graphs) | $graph_med / $graph_p90 / $graph_max | ≤ 150 |"
 echo
 echo "- 콜드 스타트 구간(ms): $cold_phases"
 echo "- 콜드 스타트의 blame(ms): $cold_blame"

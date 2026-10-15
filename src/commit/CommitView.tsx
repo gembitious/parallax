@@ -1,7 +1,7 @@
 // 커밋 상세: 머리(요약·작성자·날짜·sha·메시지), 바뀐 파일 목록, 고른 파일의 diff(분할·통합).
 // 파일 히스토리에서 열면 그 파일만 보인다(a로 모든 파일).
 // 키: j/k 파일 이동, n/N 다음·이전 바뀐 부분, u 분할↔통합, Enter 그 리비전의 파일 blame, a 이 파일만↔모든 파일,
-//     y sha 복사, q 뒤로, ? 도움말.
+//     y sha 복사, G 그래프, q 뒤로, ? 도움말.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Help } from "../Help";
 import { copyText } from "../clipboard";
@@ -252,6 +252,9 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
           break;
         case "y":
           copySha();
+          break;
+        case "G":
+          onNavigate({ kind: "graph", repo, rev: latest.current.detail?.info.sha ?? rev });
           break;
         case "q":
           onBack();
