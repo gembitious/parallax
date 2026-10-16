@@ -135,8 +135,10 @@ export function HistoryView({
   ];
   const palette = usePalette(commands, () => listRef.current?.focus({ preventScroll: true }));
   const mounted = useMounted();
-  /** 키를 가져가는 창(도움말·워크트리·Quick Open·팔레트)이 열려 있다 */
-  const overlay = help || worktrees || quickOpen.isOpen || palette.isOpen;
+  /** 가속 설정 확인 창이 열려 있다 */
+  const [accelDialog, setAccelDialog] = useState(false);
+  /** 키를 가져가는 창(도움말·워크트리·Quick Open·팔레트·가속 설정 확인)이 열려 있다 */
+  const overlay = help || worktrees || quickOpen.isOpen || palette.isOpen || accelDialog;
   /** 다시 열기를 미룬다: 보이는 화면에 창이나 검색 칸이 열려 있다 */
   const busy = active && (overlay || search.open);
   const snapshot = { active, meta, selected, help, search, count, overlay, busy, openFiles: quickOpen.open, palette: palette.open };
@@ -532,7 +534,15 @@ export function HistoryView({
             바뀜
           </span>
         )}
-        {meta && <Acceleration repo={meta.repo} request={accelRequest} onDone={showToast} />}
+        {meta && (
+          <Acceleration
+            repo={meta.repo}
+            request={accelRequest}
+            active={active}
+            onDone={showToast}
+            onDialog={setAccelDialog}
+          />
+        )}
         <span className="blame-status">
           {progress.kind === "loading" && "여는 중…"}
           {progress.kind === "streaming" && `읽는 중… 커밋 ${formatCount(count)}개`}

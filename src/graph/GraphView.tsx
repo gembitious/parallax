@@ -836,7 +836,7 @@ function GraphPane({
             뒤로 q · {depth - 1}
           </span>
         )}
-        {meta && <Acceleration repo={meta.repo} request={accelRequest} onDone={showToast} />}
+        {meta && <Acceleration repo={meta.repo} request={accelRequest} active={active} onDone={showToast} />}
         <span className="blame-status">
           {progress.kind === "loading" &&
             (progress.commits > 0 ? `커밋 ${formatCount(progress.commits)}개 읽는 중…` : "여는 중…")}
