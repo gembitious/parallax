@@ -11,6 +11,7 @@ import { scrollToRow, visibleRange } from "../history/list";
 import { lastName, type Navigation } from "../nav";
 import { afterPaint, getPerfInfo, nowMs, record } from "../perf";
 import { drawRows, graphWidth, readPalette, ROW_HEIGHT, type Palette, type Visible } from "./draw";
+import { reloadFocus, type Focus } from "./focus";
 import { CHUNK, RowCache, rowWidth } from "./rows";
 import { nextRow, parseQuery, rowMatches, type Query } from "./search";
 import { CANCELLED, openGraph, type GraphHandle } from "./session";
@@ -114,7 +115,6 @@ const RETRY_MS = 1000;
 const MAX_LABELS = 3;
 
 /** 세션을 열고 고를 행: 그 리비전, HEAD, 또는 맨 위(다시 읽을 때 맨 위를 보고 있었다) */
-type Focus = { kind: "rev"; rev: string; offset?: number } | { kind: "head" } | { kind: "top" };
 
 /** 마지막으로 한 검색(n/N이 되풀이한다). 경로 검색은 일치 행들을 한 번 구해 둔다. */
 type Found = { kind: "text"; text: string } | { kind: "path"; path: string; rows: number[]; set: ReadonlySet<number> };
@@ -367,24 +367,19 @@ function GraphPane({
    * 처음 요청한 커밋을 아직 고르지 못했으면(그래프를 읽는 중에 커밋이 생겼다) 그 요청을 이어 간다.
    */
   const reload = () => {
-    if (pendingFocus.current) {
-      openSession(pendingFocus.current, true);
-      return;
-    }
-    const list = listRef.current;
     const { selected: at } = latest.current;
-    const top = list?.scrollTop ?? 0;
-    const atTop = top < ROW_HEIGHT && at === 0;
+    const top = listRef.current?.scrollTop ?? 0;
     // 고른 행의 묶음이 캐시에서 밀려났으면 기억한 sha, 그것도 없으면 보이는 첫 행(늘 캐시에 있다)을 같은 자리에 둔다.
     const remembered = selectedSha.current.index === at ? selectedSha.current.sha : null;
-    const sha = cache.current.get(at)?.sha ?? remembered;
-    const first = Math.floor(top / ROW_HEIGHT);
-    const anchor: Focus | null = sha
-      ? { kind: "rev", rev: sha, offset: at * ROW_HEIGHT - top }
-      : cache.current.get(first)
-        ? { kind: "rev", rev: cache.current.get(first)!.sha, offset: first * ROW_HEIGHT - top }
-        : null;
-    openSession(atTop || !anchor ? { kind: "top" } : anchor, true);
+    const focusOn = reloadFocus({
+      pending: pendingFocus.current,
+      scrollTop: top,
+      rowHeight: ROW_HEIGHT,
+      selected: at,
+      selectedSha: cache.current.get(at)?.sha ?? remembered,
+      firstVisibleSha: cache.current.get(Math.floor(top / ROW_HEIGHT))?.sha ?? null,
+    });
+    openSession(focusOn, true);
   };
 
   // 그래프를 연다. 화면을 떠나면(끝난 뒤에도) 닫아 백엔드의 레이아웃을 버린다.
