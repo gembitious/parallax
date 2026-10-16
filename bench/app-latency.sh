@@ -220,12 +220,23 @@ phase_medians() {
 cold_phases="$(grep '"kind":"cold"' "$log" | head -n 1 | phases_of)"
 cold_blame="$(LC_ALL=C grep -F '(콜드 스타트)' "$log" | LC_ALL=C grep -F '"kind":"blame"' | head -n 1 | phases_of)"
 warm_phases="$(LC_ALL=C grep -F '"kind":"plx"' "$log" | phase_medians)"
-# 가장 느린 그래프 첫 화면: 어느 구간이 늘었는지(참조 · 첫 화면 보냄 · 표시 · 레이아웃 끝)와 DAG를 읽은 곳
-slowest_graph="$(LC_ALL=C grep -F '"kind":"graph"' "$log" |
-  awk '{ if (match($0, /"totalMs":[0-9.]*/)) print substr($0, RSTART + 10, RLENGTH - 10) "\t" $0 }' |
-  LC_ALL=C sort -n | tail -n 1 | cut -f 2-)"
-slowest_graph_phases="$(printf '%s\n' "$slowest_graph" | phases_of)"
-slowest_graph_detail="$(printf '%s\n' "$slowest_graph" | sed -n 's/.*"detail":"\([^"]*\)".*/\1/p')"
+# 기록 가운데 가장 느린 것: "합계 · 구간 — 이름 (설명)". 가끔 한 번만 크게 느린 것(p90 = 최대)이 어느 구간인지 본다.
+# 기록의 열쇠는 이름 순이다(kind 다음이 label).
+slowest() {
+  local line record detail
+  line="$(awk '{ if (match($0, /"totalMs":[0-9.]*/)) print substr($0, RSTART + 10, RLENGTH - 10) "\t" $0 }' |
+    LC_ALL=C sort -n | tail -n 1)"
+  if [ -z "$line" ]; then
+    echo "-"
+    return
+  fi
+  record="$(printf '%s\n' "$line" | cut -f 2-)"
+  detail="$(printf '%s\n' "$record" | sed -n 's/.*"detail":"\([^"]*\)".*/\1/p')"
+  printf '%s · %s — %s%s\n' "$(printf '%s\n' "$line" | cut -f 1 | awk '{ printf "%.1f", $1 }')" \
+    "$(printf '%s\n' "$record" | phases_of)" \
+    "$(printf '%s\n' "$record" | sed -n 's/.*"kind":"[^"]*","label":"\([^"]*\)".*/\1/p')" \
+    "${detail:+ ($detail)}"
+}
 echo "- 환경: $(uname -srm), $(date '+%Y-%m-%d'), $("$bin" --version 2>/dev/null || echo plx)"
 if [ "$unpainted" -gt 0 ]; then
   echo "- 주의: 페인트를 측정하지 못한 기록 ${unpainted}건(창이 화면에 그려지지 않는 환경). 그 기록은 렌더까지만 잰 값이다."
@@ -246,4 +257,10 @@ echo
 echo "- 콜드 스타트 구간(ms): $cold_phases"
 echo "- 콜드 스타트의 blame(ms): $cold_blame"
 echo "- 상주 인스턴스에 plx 호출, 구간별 중앙값(ms): $warm_phases"
-echo "- 가장 느린 그래프 첫 화면(ms): $slowest_graph_phases ($slowest_graph_detail)"
+echo "- 가장 느린 기록(ms, 합계 · 구간 (설명)):"
+echo "  - plx 호출: $(LC_ALL=C grep -F '"kind":"plx"' "$log" | slowest)"
+echo "  - blame, 처음 여는 파일: $(printf '%s\n' "$git_blame" | slowest)"
+echo "  - blame, 캐시: $(printf '%s\n' "$cached_blame" | slowest)"
+echo "  - 커밋 상세: $(LC_ALL=C grep -F '"kind":"commit"' "$log" | slowest)"
+echo "  - 파일 히스토리, 처음 여는 파일: $(printf '%s\n' "$git_history" | slowest)"
+echo "  - 커밋 그래프: $(LC_ALL=C grep -F '"kind":"graph"' "$log" | slowest)"

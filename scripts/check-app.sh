@@ -84,12 +84,12 @@ trap cleanup EXIT
 # 사용자의 blame 캐시와 섞이지 않게 캐시도 임시 디렉터리에 둔다.
 export PLX_PERF=1 PLX_PERF_LOG="$log" PLX_CACHE_DIR="$work/cache"
 
-# 기록에 문자열이 나타날 때까지 기다린다(최대 약 15초).
-wait_for() {
+# 기록에 문자열이 나타날 때까지 기다린다(최대 약 15초, 횟수를 주면 그만큼 0.05초씩).
+wait_for() { # wait_for <문자열> [횟수]
   local i=0
   while ! LC_ALL=C grep -qF "$1" "$log" 2>/dev/null; do
     i=$((i + 1))
-    if [ "$i" -gt 300 ]; then return 1; fi
+    if [ "$i" -gt "${2:-300}" ]; then return 1; fi
     sleep 0.05
   done
 }
@@ -183,8 +183,20 @@ check "저장소 밖의 파일 → 종료 코드 2, 터미널에 오류 (\`$stat
 check "잘못된 인자는 상주 인스턴스를 띄우지 않는다" test "$(plx_count)" -eq 0
 
 # 2. 콜드 스타트와 전달 ---------------------------------------------------
-PLX_DETACH=0 "$bin" package.json >/dev/null 2>&1 &
-check "콜드 스타트 → 첫 화면" wait_for '"kind":"cold"'
+# 이 잡에서 처음 띄우는 앱이라 WebView가 프로필부터 만든다(Windows CI는 몇 초). 넉넉히 기다리되 걸린 시간을 남겨
+# 느려지면 보이게 한다. 기록이 없으면 앱의 출력과 그때까지의 기록을 보인다.
+cold_start="$(now_ms)"
+PLX_DETACH=0 "$bin" package.json >"$work/primary.log" 2>&1 &
+if wait_for '"kind":"cold"' 1200; then
+  result PASS "콜드 스타트 → 첫 화면 ($(($(now_ms) - cold_start))ms)"
+else
+  result FAIL "콜드 스타트 → 첫 화면 ($(($(now_ms) - cold_start))ms 안에 기록이 없다)"
+  echo "--- 상주 인스턴스의 출력"
+  tail -n 20 "$work/primary.log" 2>/dev/null || true
+  echo "--- 그때까지의 기록(종류 이름)"
+  LC_ALL=C sed -n 's/.*"kind":"\([^"]*\)","label":"\([^"]*\)".*/\1 \2/p' "$log" 2>/dev/null | head -n 20 || true
+  echo "---"
+fi
 
 start="$(now_ms)"
 status=0
