@@ -157,10 +157,15 @@ fn start(
     let Some(start) = start else {
         return Ok((meta, Plan::Empty));
     };
-    // 얕은 클론은 이력을 더 받으면(`fetch --unshallow`) 결과가 바뀐다.
-    let key = cache
-        .filter(|_| !repo.is_shallow())
-        .map(|_| CacheKey::history(repo.workdir(), &start.to_string(), &rel));
+    // 얕은 클론(이력을 더 받으면)과 부모를 바꾼 저장소(`git replace`)는 결과가 바뀐다.
+    let key = cache.filter(|_| repo.cacheable()).map(|_| {
+        CacheKey::history(
+            repo.workdir(),
+            &start.to_string(),
+            &rel,
+            &repo.history_settings(),
+        )
+    });
     if let Some(hit) = key
         .as_ref()
         .zip(cache)
@@ -236,9 +241,16 @@ fn start_lines(
         start: first,
         end: last,
     });
-    let key = cache
-        .filter(|_| !repo.is_shallow())
-        .map(|_| CacheKey::line_history(repo.workdir(), &sha, &rel, first, last));
+    let key = cache.filter(|_| repo.cacheable()).map(|_| {
+        CacheKey::line_history(
+            repo.workdir(),
+            &sha,
+            &rel,
+            first,
+            last,
+            &repo.line_history_settings(),
+        )
+    });
     if let Some(hit) = key
         .as_ref()
         .zip(cache)

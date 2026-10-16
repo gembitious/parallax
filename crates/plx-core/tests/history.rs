@@ -761,6 +761,53 @@ fn glob_characters_in_paths_are_literal() {
     assert_eq!(got, ["add slug page"]);
 }
 
+/// 캐시한 히스토리도 작성자 이름을 바꾸는 `.mailmap`과 부모를 바꾸는 `git replace`를 따른다.
+#[test]
+fn cached_history_follows_mailmap_and_replaced_parents() {
+    let dir = scratch_repo("history-mailmap");
+    git(&dir, &["config", "user.name", "kim"]);
+    git(&dir, &["config", "user.email", "kim@old.example"]);
+    for i in 0..3 {
+        std::fs::write(dir.join("f.txt"), format!("{i}\n")).unwrap();
+        commit_at(&dir, &format!("c{i}"), T0 + i * 60);
+    }
+    let cache_dir = tempfile::tempdir().unwrap();
+    let sessions = HistorySessions::with_cache(Arc::new(DiskCache::new(
+        cache_dir.path().to_path_buf(),
+        1 << 30,
+    )));
+    let file = dir.join("f.txt");
+    let first = run_with(&sessions, &file, None);
+    assert_eq!(first.entries[0].author, "kim");
+    assert!(run_with(&sessions, &file, None).stats.cached);
+
+    std::fs::write(
+        dir.join(".mailmap"),
+        "Kim Gaebal <kim@new.example> <kim@old.example>\n",
+    )
+    .unwrap();
+    let mapped = run_with(&sessions, &file, None);
+    assert!(!mapped.stats.cached, "mailmap이 바뀌면 다른 열쇠");
+    assert_eq!(mapped.entries[0].author, "Kim Gaebal");
+    assert_eq!(mapped.entries[0].author_mail, "kim@new.example");
+    assert!(run_with(&sessions, &file, None).stats.cached);
+
+    git(&dir, &["replace", "--graft", "HEAD", "HEAD~2"]);
+    let replaced = run_with(&sessions, &file, None);
+    assert_eq!(
+        shas(&replaced.entries),
+        git_text(&dir, &["log", "--format=%H", "--", "f.txt"])
+            .lines()
+            .collect::<Vec<_>>(),
+        "git처럼 바꾼 부모를 따른다"
+    );
+    assert_eq!(replaced.entries.len(), 2);
+    assert!(
+        !run_with(&sessions, &file, None).stats.cached,
+        "바꾸는 참조가 있으면 넣지 않는다(참조를 지우면 결과가 바뀐다)"
+    );
+}
+
 /// 얕은 클론과 부분 클론(옛 이름을 찾을 blob이 없다)의 결과는 캐시에 넣지 않는다:
 /// 이력을 더 받으면(`fetch --unshallow`) 결과가 바뀌고, 부분 클론은 rename을 잇지 못한 결과다.
 #[test]

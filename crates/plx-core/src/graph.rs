@@ -569,43 +569,6 @@ impl Rewrites {
     fn object(&self, id: ObjectId) -> ObjectId {
         self.replace.get(&id).copied().unwrap_or(id)
     }
-
-    /// git처럼 `core.useReplaceRefs=false`나 `GIT_NO_REPLACE_OBJECTS`면 바꾸지 않는다.
-    fn replace_enabled(repo: &gix::Repository) -> bool {
-        std::env::var_os("GIT_NO_REPLACE_OBJECTS").is_none()
-            && repo.config_snapshot().boolean("core.useReplaceRefs") != Some(false)
-    }
-
-    /// 바꾸는 참조가 놓이는 곳(`GIT_REPLACE_REF_BASE`, 기본 `refs/replace/`)
-    fn replace_base() -> Vec<u8> {
-        let mut base = std::env::var("GIT_REPLACE_REF_BASE")
-            .ok()
-            .filter(|b| !b.is_empty())
-            .unwrap_or_else(|| "refs/replace/".to_owned())
-            .into_bytes();
-        if !base.ends_with(b"/") {
-            base.push(b'/');
-        }
-        base
-    }
-
-    /// `<공통 디렉터리>/info/grafts`: 줄마다 `<커밋> <부모>*`, `#`은 주석
-    fn read_grafts(common_dir: &Path) -> HashMap<ObjectId, Vec<ObjectId>> {
-        let Ok(text) = std::fs::read_to_string(common_dir.join("info").join("grafts")) else {
-            return HashMap::new();
-        };
-        text.lines()
-            .filter(|line| !line.trim_start().starts_with('#'))
-            .filter_map(|line| {
-                let mut ids = line
-                    .split_whitespace()
-                    .map(|hex| ObjectId::from_hex(hex.as_bytes()).ok());
-                let commit = ids.next()??;
-                let parents: Option<Vec<ObjectId>> = ids.collect();
-                Some((commit, parents?))
-            })
-            .collect()
-    }
 }
 
 impl Built {
@@ -847,9 +810,9 @@ fn read_refs(repo: &Repo, options: GraphOptions) -> Result<Refs, String> {
     let mut tags: Vec<(BString, ObjectId)> = Vec::new();
     let mut rewrites = Rewrites {
         replace: HashMap::new(),
-        grafts: Rewrites::read_grafts(local.common_dir()),
+        grafts: crate::repo::read_grafts(local.common_dir()),
     };
-    let replace_base = Rewrites::replace_enabled(&local).then(Rewrites::replace_base);
+    let replace_base = crate::repo::replace_enabled(&local).then(crate::repo::replace_base);
     let platform = local.references().map_err(|e| format!("참조: {e}"))?;
     for reference in platform.all().map_err(|e| format!("참조: {e}"))? {
         // 읽지 못한 참조 하나 때문에 그래프 전체를 포기하지 않는다.
@@ -879,7 +842,7 @@ fn read_refs(repo: &Repo, options: GraphOptions) -> Result<Refs, String> {
         } else if let Some(short) = name.strip_prefix(b"refs/tags/") {
             tags.push((short.into(), id));
         } else if let Some(base) = &replace_base
-            && let Some(original) = name.strip_prefix(base.as_slice())
+            && let Some(original) = name.strip_prefix(base.as_bytes())
             && let Ok(original) = ObjectId::from_hex(original)
         {
             rewrites.replace.insert(original, id);

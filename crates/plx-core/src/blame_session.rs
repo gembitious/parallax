@@ -93,9 +93,9 @@ fn start(
         return start_worktree(&repo, cache, &rel);
     };
     let sha = commit.to_string();
-    // 얕은 클론은 이력을 더 받으면 결과가 바뀐다.
+    // 얕은 클론(이력을 더 받으면)과 부모를 바꾼 저장소(`git replace`)는 결과가 바뀐다.
     let key = cache
-        .filter(|_| !repo.is_shallow())
+        .filter(|_| repo.cacheable())
         .map(|_| CacheKey::commit(repo.workdir(), &sha, &rel, &repo.blame_settings()));
     let cached = key
         .as_ref()
@@ -167,7 +167,7 @@ fn start_worktree(
     }
     // 인덱스에만 있는 파일의 결과는 인덱스에 따라서도 바뀌므로 넣지 않는다.
     let key = match head {
-        Some(head) if in_head && cache.is_some() && !repo.is_shallow() => Some(CacheKey::worktree(
+        Some(head) if in_head && cache.is_some() && repo.cacheable() => Some(CacheKey::worktree(
             repo.workdir(),
             &head.to_string(),
             &rel,

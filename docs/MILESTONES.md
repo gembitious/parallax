@@ -52,7 +52,8 @@ baseline 표가 `bench/results.md`에 있다.
       큰 파일(4MB 넘음)은 "그래도 보기", 줄 diff에 보이지 않는 바뀜(모드·줄 끝·끝 개행·BOM·인코딩)은 알림
       — Windows·macOS 실기 확인 필요
 - [x] Bloom 필터 감지 → 없으면 "가속 설정" 버튼
-      (사용자 확인 후 `git commit-graph write --reachable --changed-paths`, git 2.46 이상이면 필터 v2.
+      (사용자 확인 후 `git commit-graph write --reachable --changed-paths`. 필터 버전은 git 기본값(그래프에 있는 버전,
+      없으면 v1)이고, 얕은 클론·`git replace`·트리 없는 부분 클론처럼 쓸 수 없는 저장소는 까닭을 보인다.
       `commitGraph.changedPaths` 설정은 git에 없어 쓰지 않는다: CLAUDE.md 결정 기록) — Windows·macOS 실기 확인 필요
 
 **완료 기준:** 히스토리·커밋 상세 예산 충족. Bloom 필터 유무별 측정을 `bench/results.md`에 추가.
