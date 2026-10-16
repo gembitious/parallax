@@ -2,7 +2,7 @@
 // 라인 히스토리(`lines`)면 그 줄 범위를 바꾼 커밋 목록과, 고른 커밋이 그 범위를 어떻게 바꿨는지(hunk)를 아래에 보인다.
 // 키: j/k 이동, Enter 커밋 상세(이 파일 diff만), b 그 리비전 blame, , 바꾸기 전 리비전 blame, y sha 복사,
 //     / 검색, n/N 다음·이전 결과, G 그래프, q 뒤로, ? 도움말.
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Help } from "../Help";
 import { WorktreePicker } from "../worktree/WorktreePicker";
 import { call } from "../ipc";
@@ -14,11 +14,13 @@ import { toggleHud } from "../Hud";
 import { copyText } from "../clipboard";
 import { formatCount, formatDate, parseTz, relativeTime, shortSha } from "../blame/format";
 import { STATUS_LETTER, STATUS_NAME } from "../commit/types";
-import type { Navigation } from "../nav";
+import { lastName, type Navigation } from "../nav";
 import { watchRepo } from "../watch";
 import { afterPaint, getPerfInfo, nowMs, record } from "../perf";
+import { ScrollMeter } from "../scrollMeter";
+import { drawWindow, insideDrawn, type DrawnRange } from "../scrollWindow";
 import { Acceleration } from "./Acceleration";
-import { findMatch, formerPaths, matches, scrollToRow, visibleRange } from "./list";
+import { findMatch, formerPaths, matches, scrollToRow } from "./list";
 import { openHistory } from "./session";
 import {
   PAGE,
@@ -126,6 +128,15 @@ export function HistoryView({
   const palette = usePalette(commands, () => listRef.current?.focus({ preventScroll: true }));
   const latest = useRef({ active, meta, selected, help, search, count, openFiles: quickOpen.open, palette: palette.open });
   latest.current = { active, meta, selected, help, search, count, openFiles: quickOpen.open, palette: palette.open };
+  // 스크롤 프레임 측정(성능 HUD가 켜져 있을 때만)
+  const scrollMeter = useRef<ScrollMeter | null>(null);
+  scrollMeter.current ??= new ScrollMeter(
+    () => `${lines ? "라인 히스토리" : "히스토리"} ${lastName(latest.current.meta?.path ?? target.path)}`,
+    ROW_HEIGHT,
+  );
+  useEffect(() => () => scrollMeter.current?.dispose(), []);
+  /** 지금 그린 행 범위: 이 안의 스크롤은 다시 렌더하지 않는다(src/scrollWindow.ts) */
+  const drawnRange = useRef<DrawnRange>({ start: 0, end: 0, height: 0 });
 
   const showToast = (message: string) => {
     setToast(message);
@@ -425,7 +436,11 @@ export function HistoryView({
   }, []);
 
   const all = entries.current;
-  const { start, end } = visibleRange(viewport.top, viewport.height, ROW_HEIGHT, count);
+  const { start, end } = drawWindow(viewport.top, viewport.height, ROW_HEIGHT, count);
+  useLayoutEffect(() => {
+    drawnRange.current = { start, end, height: viewport.height };
+    scrollMeter.current?.drawn(false);
+  });
   const path = meta?.path ?? target.path;
   const range = meta?.lines ?? lines;
   const former = progress.kind === "done" ? formerPaths(all, path) : [];
@@ -499,6 +514,13 @@ export function HistoryView({
         onScroll={(e) => {
           const list = e.currentTarget;
           if (latest.current.active) savedTop.current = list.scrollTop;
+          const meter = scrollMeter.current;
+          meter?.scrolled(list.scrollTop);
+          // 미리 그린 범위 안이면 브라우저가 옮기기만 한다(다시 그리지 않는다).
+          if (insideDrawn(list.scrollTop, list.clientHeight, ROW_HEIGHT, latest.current.count, drawnRange.current)) {
+            meter?.drawn(false);
+            return;
+          }
           setViewport({ top: list.scrollTop, height: list.clientHeight });
         }}
       >
@@ -581,7 +603,8 @@ export function HistoryView({
   );
 }
 
-function Row({ entry, path, nowMs }: { entry: LogEntry; path: string; nowMs: number }) {
+/** 행 글. 범위를 다시 그릴 때 이미 그린 행은 건너뛴다. */
+const Row = memo(function Row({ entry, path, nowMs }: { entry: LogEntry; path: string; nowMs: number }) {
   const status = entry.status;
   return (
     <>
@@ -615,7 +638,7 @@ function Row({ entry, path, nowMs }: { entry: LogEntry; path: string; nowMs: num
       </span>
     </>
   );
-}
+});
 
 /** 라인 히스토리: 고른 커밋이 그 줄 범위를 어떻게 바꿨는지(옛·새 줄 번호와 함께) */
 function Hunks({ entry }: { entry: LogEntry }) {
