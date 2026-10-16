@@ -9,7 +9,7 @@ import { formatCount, formatDate, relativeTime, shortSha } from "../blame/format
 import { Acceleration } from "../history/Acceleration";
 import { scrollToRow, visibleRange } from "../history/list";
 import { lastName, type Navigation } from "../nav";
-import { afterPaint, getPerfInfo, nowMs, record } from "../perf";
+import { afterPaint, getPerfInfo, longFrameIn, nowMs, record } from "../perf";
 import { drawRows, graphWidth, readPalette, ROW_HEIGHT, type Palette, type Visible } from "./draw";
 import { reloadFocus, type Focus } from "./focus";
 import { CHUNK, RowCache, rowWidth } from "./rows";
@@ -191,6 +191,9 @@ function GraphPane({
     t0: nowMs(),
     metaMs: NaN,
     pageMs: NaN,
+    /** 첫 화면의 레인을 캔버스에 그린 때와 그리는 데 든 시간 */
+    lanesMs: NaN,
+    lanesDrawMs: NaN,
     shown: false,
     painted: null as Promise<number | null> | null,
     reported: false,
@@ -430,6 +433,7 @@ function GraphPane({
       const phases = [
         { label: "참조", ms: t.metaMs - t.t0 },
         { label: "첫 화면 보냄", ms: t.pageMs - t.t0 },
+        { label: "레인 그림", ms: t.lanesMs - t.t0 },
         { label: "표시", ms: end - t.t0 },
         { label: "레이아웃 끝", ms: stats.totalMs },
       ].filter((p) => Number.isFinite(p.ms));
@@ -444,7 +448,13 @@ function GraphPane({
         totalMs: end - t.t0,
         budgetMs: cold ? undefined : FIRST_SCREEN_BUDGET_MS,
         phases,
-        detail: `커밋 ${stats.rows} · 레인 ${stats.width} · DAG ${stats.loadMs.toFixed(1)}ms (${sources.join(", ") || "없음"})`,
+        detail: [
+          `커밋 ${stats.rows} · 레인 ${stats.width} · DAG ${stats.loadMs.toFixed(1)}ms (${sources.join(", ") || "없음"})`,
+          Number.isFinite(t.lanesDrawMs) && `캔버스 ${t.lanesDrawMs.toFixed(1)}ms`,
+          longFrameIn(t.t0, end),
+        ]
+          .filter(Boolean)
+          .join(" · "),
         ok: painted !== null,
       });
     });
@@ -765,7 +775,14 @@ function GraphPane({
         ctx.clearRect(0, 0, width, height);
         drawRows(ctx, visible, start * ROW_HEIGHT, width, palette, meta?.head ?? null);
       }
-      canvasMs = nowMs() - t0;
+      const drawnAt = nowMs();
+      canvasMs = drawnAt - t0;
+      // 첫 화면의 레인(성능 HUD): '표시'가 그리기에서 늘었는지, 그린 뒤 페인트를 기다린 것인지 나눠 본다.
+      const t = timing.current;
+      if (t.shown && Number.isNaN(t.lanesMs)) {
+        t.lanesMs = drawnAt;
+        t.lanesDrawMs = canvasMs;
+      }
     }
     // 스크롤 측정: 지금 보이는 행 가운데 아직 오지 않은 것이 있었나
     const list = listRef.current;
