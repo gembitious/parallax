@@ -394,14 +394,21 @@ impl Repo {
         Ok(entry.is_some_and(|entry| !entry.mode().is_tree() && !entry.mode().is_commit()))
     }
 
-    /// 커밋 상세(hover 카드). 변경 파일 수는 첫 부모(없으면 빈 트리)와 비교한다.
+    /// 커밋 상세(hover 카드). 변경 파일 수는 첫 부모(없으면 빈 트리)와 비교한다. 카드는 빨리 떠야 하므로 유사도로
+    /// 견줄 rename 짝은 [`HOVER_RENAME_LIMIT`]²까지만 본다(파일을 아주 많이 옮긴 커밋은 커밋 상세와 수가 다를 수 있다).
     pub fn commit_info(&self, id: ObjectId) -> Result<CommitInfo> {
-        self.commit_changes(id).map(|(info, _)| info)
+        self.commit_changes(id, HOVER_RENAME_LIMIT)
+            .map(|(info, _)| info)
     }
 
     /// 커밋 정보와 첫 부모(없으면 빈 트리)와 비교한 파일 변경. 디렉터리(트리) 항목은 뺀다.
-    /// rename은 사용자 설정과 관계없이 git 기본값(유사도 50%)으로 찾는다.
-    pub(crate) fn commit_changes(&self, id: ObjectId) -> Result<(CommitInfo, Vec<TreeChange>)> {
+    /// rename은 사용자 설정과 관계없이 git 기본값(유사도 50%)으로, git과 같은 단계로 찾는다([`crate::renames`]).
+    /// `rename_limit`: 유사도로 견줄 짝 수의 한도(그 제곱, git의 `diff.renameLimit`).
+    pub(crate) fn commit_changes(
+        &self,
+        id: ObjectId,
+        rename_limit: usize,
+    ) -> Result<(CommitInfo, Changes)> {
         let repo = self.local();
         let commit = repo.find_commit(id).map_err(|e| err("커밋 읽기", e))?;
         let decoded = commit.decode().map_err(|e| err("커밋 해석", e))?;
@@ -421,15 +428,16 @@ impl Repo {
             },
             None => None,
         };
-        let options =
-            gix::diff::Options::default().with_rewrites(Some(gix::diff::Rewrites::default()));
+        // rename은 아래에서 따로 찾는다(gix는 짝 한도가 git과 다르고 blob이 없으면 비교 전체가 실패한다).
+        let options = gix::diff::Options::default().with_rewrites(None);
         // 트리 비교는 바뀐 파일을 담은 디렉터리(트리) 항목도 변경으로 돌려준다. 파일만 남긴다.
-        let changes: Vec<TreeChange> = repo
+        let raw: Vec<TreeChange> = repo
             .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), options)
             .map_err(|e| err("트리 비교", e))?
             .into_iter()
             .filter(|change| !change.entry_mode().is_tree())
             .collect();
+        let changes = pair_renames(&repo, raw, rename_limit);
 
         let info = CommitInfo {
             sha: id.to_string(),
@@ -438,9 +446,93 @@ impl Repo {
             message: message.trim_end().to_owned(),
             author,
             committer,
-            changed_files: changes.len(),
+            changed_files: changes.list.len(),
         };
         Ok((info, changes))
+    }
+}
+
+/// hover 카드의 rename 짝 한도(그 제곱). 커밋 상세는 git과 같은 [`crate::renames::RENAME_LIMIT`]다.
+const HOVER_RENAME_LIMIT: usize = 100;
+
+/// 커밋 하나의 파일 변경(rename을 짝지은 뒤).
+pub(crate) struct Changes {
+    pub list: Vec<TreeChange>,
+    /// blob이 없어 rename을 다 견주지 못했다(부분 클론).
+    pub renames_incomplete: bool,
+    /// 지운 파일 × 새 파일이 한도²를 넘어 유사도로 찾지 않았다(git도 건너뛴다).
+    pub renames_limited: bool,
+}
+
+/// 지운 항목과 새 항목을 git처럼 rename으로 짝짓는다([`crate::renames`]).
+fn pair_renames(repo: &gix::Repository, raw: Vec<TreeChange>, limit: usize) -> Changes {
+    let (mut deletions, mut additions) = (Vec::new(), Vec::new());
+    for (i, change) in raw.iter().enumerate() {
+        match change {
+            TreeChange::Deletion { .. } => deletions.push(i),
+            TreeChange::Addition { .. } => additions.push(i),
+            _ => {}
+        }
+    }
+    let candidate = |i: usize| match &raw[i] {
+        TreeChange::Deletion {
+            location,
+            entry_mode,
+            id,
+            ..
+        }
+        | TreeChange::Addition {
+            location,
+            entry_mode,
+            id,
+            ..
+        } => crate::renames::Candidate {
+            path: location.as_slice(),
+            id: *id,
+            kind: entry_mode.kind(),
+        },
+        _ => unreachable!("지운 항목과 새 항목만 고른다"),
+    };
+    let sources: Vec<_> = deletions.iter().map(|&i| candidate(i)).collect();
+    let dests: Vec<_> = additions.iter().map(|&i| candidate(i)).collect();
+    let found = crate::renames::find(repo, &sources, &dests, limit);
+    drop((sources, dests));
+    let mut slots: Vec<Option<TreeChange>> = raw.into_iter().map(Some).collect();
+    for &(s, d, _) in &found.pairs {
+        let (
+            Some(TreeChange::Deletion {
+                location: source_location,
+                entry_mode: source_entry_mode,
+                relation: source_relation,
+                id: source_id,
+            }),
+            Some(TreeChange::Addition {
+                location,
+                entry_mode,
+                relation,
+                id,
+            }),
+        ) = (slots[deletions[s]].take(), slots[additions[d]].take())
+        else {
+            unreachable!("짝은 지운 항목과 새 항목이다");
+        };
+        slots[additions[d]] = Some(TreeChange::Rewrite {
+            source_location,
+            source_entry_mode,
+            source_relation,
+            source_id,
+            diff: None,
+            entry_mode,
+            id,
+            location,
+            relation,
+            copy: false,
+        });
+    }
+    Changes {
+        list: slots.into_iter().flatten().collect(),
+        renames_incomplete: found.incomplete,
+        renames_limited: found.limited,
     }
 }
 

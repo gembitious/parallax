@@ -6,7 +6,7 @@ use std::sync::Arc;
 use plx_core::ai_notes::{AiAttribution, AiItem, AiNotes};
 use plx_core::blame_session::{SessionEvent, Sessions};
 use plx_core::cache::DiskCache;
-use plx_core::commit::{self, CommitDetail, FileVersions};
+use plx_core::commit::{self, CommitDetail, FileStat, FileVersions, StatRequest};
 use plx_core::commit_graph::{self, GraphStatus, Progress};
 use plx_core::files::{FileLists, FileSearch};
 use plx_core::graph::{GraphEvent, GraphOptions, GraphSessions, GraphWindow};
@@ -443,17 +443,40 @@ pub async fn commit_detail(
     .await
 }
 
-/// 파일 하나의 두 버전(diff 화면). blob id가 없으면 빈 쪽이다(추가·삭제).
+/// `commit_detail`이 시간 안에 세지 못한 파일들의 줄 수(요청 순서대로). 큰 커밋은 목록을 먼저 보이고 이것을 받는다.
+#[tauri::command]
+pub async fn file_stats(
+    git: State<'_, Arc<GitState>>,
+    repo: String,
+    files: Vec<StatRequest>,
+) -> Result<Vec<FileStat>, String> {
+    blocking(git, move |git| {
+        let repo = git.repos.for_path(Path::new(&repo))?;
+        commit::file_stats(&repo, &files)
+    })
+    .await
+}
+
+/// 파일 하나의 두 버전(diff 화면). blob id가 없으면 빈 쪽이다(추가·삭제). `path`는 `diff` 속성을 볼 경로,
+/// `full`이면 큰 파일도 내용을 보낸다.
 #[tauri::command]
 pub async fn file_versions(
     git: State<'_, Arc<GitState>>,
     repo: String,
     old_id: Option<String>,
     new_id: Option<String>,
+    path: Option<String>,
+    full: Option<bool>,
 ) -> Result<FileVersions, String> {
     blocking(git, move |git| {
         let repo = git.repos.for_path(Path::new(&repo))?;
-        commit::file_versions(&repo, old_id.as_deref(), new_id.as_deref())
+        commit::file_versions(
+            &repo,
+            old_id.as_deref(),
+            new_id.as_deref(),
+            path.as_deref(),
+            full.unwrap_or(false),
+        )
     })
     .await
 }

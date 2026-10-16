@@ -26,6 +26,8 @@ git     line-log  1000,1060:diff.c
 git     plx-line-log 1000,1060:diff.c
 git     show      HEAD
 git     plx-show  HEAD
+git     show      1f010d6bdf                   # .txt → .adoc: 파일 919개(rename 906개)
+git     plx-show  1f010d6bdf
 git     graph     -
 git     plx-graph head                         # 커밋 82,327개
 git     plx-graph head+table
