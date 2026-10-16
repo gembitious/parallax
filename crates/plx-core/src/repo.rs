@@ -284,27 +284,57 @@ impl Repo {
         self.local().is_shallow().unwrap_or(true)
     }
 
+    /// git이 객체와 다른 부모·내용을 보는 커밋이 있는가: `git replace`로 바꾼 객체(`core.useReplaceRefs=false`·
+    /// `GIT_NO_REPLACE_OBJECTS`로 끄지 않았으면)나 `info/grafts`. git은 이때 commit-graph를 쓰지 않고
+    /// (commit_graph_compatible), 이력 결과가 커밋 sha만으로 정해지지 않는다(바꾸는 참조를 더하거나 빼면 달라진다).
+    pub fn has_rewrites(&self) -> bool {
+        let repo = self.local();
+        !read_grafts(repo.common_dir()).is_empty() || has_replace_refs(&repo)
+    }
+
+    /// 이력 질의 결과(blame, 히스토리)를 캐시에 넣어도 되는가: 얕은 클론과 [`Self::has_rewrites`]는 넣지 않는다.
+    pub fn cacheable(&self) -> bool {
+        !self.is_shallow() && !self.has_rewrites()
+    }
+
     /// `git blame` 결과를 바꾸는 설정의 지문. 결과 캐시의 열쇠에 넣는다: 설정이나 설정이 가리키는 파일
     /// (`blame.ignoreRevsFile`, `.mailmap`)이 바뀌면 다른 열쇠가 된다.
     pub fn blame_settings(&self) -> String {
+        self.settings(BLAME_SETTINGS, true)
+    }
+
+    /// 파일 히스토리(`git log`) 결과를 바꾸는 설정의 지문: 작성자 이름·메일(`%aN`·`%aE`)을 바꾸는 mailmap.
+    pub fn history_settings(&self) -> String {
+        self.settings(MAILMAP_SETTINGS, false)
+    }
+
+    /// 라인 히스토리(`git log -L`) 결과를 바꾸는 설정의 지문: mailmap과 줄을 따라가는 diff·rename 설정.
+    pub fn line_history_settings(&self) -> String {
+        self.settings(LINE_LOG_SETTINGS, false)
+    }
+
+    /// `keys` 설정 값과 mailmap(·`ignore_revs`면 `blame.ignoreRevsFile`) 파일 내용의 지문.
+    fn settings(&self, keys: &[&str], ignore_revs: bool) -> String {
         use std::fmt::Write;
 
         let repo = self.local();
         let config = repo.config_snapshot();
         let config = config.plumbing();
         let mut out = String::new();
-        for key in BLAME_SETTINGS {
+        for key in keys {
             for value in config.strings(*key).unwrap_or_default() {
                 let _ = writeln!(out, "{key}={value}");
             }
         }
         // 설정이 가리키는 파일은 내용으로 본다. 빈 값은 앞의 목록을 비운다(git과 같다).
         let mut files = Vec::new();
-        for value in config.strings("blame.ignoreRevsFile").unwrap_or_default() {
-            if value.is_empty() {
-                files.clear();
-            } else {
-                files.push(self.config_path(&value.to_str_lossy()));
+        if ignore_revs {
+            for value in config.strings("blame.ignoreRevsFile").unwrap_or_default() {
+                if value.is_empty() {
+                    files.clear();
+                } else {
+                    files.push(self.config_path(&value.to_str_lossy()));
+                }
             }
         }
         files.push(self.workdir.join(".mailmap"));
@@ -731,6 +761,78 @@ const BLAME_SETTINGS: &[&str] = &[
     "mailmap.file",
     "mailmap.blob",
 ];
+
+/// 작성자(`%aN`·`%aE`)를 바꾸는 설정. 저장소의 `.mailmap`은 설정이 없어도 늘 본다.
+const MAILMAP_SETTINGS: &[&str] = &["mailmap.file", "mailmap.blob"];
+
+/// `git log -L`의 결과를 바꾸는 설정: 줄 범위를 옛 버전으로 옮기는 diff와 옛 이름을 찾는 rename.
+const LINE_LOG_SETTINGS: &[&str] = &[
+    "diff.algorithm",
+    "diff.indentHeuristic",
+    "diff.interHunkContext",
+    "diff.context",
+    "diff.renames",
+    "diff.renameLimit",
+    "mailmap.file",
+    "mailmap.blob",
+];
+
+/// git처럼 `core.useReplaceRefs=false`나 `GIT_NO_REPLACE_OBJECTS`면 바꾸는 참조를 보지 않는다.
+pub(crate) fn replace_enabled(repo: &gix::Repository) -> bool {
+    std::env::var_os("GIT_NO_REPLACE_OBJECTS").is_none()
+        && repo.config_snapshot().boolean("core.useReplaceRefs") != Some(false)
+}
+
+/// 바꾸는 참조가 놓이는 곳(`GIT_REPLACE_REF_BASE`, 기본 `refs/replace/`)
+pub(crate) fn replace_base() -> String {
+    let mut base = std::env::var("GIT_REPLACE_REF_BASE")
+        .ok()
+        .filter(|b| !b.is_empty())
+        .unwrap_or_else(|| "refs/replace/".to_owned());
+    if !base.ends_with('/') {
+        base.push('/');
+    }
+    base
+}
+
+/// `git replace`로 바꾼 객체가 있는가(바꾸는 참조를 보지 않게 했으면 없는 것으로 본다).
+pub(crate) fn has_replace_refs(repo: &gix::Repository) -> bool {
+    if !replace_enabled(repo) {
+        return false;
+    }
+    let base = replace_base();
+    let Ok(platform) = repo.references() else {
+        return false;
+    };
+    let Ok(refs) = platform.prefixed(base.as_str()) else {
+        return false;
+    };
+    refs.flatten().any(|reference| {
+        reference
+            .name()
+            .as_bstr()
+            .strip_prefix(base.as_bytes())
+            .is_some_and(|hex| ObjectId::from_hex(hex).is_ok())
+    })
+}
+
+/// `<공통 디렉터리>/info/grafts`: 줄마다 `<커밋> <부모>*`, `#`은 주석
+pub(crate) fn read_grafts(common_dir: &Path) -> HashMap<ObjectId, Vec<ObjectId>> {
+    let Ok(text) = std::fs::read_to_string(common_dir.join("info").join("grafts")) else {
+        return HashMap::new();
+    };
+    text.lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .filter_map(|line| {
+            let mut ids = line
+                .split_whitespace()
+                .map(|hex| ObjectId::from_hex(hex.as_bytes()).ok());
+            let commit = ids.next()??;
+            let parents: Option<Vec<ObjectId>> = ids.collect();
+            Some((commit, parents?))
+        })
+        .collect()
+}
 
 /// 설정 파일들의 크기·수정 시각. gix는 저장소를 열 때 설정을 한 번 읽으므로, 상주하는 앱이 `git config`로
 /// 바꾼 값(줄 끝, blame 설정)을 보려면 파일이 바뀌었을 때 다시 열어야 한다.
