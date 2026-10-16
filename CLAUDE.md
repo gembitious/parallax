@@ -71,6 +71,10 @@ docs/              MILESTONES.md
 - **플랫폼:** Windows(Git Bash)와 macOS 모두 1급 지원. 한쪽에서만 확인한 기능은 완료로 치지 않는다.
 - **읽기 전용:** 저장소를 바꾸는 git 명령은 호출하지 않는다. 유일한 예외는 사용자가 확인한 "가속 설정"(commit-graph 작성).
 - **파서 정확성:** git 출력 파서마다 fixtures 기반 골든 테스트(`git blame --porcelain` 등 git 결과와 비교)를 둔다.
+- **라이선스:** 코드는 MIT OR Apache-2.0이다(`LICENSE-MIT`, `LICENSE-APACHE`). git처럼 GPL·LGPL인 프로젝트의 코드는
+  다른 언어로 옮기지도 않는다: 동작은 문서와 그 도구의 출력(골든 테스트)으로 맞춘다. MIT·Apache 같은 허용 라이선스의
+  코드를 옮기면 그 파일 맨 위에 원래 저작권 고지를 둔다(`plx_core::fuzzy`의 fzf). 새 의존성은 이 두 라이선스와 함께
+  배포할 수 있는지 본다.
 
 ## 명령
 - 처음 한 번: `npm install` (Node·npm 버전은 Volta가, Rust 버전은 rustup이 `rust-toolchain.toml`로 맞춘다)
@@ -91,8 +95,8 @@ docs/              MILESTONES.md
 - CI(`.github/workflows/ci.yml`)가 Windows·macOS·Linux에서 검사와 앱 확인을 돌린다. 초록이어야 머지한다.
   CI가 확인한 기능은 그 플랫폼에서 확인한 것으로 친다. 화면을 봐야 하는 확인(창 포커스, 닫기 = 숨기기, 트레이 등)은
   PR 설명의 "수동 확인"에 남기고, 사용자가 따라 할 단계는 `docs/MANUAL_CHECKS.md`에 모아 갱신한다.
-- 저장소가 비공개라 Actions 사용 시간이 든다(macOS 러너는 보통 10배로 계산). 같은 브랜치의 이전 실행은 자동 취소되고,
-  문서(`*.md`, `docs/`)만 바뀐 푸시는 CI를 돌리지 않는다.
+- 저장소가 공개라 표준 러너(Linux·Windows·macOS)는 Actions 사용 시간이 들지 않는다. 동시 실행 수에는 한도가 있어
+  (macOS 5개) 같은 브랜치의 이전 실행은 자동 취소되고, 문서(`*.md`, `docs/`)만 바뀐 푸시는 CI를 돌리지 않는다.
 
 ## CLI 인터페이스 (목표)
 ```
@@ -168,7 +172,7 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
   이유(bench/results.md): `--follow`는 rename 앞 구간에서 Bloom 필터를 거의 못 써서 git/git `Documentation/git-log.adoc`
   첫 50개가 1.1초(Bloom 있음)인데 구간 잇기는 85ms다. `--follow`는 diff가 없는 merge(merge에서 바뀐 버전)를 빼고,
   날짜 순 워크 도중 경로를 바꿔 다른 브랜치 커밋이 빠지거나 낀다. 구간마다 git의 기본 이력 단순화를 그대로 따른다.
-  rename 원본은 그 파일 하나만 git과 같은 유사도(diffcore의 spanhash를 옮긴 `plx_core::similarity`, 50%)로 찾는다.
+  rename 원본은 그 파일 하나만 git과 같은 기준의 유사도(`plx_core::similarity`, 50%)로 찾는다.
   gix의 rename 추적은 짝 수(추가×삭제)가 1,000을 넘으면 유사도 비교를 건너뛰어 파일을 많이 옮긴 커밋을 놓친다.
 - 2026-10-15: "가속 설정"은 히스토리 머리줄의 버튼을 눌러 확인한 뒤 `git commit-graph write --reachable --changed-paths`만
   실행한다(`plx_core::commit_graph`). git 2.46 이상이면 `-c commitGraph.changedPathsVersion=2`로 필터 v2를 쓴다
@@ -260,9 +264,9 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
   가리키는 시작점(느슨한 `refs/remotes/origin/tags/*` 등)은 커밋까지 벗기고 이름표도 옮긴다.
 - 2026-10-16: 커밋 상세 리뷰 수정. rename은 gix의 추적을 끄고 git diffcore-rename의 단계(내용이 같은 파일 → 이름이
   양쪽에 하나뿐인 짝 75% → 남은 짝 모두를 견줘 새 파일마다 후보 넷, 모두를 비슷한 순으로)를 그대로 밟는다
-  (`plx_core::renames`, 유사도는 `plx_core::similarity`의 spanhash). 이유: gix는 짝 수를 한도 1,000과 견줘(git은 1,000²)
+  (`plx_core::renames`, 유사도는 `plx_core::similarity`). 이유: gix는 짝 수를 한도 1,000과 견줘(git은 1,000²)
   새 파일이 수백 개인 커밋의 rename을 추가 + 삭제로 보였고, 짝마다 줄 diff를 해 느리다. 짝마다 두 파일을 견주지 않고
-  원본 조각의 해시 색인으로 새 파일마다 함께 가진 조각만 센다(값은 git과 같다. bench/results.md: 990 × 990 이동에서
+  원본 조각의 해시 색인으로 새 파일마다 함께 가진 조각만 센다(값은 짝마다 견준 것과 같다. bench/results.md: 990 × 990 이동에서
   git 0.88초, 앱 0.14초). blame 카드의 바뀐 파일 수는 한도 100²로 센다(카드는 바로 떠야 한다). 줄 수는 25ms 안에 센
   만큼만 상세에 넣고 나머지는 화면이 묶음으로 받는다(`file_stats`, 화면 갱신 20번 안팎). 바이너리는 앞 8000바이트의
   NUL과 `.gitattributes`의 `binary`·`-diff`로 정한다(git numstat의 `-`). 두 쪽 합이 4MB를 넘는 파일은 크기만 보내고
@@ -271,3 +275,13 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
   rename을 다 견주지 못했으면 알린다. UTF-8이 아닌 경로는 깨진 글자로 보이고 blame·에디터로 열지 않는다(그 경로로는
   파일을 찾을 수 없다). 목록은 보이는 행만 그리고, 두 버전은 한 번에 하나만 받아(j를 누르고 있어도 쌓이지 않는다)
   48개·3,200만 글자까지만 기억한다.
+- 2026-10-16: 저장소를 공개하고 라이선스는 MIT OR Apache-2.0(Rust 생태계의 기본)으로 정한다. 저작권자는 GitHub 계정
+  이름(gembitious)이다. 이유: 비공개 저장소는 Actions 사용 시간 한도에 걸려 CI가 돌지 않았다(공개 저장소의 표준 러너는
+  무료다). rename 유사도의 조각 해시는 git의 `diffcore-delta.c`를 옮긴 것이라 GPL-2.0-only의 파생물이었다. 이 라이선스로
+  낼 수 없고, Tauri의 `tao`와 `gix-imara-diff`·`unicode-bom`이 Apache-2.0 전용이라 GPL-2.0으로도 함께 배포할 수 없어
+  (FSF와 Apache 재단의 입장) 해시를 따로 정한 것(FNV-1a 64비트)으로 바꿨다. 조각 나누기(줄, 64바이트)·기준(50%)·단계는
+  그대로라 짝은 git과 같다(골든 테스트, git/git·vscode의 큰 rename 커밋). git은 해시를 107,927칸으로 모아 다른 조각이 같은
+  칸이면 함께 가진 것으로 세므로 유사도가 조금 높고(300KB 파일에서 1%p 안쪽, 파일이 클수록 커진다), 기준이나 다른 후보와
+  그만큼 붙은 짝만 다를 수 있다. 속도는 측정 잡음 안이다(bench/results.md). 옛 커밋과 PR 기록에는 옮긴 코드가 남는다
+  (PR은 지울 수 없다). fzf(MIT)를 따른 퍼지 점수는 fzf의 고지를 `plx_core::fuzzy` 맨 위에 둔다. 바이너리를 배포하기 전에
+  의존성의 저작권 고지를 앱에 묶고 Tauri 기본 아이콘을 바꾼다(docs/MILESTONES.md "리스크와 대응").

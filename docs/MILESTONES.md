@@ -123,3 +123,5 @@ Windows·macOS의 성능 HUD(`그래프 … 스크롤`)로 확인한다(bench/re
 | WebView 콜드 스타트 | 상주로 회피, 콜드 스타트는 1s 예산만 지킴 |
 | 한글 경로·내용 | `core.quotepath=false`, `-z`, 바이트 파싱, fixtures 회귀 테스트 |
 | 대형 파일 blame 지연 | incremental 스트리밍 + 커밋 고정 캐시 |
+| 다른 프로젝트 코드의 라이선스(공개 저장소, MIT OR Apache-2.0) | GPL 코드(git 등)는 옮기지 않고 출력과의 골든 테스트로 동작만 맞춘다. 허용 라이선스 코드를 옮기면 그 파일 맨 위에 고지 |
+| 바이너리 배포 | 배포 전에 의존성의 저작권 고지를 앱에 묶고(예: `cargo about`), Tauri 기본 아이콘을 우리 것으로 바꾼다 |

@@ -327,3 +327,44 @@ fn two_deleted_files_with_the_same_name_compare_by_content() {
         Some("b/util.txt")
     );
 }
+
+/// 조각 나누기는 git과 같고 조각 해시만 다르다(similarity.rs 머리 주석). git은 해시를 107,927칸으로 모아 다른 조각이
+/// 같은 칸에 들어도 함께 가진 것으로 세므로, 우리 유사도는 git보다 높을 수 없고 큰 파일일수록 조금 낮다.
+#[test]
+fn large_files_score_at_most_git() {
+    let dir = common::scratch_repo("rename-large");
+    // 약 300KB, 줄이 64바이트보다 짧아 줄마다 조각 하나. 줄의 55%를 남긴다.
+    let base = words(21, 6000, 40);
+    let moved = edit(&base, 2700, 22);
+    std::fs::write(dir.join("big.txt"), join(&base, "\n")).unwrap();
+    common::commit_all(&dir, "base");
+    git(&dir, &["rm", "-q", "big.txt"]);
+    std::fs::write(dir.join("moved.txt"), join(&moved, "\n")).unwrap();
+    common::commit_all(&dir, "move");
+    // 기준(50%) 아래로 내려가도 git이 점수를 보이게 기준을 낮춘다.
+    let out = git_text(
+        &dir,
+        &[
+            "diff-tree",
+            "-r",
+            "-M10%",
+            "--name-status",
+            "--no-commit-id",
+            "HEAD",
+        ],
+    );
+    let git_percent: u64 = out
+        .lines()
+        .find_map(|line| {
+            let (status, paths) = line.split_once('\t')?;
+            (paths == "big.txt\tmoved.txt").then(|| status.strip_prefix('R')?.parse().ok())?
+        })
+        .unwrap_or_else(|| panic!("{out}"));
+    let spans = |text: String| Spans::new(text.as_bytes(), true);
+    let ours = similarity::score(&spans(join(&base, "\n")), &spans(join(&moved, "\n")));
+    let ours_percent = ours * 100 / MAX_SCORE;
+    assert!(
+        ours_percent <= git_percent && git_percent - ours_percent <= 2,
+        "ours {ours_percent}%, git {git_percent}%"
+    );
+}
