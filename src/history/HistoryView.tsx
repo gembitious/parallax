@@ -47,11 +47,13 @@ type Props = {
   onShown?(committedMs: number): void;
   onBack(): void;
   onNavigate(navigation: Navigation): void;
+  /** 다시 열기 전 화면의 검색어(`n`/`N`이 이어서 찾는다) */
+  query?: string;
   /**
    * 저장소가 바뀌었다(HEAD부터 거슬러 오르는 히스토리의 HEAD 이동): 이 화면을 새로 연다. 라인 히스토리는 줄 범위를
-   * 새 작업트리의 줄로 옮겨 넘긴다(못 옮기면 없다).
+   * 새 작업트리의 줄로 옮겨 넘긴다(못 옮기면 없다). 검색어는 새 화면으로 넘긴다.
    */
-  onReload?(lines?: LineRange): void;
+  onReload?(lines?: LineRange, query?: string): void;
 };
 
 type Progress =
@@ -72,6 +74,7 @@ export function HistoryView({
   active,
   depth,
   cold = false,
+  query: carriedQuery,
   onShown,
   onBack,
   onNavigate,
@@ -84,7 +87,7 @@ export function HistoryView({
   const [progress, setProgress] = useState<Progress>({ kind: "loading" });
   const [selected, setSelected] = useState(0);
   const [viewport, setViewport] = useState({ top: 0, height: 0 });
-  const [search, setSearch] = useState({ open: false, query: "" });
+  const [search, setSearch] = useState({ open: false, query: carriedQuery ?? "" });
   const [help, setHelp] = useState(false);
   const [worktrees, setWorktrees] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -134,7 +137,9 @@ export function HistoryView({
   const mounted = useMounted();
   /** 키를 가져가는 창(도움말·워크트리·Quick Open·팔레트)이 열려 있다 */
   const overlay = help || worktrees || quickOpen.isOpen || palette.isOpen;
-  const snapshot = { active, meta, selected, help, search, count, overlay, openFiles: quickOpen.open, palette: palette.open };
+  /** 다시 열기를 미룬다: 보이는 화면에 창이나 검색 칸이 열려 있다 */
+  const busy = active && (overlay || search.open);
+  const snapshot = { active, meta, selected, help, search, count, overlay, busy, openFiles: quickOpen.open, palette: palette.open };
   const latest = useRef(snapshot);
   latest.current = snapshot;
   // 스크롤 프레임 측정(성능 HUD가 켜져 있을 때만)
@@ -188,27 +193,42 @@ export function HistoryView({
 
   // HEAD부터 거슬러 오르는 히스토리: HEAD가 바뀌면(새 커밋 등) 다시 연다. 고정 리비전은 바뀌지 않는다.
   // 열기를 시작할 때 요청 대상으로 구독한다(meta를 기다리면 다시 열다 실패한 화면은 더는 바뀌지 않는다).
-  // 라인 히스토리의 줄 범위는 시작 커밋 버전의 줄이라, 새 작업트리의 줄로 옮겨 다시 연다(위에 줄이 늘어도 같은 코드).
+  const [changed, setChanged] = useState(false);
   useEffect(() => {
     if (target.rev !== null || !onReload) return;
     return watchRepo(target.repo ?? target.path, (change) => {
-      if (!change.headChanged) return;
-      const m = latest.current.meta;
-      if (!lines || !m?.lines || !m.start) {
-        onReload();
-        return;
-      }
-      const from = { rev: m.start, path: m.path };
-      const to = { rev: null, path: m.path };
-      const map = (line: number) => call<number>("blame_map_line", { repo: m.repo, from, to, line });
-      Promise.all([map(m.lines.start), map(m.lines.end)]).then(
-        ([start, end]) => onReload({ start, end: Math.max(start, end) }),
-        () => onReload(),
-      );
+      if (change.headChanged) setChanged(true);
     });
     // 요청마다 새 컴포넌트다(App이 key를 준다).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 다시 열기는 화면을 새로 만든다. 보이는 화면에 창(도움말·워크트리·Quick Open·팔레트)이나 검색 칸이 열려 있으면
+  // 닫을 때까지 미룬다: 바로 열면 치던 글자가 사라지고 남은 글자가 화면 키가 된다. 검색어는 새 화면으로 넘긴다.
+  // 라인 히스토리의 줄 범위는 시작 커밋 버전의 줄이라, 새 작업트리의 줄로 옮겨 다시 연다(위에 줄이 늘어도 같은 코드).
+  useEffect(() => {
+    if (!changed || busy || !onReload) return;
+    const query = latest.current.search.query || undefined;
+    const m = latest.current.meta;
+    if (!lines || !m?.lines || !m.start) {
+      onReload(undefined, query);
+      return;
+    }
+    const from = { rev: m.start, path: m.path };
+    const to = { rev: null, path: m.path };
+    const map = (line: number) => call<number>("blame_map_line", { repo: m.repo, from, to, line });
+    // 줄을 옮기는 동안 창을 열었으면 다시 열지 않는다(닫으면 이 효과가 다시 돈다).
+    Promise.all([map(m.lines.start), map(m.lines.end)]).then(
+      ([start, end]) => {
+        if (!latest.current.busy) onReload({ start, end: Math.max(start, end) }, query);
+      },
+      () => {
+        if (!latest.current.busy) onReload(undefined, query);
+      },
+    );
+    // 다시 열면 App이 key를 바꿔 새 컴포넌트가 된다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [changed, busy]);
 
   // 첫 화면과 첫 50개(적으면 전부)를 그린 시각
   useLayoutEffect(() => {
@@ -505,6 +525,11 @@ export function HistoryView({
         {depth > 1 && (
           <span className="badge" title="q로 앞 화면으로 돌아간다">
             뒤로 q · {depth - 1}
+          </span>
+        )}
+        {changed && (
+          <span className="badge warn" title="HEAD가 바뀌었다. 열린 창·검색을 닫으면 다시 연다">
+            바뀜
           </span>
         )}
         {meta && <Acceleration repo={meta.repo} request={accelRequest} onDone={showToast} />}

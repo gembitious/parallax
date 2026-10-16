@@ -226,4 +226,22 @@ describe("reload", () => {
     const same = viewReducer(state, { type: "reload", key: file.key, lines: { start: 1, end: 2 } });
     expect(same.stack[1]).toMatchObject({ view: "history", lines: null });
   });
+
+  it("화면의 검색(blame 검색어·패널, 히스토리 검색어)을 새 화면으로 넘긴다", () => {
+    let state = viewReducer(empty, { type: "request", request: blame(1), receivedMs: 0 });
+    const search = { query: { search: "fn", caseSensitive: false, regexp: false, wholeWord: true }, open: false };
+    state = viewReducer(state, { type: "reload", key: state.stack[0].key, line: 7, search });
+    expect(state.stack[0]).toMatchObject({ view: "blame", line: 7, search });
+    // 줄 없이 다시 열면 앞 줄 그대로, 검색이 없으면 지운다
+    state = viewReducer(state, { type: "reload", key: state.stack[0].key });
+    expect(state.stack[0]).toMatchObject({ view: "blame", line: 7 });
+    expect(state.stack[0]).not.toHaveProperty("search", search);
+
+    state = viewReducer(state, {
+      type: "navigate",
+      navigation: { kind: "history", target: { repo: "/repo", path: "a.rs", rev: null } },
+    });
+    state = viewReducer(state, { type: "reload", key: state.stack[1].key, query: "수정" });
+    expect(state.stack[1]).toMatchObject({ view: "history", lines: null, query: "수정" });
+  });
 });

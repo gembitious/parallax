@@ -6,7 +6,7 @@ import { copyText } from "../clipboard";
 import { call } from "../ipc";
 import { afterPaint, getPerfInfo, nowMs, record } from "../perf";
 import { CommitCard, type InfoState } from "./CommitCard";
-import { createEditor, type Editor } from "./editor";
+import { createEditor, restoreSearch, searchStateOf, type Editor, type SearchState } from "./editor";
 import { formatCount, isUncommitted, shortSha } from "./format";
 import { blameChanged } from "./gutter";
 import { BlameModel } from "./model";
@@ -45,8 +45,10 @@ type Props = {
   /** `q`: 뒤로. 더 돌아갈 곳이 없으면 창을 숨긴다. */
   onBack(): void;
   onNavigate(navigation: Navigation): void;
-  /** 저장소가 바뀌었다(작업트리 blame의 HEAD 이동): 이 화면을 `line` 줄로 새로 연다. */
-  onReload?(line: number | null): void;
+  /** 다시 열기 전 화면의 검색(검색어·패널). 이 화면에서 되살린다. */
+  search?: SearchState;
+  /** 저장소가 바뀌었다(작업트리 blame의 HEAD 이동): 이 화면을 `line` 줄로 새로 연다. `search`는 새 화면으로 넘긴다. */
+  onReload?(line: number | null, search?: SearchState): void;
 };
 
 type Progress =
@@ -117,6 +119,7 @@ export function BlameView({
   depth,
   backDirection,
   cold = false,
+  search,
   onShown,
   onBack,
   onNavigate,
@@ -138,6 +141,10 @@ export function BlameView({
   const [toast, setToast] = useState<string | null>(null);
   /** AI 출처 응답을 받을 때마다 오른다(머리줄 요약을 다시 센다). */
   const [aiVersion, setAiVersion] = useState(0);
+  /** 코드 뷰의 검색 패널(`/`)이 열려 있다 */
+  const [searching, setSearching] = useState(false);
+  /** 파일이나 HEAD가 바뀌어 다시 열어야 한다(열린 창·검색을 닫을 때까지 미뤘다) */
+  const [changed, setChanged] = useState(false);
   // 저장소를 아직 모르면(meta 전) 연 파일 경로로 찾는다(저장소 안의 아무 경로면 된다).
   const quickOpen = useQuickOpen({
     repo: meta?.repo ?? target.repo ?? path,
@@ -217,18 +224,29 @@ export function BlameView({
   // (체크아웃으로 파일이 사라짐)은 파일이 돌아와도 더는 바뀌지 않는다.
   useEffect(() => {
     if (rev !== null || !onReload) return;
-    const reload = () => onReload(editor.current ? cursorLine() : line);
     const stopRepo = watchRepo(target.repo ?? path, (change) => {
-      if (change.headChanged) reload();
+      if (change.headChanged) setChanged(true);
     });
-    const stopFile = watchFile(target.repo ? `${target.repo}/${path}` : path, reload);
+    const stopFile = watchFile(target.repo ? `${target.repo}/${path}` : path, () => setChanged(true));
     return () => {
       stopRepo();
       stopFile();
     };
-    // 요청마다 새 컴포넌트다(App이 key를 준다). cursorLine은 ref만 읽는다.
+    // 요청마다 새 컴포넌트다(App이 key를 준다).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 다시 열기는 화면을 새로 만든다. 보이는 화면에 창(도움말·워크트리·Quick Open·팔레트·고정 카드)이나 검색 패널이
+  // 열려 있으면 닫을 때까지 미룬다: 바로 열면 그 창과 치던 글자가 사라지고 남은 글자가 화면 키가 된다(`o`가 에디터를
+  // 띄우고 `q`가 창을 숨겼다). 검색어는 새 화면으로 넘긴다(`n`/`N`이 이어서 찾는다).
+  const busy = active && (overlay || !!hover?.pinned || searching);
+  useEffect(() => {
+    if (!changed || busy || !onReload) return;
+    const view = editor.current?.view;
+    onReload(view ? cursorLine() : line, view ? (searchStateOf(view) ?? undefined) : search);
+    // 다시 열면 App이 key를 바꿔 새 컴포넌트가 된다. cursorLine은 ref만 읽는다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [changed, busy]);
 
   const openCard = (n: number, anchor: DOMRect, pinned: boolean) => {
     const sha = model.current?.sha(n);
@@ -575,7 +593,9 @@ export function BlameView({
                 help: () => actions.current.help(),
                 escape: () => actions.current.escape(),
               },
+              onSearchPanel: setSearching,
             });
+            if (search) restoreSearch(editor.current.view, search);
             editor.current.view.focus();
             setProgress({ kind: "streaming", blamed: 0 });
           } else {
@@ -708,6 +728,11 @@ export function BlameView({
         {depth > 1 && (
           <span className="badge" title="q로 앞 화면으로 돌아간다">
             뒤로 q · {depth - 1}
+          </span>
+        )}
+        {changed && (
+          <span className="badge warn" title="파일이나 HEAD가 바뀌었다. 열린 창·검색을 닫으면 다시 연다">
+            바뀜
           </span>
         )}
         <span className="blame-status" aria-live="polite">

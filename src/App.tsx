@@ -16,8 +16,10 @@ import {
   type PlxRequest,
   type Shown,
   type StackEntry,
+  type ViewAction,
 } from "./nav";
 import { afterPaint, getPerfInfo, initPerf, nowMs, phasesBetween, record } from "./perf";
+import type { SearchState } from "./blame/editor";
 
 type AppInfo = { version: string; coreVersion: string };
 
@@ -73,10 +75,23 @@ export default function App() {
   const readySent = useRef(false);
   const [notices, setNotices] = useState(false);
   useNoticesRequest(useCallback(() => setNotices(true), []));
-  // 라이선스 창은 모든 화면 위에 떠서 키를 다 먹는다. 떠 있는 동안 늦게 온 이동(`<`의 답 등)은 버린다: 새 화면이
-  // 포커스를 가져가 창은 떠 있는데 키는 아래 화면으로 간다. 새 plx 호출은 그 화면을 보이려는 것이라 창을 닫는다.
+  // 라이선스 창은 모든 화면 위에 떠서 키를 다 먹는다. 떠 있는 동안 늦게 온 이동(`<`의 답 등)은 버리고 다시 열기
+  // (저장소 변화)는 닫을 때까지 미룬다: 새 화면이 포커스를 가져가 창은 떠 있는데 키는 아래 화면으로 간다.
+  // 새 plx 호출은 그 화면을 보이려는 것이라 창을 닫는다.
   const noticesRef = useRef(notices);
   noticesRef.current = notices;
+  const deferredReloads = useRef<ViewAction[]>([]);
+  const reload = (action: ViewAction) => {
+    if (noticesRef.current) deferredReloads.current.push(action);
+    else dispatch(action);
+  };
+  useEffect(() => {
+    if (notices) return;
+    const actions = deferredReloads.current;
+    deferredReloads.current = [];
+    // 그사이 닫혔거나 다시 연 화면(옛 key)의 것은 reducer가 버린다.
+    for (const action of actions) dispatch(action);
+  }, [notices]);
 
   // 콜드 스타트에서 창은 첫 화면을 그린 뒤에 보인다(빈 화면 깜빡임 방지).
   const markReady = () => {
@@ -172,7 +187,8 @@ export default function App() {
               onNavigate: (navigation: Navigation) => {
                 if (!noticesRef.current) dispatch({ type: "navigate", navigation });
               },
-              onReload: (line?: number | null) => dispatch({ type: "reload", key: entry.key, line }),
+              onReload: (line?: number | null, search?: SearchState) =>
+                reload({ type: "reload", key: entry.key, line, search }),
             };
             const cold = entry.via === "request" && request.cold;
             return (
@@ -183,14 +199,16 @@ export default function App() {
                     target={entry.target}
                     line={entry.line}
                     backDirection={backDirectionAt(stack, i)}
+                    search={entry.search}
                     cold={cold}
                   />
                 ) : entry.view === "history" ? (
                   <HistoryView
                     {...common}
-                    onReload={(lines) => dispatch({ type: "reload", key: entry.key, lines })}
+                    onReload={(lines, query) => reload({ type: "reload", key: entry.key, lines, query })}
                     target={entry.target}
                     lines={entry.lines}
+                    query={entry.query}
                     cold={cold}
                   />
                 ) : entry.view === "graph" ? (
