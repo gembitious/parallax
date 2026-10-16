@@ -205,11 +205,16 @@ pub fn status(repo: &Repo) -> crate::repo::Result<GraphStatus> {
     })
 }
 
-/// git 2.46부터 Bloom 필터 v2를 쓴다(`commitGraph.changedPathsVersion`).
+/// git 2.46부터 Bloom 필터 v2를 쓴다(`commitGraph.changedPathsVersion`). 버전은 앱이 떠 있는 동안 한 번만 묻는다
+/// (상태를 볼 때마다 git을 띄우지 않게).
 fn git_supports_v2(dir: &Path) -> bool {
-    git::output(dir, ["--version"])
-        .ok()
-        .and_then(|out| parse_version(&String::from_utf8_lossy(&out)))
+    static VERSION: std::sync::OnceLock<Option<(u32, u32)>> = std::sync::OnceLock::new();
+    VERSION
+        .get_or_init(|| {
+            git::output(dir, ["--version"])
+                .ok()
+                .and_then(|out| parse_version(&String::from_utf8_lossy(&out)))
+        })
         .is_some_and(|version| version >= (2, 46))
 }
 

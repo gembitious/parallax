@@ -185,8 +185,13 @@ check "두 번째 호출 → 종료 코드 0, 셸 $(($(now_ms) - start))ms" test
 check "두 번째 호출 → 상주 인스턴스가 그림" wait_for '"label":"blame package.json:2"'
 check "blame이 끝까지 와서 거터를 그림 (콜드 스타트, package.json)" \
   wait_for_all '"kind":"blame"' '"label":"blame package.json (콜드 스타트)"'
-check "같은 파일을 다시 열면 캐시에서 (package.json)" \
-  wait_for_all '"kind":"blame"' '"label":"blame package.json (캐시)"'
+# 얕은 클론은 결과를 캐시하지 않는다(CLAUDE.md "불변 결과는 영구 캐시"). 그런 클론에서 돌리면 이 확인은 건너뛴다.
+if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+  result PASS "같은 파일을 다시 열면 캐시에서 (package.json) — 얕은 클론이라 캐시하지 않아 건너뜀"
+else
+  check "같은 파일을 다시 열면 캐시에서 (package.json)" \
+    wait_for_all '"kind":"blame"' '"label":"blame package.json (캐시)"'
+fi
 
 status=0
 (cd "$repo" && "$bin" "소스/파일 이름.rs:3") || status=$?

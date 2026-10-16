@@ -23,6 +23,7 @@ import { openSearchPanel } from "@codemirror/search";
 import { blameSwitch } from "../worktree/switch";
 import { openBlame, type BlameTarget } from "./session";
 import type { BlameBlock, BlameMeta, BlameStats, CommitInfo, Neighbor, Version } from "./types";
+import { useMounted } from "../mounted";
 
 
 type Props = {
@@ -157,6 +158,7 @@ export function BlameView({
   const pointerInCard = useRef(false);
   /** 이동 요청을 보내 놓고 답을 기다리는 중(키를 여러 번 눌러도 한 번만 간다) */
   const navigating = useRef(false);
+  const mounted = useMounted();
   const latest = useRef({ hover, help, meta, infos, active });
   latest.current = { hover, help, meta, infos, active };
 
@@ -224,12 +226,16 @@ export function BlameView({
     editor.current?.view.focus();
   };
 
-  /** 이동할 곳을 받아 App에 넘긴다. 없으면(null) 알린다. */
+  /**
+   * 이동할 곳을 받아 App에 넘긴다. 없으면(null) 알린다. 답을 기다리는 동안(큰 저장소의 `<`는 몇 초 걸린다) 이 화면을
+   * 닫았거나(`q`, 새 `plx` 호출) 다른 화면을 위에 열었으면 이동하지 않는다.
+   */
   const navigate = (request: Promise<Navigation | null>, none = "") => {
     if (navigating.current) return;
     navigating.current = true;
     request
       .then((navigation) => {
+        if (!mounted.current || !latest.current.active) return;
         if (navigation) onNavigate(navigation);
         else if (none) showToast(none);
       })

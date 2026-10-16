@@ -1,9 +1,9 @@
 //! 이력 질의 결과(blame, 파일 히스토리, 커밋 표) 디스크 캐시.
 //!
-//! 커밋 고정 결과는 바뀌지 않으므로 (저장소, 커밋, 경로)로 영구히 쓴다. 파일 히스토리는 시작 커밋
-//! (요청할 때의 HEAD)으로 고정한다. 작업트리 blame은
-//! (저장소, HEAD, 경로, 파일 크기, 수정 시각)으로 쓰되, 막 고친 파일은 넣지 않는다: 수정 시각의 단위
-//! 안에서 다시 고치면 크기와 시각이 같아 낡은 결과를 돌려줄 수 있다(git의 racy-git과 같은 문제).
+//! 커밋 고정 결과는 바뀌지 않으므로 (저장소, 커밋, 경로, 결과를 바꾸는 설정)으로 영구히 쓴다. 파일 히스토리는
+//! 시작 커밋(요청할 때의 HEAD)으로 고정한다. 작업트리 blame은 (저장소, HEAD, 경로, 설정, 파일 내용의 해시)로 쓴다:
+//! git에 그 내용을 그대로 주므로(`git blame --contents -`) 내용이 같으면 결과도 같다. 얕은 클론은 이력을 더 받으면
+//! 결과가 바뀌므로 넣지 않는다(부르는 쪽이 열쇠를 만들지 않는다).
 //!
 //! 결과 하나가 파일 하나다. 이름은 열쇠의 해시이고 파일 안에 열쇠 전체를 적어 해시 충돌을 걸러 낸다.
 //! 임시 파일에 쓰고 rename하므로 도중에 끊겨도 깨진 파일을 읽지 않는다. 크기가 한도를 넘으면 오래 안 쓴 것부터 지운다.
@@ -11,32 +11,33 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 /// 형식이 바뀌면 올린다. 열쇠에 들어가므로 예전 파일은 읽지 않고 오래된 순으로 지워진다.
-const FORMAT: &str = "plx-cache 2";
-/// 이보다 최근에 고친 작업트리 파일은 캐시에 넣지 않는다.
-const RACY: Duration = Duration::from_secs(2);
+const FORMAT: &str = "plx-cache 3";
 /// 이만큼 쓸 때마다 한도를 확인한다.
 const PRUNE_EVERY: u32 = 64;
+/// 임시 파일 이름의 일련번호. 한 프로세스에서 같은 열쇠를 동시에 써도 임시 파일이 겹치지 않는다.
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CacheKey {
     text: String,
-    /// 넣어도 되는가(작업트리 파일을 막 고쳤으면 아니다)
-    storable: bool,
 }
 
 impl CacheKey {
-    /// 커밋 고정 blame. `repo`는 작업트리 경로, `commit`은 sha 전체.
-    pub fn commit(repo: &Path, commit: &str, path: &str) -> CacheKey {
+    /// 커밋 고정 blame. `repo`는 작업트리 경로, `commit`은 sha 전체,
+    /// `settings`는 결과를 바꾸는 설정([`crate::repo::Repo::blame_settings`]).
+    pub fn commit(repo: &Path, commit: &str, path: &str, settings: &str) -> CacheKey {
         CacheKey {
-            text: format!("{FORMAT}\ncommit\n{}\n{commit}\n{path}", repo.display()),
-            storable: true,
+            text: format!(
+                "{FORMAT}\ncommit\n{}\n{commit}\n{path}\n{settings}",
+                repo.display()
+            ),
         }
     }
 
@@ -44,7 +45,6 @@ impl CacheKey {
     pub fn history(repo: &Path, start: &str, path: &str) -> CacheKey {
         CacheKey {
             text: format!("{FORMAT}\nhistory\n{}\n{start}\n{path}", repo.display()),
-            storable: true,
         }
     }
 
@@ -55,31 +55,27 @@ impl CacheKey {
                 "{FORMAT}\nlines\n{}\n{start}\n{first},{last}\n{path}",
                 repo.display()
             ),
-            storable: true,
         }
     }
 
-    /// 작업트리 blame. `head`가 바뀌거나 파일의 크기·수정 시각이 바뀌면 다른 열쇠다.
+    /// 작업트리 blame. `contents`는 git에 준 작업트리 내용, `clean`은 그 내용을 git에 넣을 때의 모양
+    /// ([`crate::repo::Repo::to_git`]): 줄 끝 설정·속성이 바뀌어 git이 보는 내용이 달라져도 다른 열쇠가 된다.
     pub fn worktree(
         repo: &Path,
         head: &str,
         path: &str,
-        meta: &fs::Metadata,
-        now: SystemTime,
+        settings: &str,
+        contents: &[u8],
+        clean: &[u8],
     ) -> CacheKey {
-        let modified = meta.modified().ok();
-        let nanos = modified
-            .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-            .map_or(0, |d| d.as_nanos());
-        let racy = modified.is_none_or(|t| now.duration_since(t).is_ok_and(|age| age < RACY))
-            || modified.is_some_and(|t| t > now);
         CacheKey {
             text: format!(
-                "{FORMAT}\nworktree\n{}\n{head}\n{path}\n{}\n{nanos}",
+                "{FORMAT}\nworktree\n{}\n{head}\n{path}\n{settings}\n{} {:016x} {:016x}",
                 repo.display(),
-                meta.len()
+                contents.len(),
+                fnv1a64(contents),
+                fnv1a64(clean)
             ),
-            storable: !racy,
         }
     }
 
@@ -88,12 +84,7 @@ impl CacheKey {
     pub fn commit_table(git_dir: &Path) -> CacheKey {
         CacheKey {
             text: format!("{FORMAT}\ncommits\n{}", git_dir.display()),
-            storable: true,
         }
-    }
-
-    pub fn storable(&self) -> bool {
-        self.storable
     }
 
     fn file_name(&self) -> String {
@@ -153,18 +144,13 @@ impl DiskCache {
 
     /// 결과를 넣는다. 실패해도 앱은 계속 동작한다.
     pub fn put<T: Serialize>(&self, key: &CacheKey, value: &T) -> io::Result<()> {
-        if !key.storable {
-            return Ok(());
-        }
         fs::create_dir_all(&self.dir)?;
         let entry = EntryRef {
             key: &key.text,
             value,
         };
         let path = self.dir.join(key.file_name());
-        let tmp = self
-            .dir
-            .join(format!("{}.{}.tmp", key.file_name(), std::process::id()));
+        let tmp = self.dir.join(tmp_name(&key.file_name()));
         fs::write(&tmp, serde_json::to_vec(&entry).map_err(io::Error::other)?)?;
         if let Err(e) = fs::rename(&tmp, &path) {
             let _ = fs::remove_file(&tmp);
@@ -194,13 +180,10 @@ impl DiskCache {
     }
 
     pub fn put_bytes(&self, key: &CacheKey, value: &[u8]) -> io::Result<()> {
-        if !key.storable {
-            return Ok(());
-        }
         fs::create_dir_all(&self.dir)?;
         let name = key.bytes_file_name();
         let path = self.dir.join(&name);
-        let tmp = self.dir.join(format!("{name}.{}.tmp", std::process::id()));
+        let tmp = self.dir.join(tmp_name(&name));
         let mut bytes = Vec::with_capacity(4 + key.text.len() + value.len());
         bytes.extend_from_slice(&(key.text.len() as u32).to_le_bytes());
         bytes.extend_from_slice(key.text.as_bytes());
@@ -263,8 +246,17 @@ impl DiskCache {
     }
 }
 
+/// 임시 파일 이름: 프로세스와 쓰기마다 다르다(같은 열쇠를 두 스레드가 써도 서로의 파일을 덮지 않는다).
+fn tmp_name(name: &str) -> String {
+    format!(
+        "{name}.{}.{}.tmp",
+        std::process::id(),
+        TMP_SEQ.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
 /// 파일 이름용 해시. 충돌은 파일 안의 열쇠로 걸러 내므로 빠르고 안정적이면 된다(std 해시는 버전마다 다를 수 있다).
-fn fnv1a64(bytes: &[u8]) -> u64 {
+pub(crate) fn fnv1a64(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &b| {
         (hash ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
     })
@@ -272,6 +264,8 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::blame::{BlameBlock, BlameCommit, Chunk};
 
@@ -297,13 +291,13 @@ mod tests {
     fn put_get_and_key_mismatch() {
         let dir = tempfile::tempdir().unwrap();
         let cache = DiskCache::new(dir.path().join("blame"), 1 << 20);
-        let key = CacheKey::commit(Path::new("/repo"), &"1".repeat(40), "a.rs");
+        let key = CacheKey::commit(Path::new("/repo"), &"1".repeat(40), "a.rs", "");
         assert_eq!(cache.get::<Chunk>(&key), None);
         cache.put(&key, &chunk("첫 커밋")).unwrap();
         assert_eq!(cache.get(&key), Some(chunk("첫 커밋")));
 
         // 다른 열쇠, 그리고 같은 파일 이름에 다른 열쇠가 들어 있는 경우(해시 충돌 흉내)
-        let other = CacheKey::commit(Path::new("/repo"), &"2".repeat(40), "a.rs");
+        let other = CacheKey::commit(Path::new("/repo"), &"2".repeat(40), "a.rs", "");
         assert_eq!(cache.get::<Chunk>(&other), None);
         let collided = dir.path().join("blame").join(other.file_name());
         fs::copy(dir.path().join("blame").join(key.file_name()), &collided).unwrap();
@@ -319,61 +313,52 @@ mod tests {
     }
 
     #[test]
-    fn worktree_keys() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("a.txt");
-        fs::write(&file, "a\n").unwrap();
-        let meta = fs::metadata(&file).unwrap();
-        let modified = meta.modified().unwrap();
+    fn keys_cover_settings_head_and_contents() {
         let repo = Path::new("/repo");
-
-        let fresh = CacheKey::worktree(
-            repo,
-            "h",
-            "a.txt",
-            &meta,
-            modified + Duration::from_millis(500),
-        );
-        assert!(!fresh.storable(), "막 고친 파일은 넣지 않는다");
-        let settled = CacheKey::worktree(
-            repo,
-            "h",
-            "a.txt",
-            &meta,
-            modified + Duration::from_secs(10),
-        );
-        assert!(settled.storable());
-        assert_eq!(fresh.text, settled.text, "넣을 수 있는지와 열쇠는 따로다");
-        let future = CacheKey::worktree(
-            repo,
-            "h",
-            "a.txt",
-            &meta,
-            modified - Duration::from_secs(10),
-        );
-        assert!(
-            !future.storable(),
-            "시계가 어긋나 미래 시각이면 넣지 않는다"
+        let sha = "1".repeat(40);
+        assert_ne!(
+            CacheKey::commit(repo, &sha, "a.rs", "").text,
+            CacheKey::commit(repo, &sha, "a.rs", "blame.ignoreRevsFile=.revs\n").text,
+            "blame 설정이 바뀌면 다른 열쇠"
         );
 
-        let other_head = CacheKey::worktree(
-            repo,
-            "h2",
-            "a.txt",
-            &meta,
-            modified + Duration::from_secs(10),
+        let key = |head: &str, settings: &str, contents: &[u8], clean: &[u8]| {
+            CacheKey::worktree(repo, head, "a.txt", settings, contents, clean).text
+        };
+        let base = key("h", "", b"a\r\n", b"a\n");
+        assert_eq!(base, key("h", "", b"a\r\n", b"a\n"));
+        assert_ne!(base, key("h2", "", b"a\r\n", b"a\n"), "HEAD");
+        assert_ne!(base, key("h", "x=1\n", b"a\r\n", b"a\n"), "설정");
+        assert_ne!(base, key("h", "", b"b\r\n", b"b\n"), "내용");
+        assert_ne!(
+            base,
+            key("h", "", b"a\r\n", b"a\r\n"),
+            "줄 끝 변환이 바뀌어 git이 보는 내용이 다르다(core.autocrlf, 속성)"
         );
-        assert_ne!(settled.text, other_head.text);
+    }
 
-        let cache = DiskCache::new(dir.path().join("cache"), 1 << 20);
-        cache.put(&fresh, &chunk("x")).unwrap();
-        assert_eq!(cache.get::<Chunk>(&fresh), None);
-        cache.put(&settled, &chunk("x")).unwrap();
-        assert_eq!(
-            cache.get(&fresh),
-            Some(chunk("x")),
-            "읽기는 열쇠만 같으면 된다"
-        );
+    #[test]
+    fn concurrent_writes_of_one_key_do_not_share_a_temp_file() {
+        assert_ne!(tmp_name("a.json"), tmp_name("a.json"));
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Arc::new(DiskCache::new(dir.path().to_path_buf(), 1 << 30));
+        let key = CacheKey::commit(Path::new("/r"), &"1".repeat(40), "a.rs", "");
+        let threads: Vec<_> = (0..8)
+            .map(|i| {
+                let (cache, key) = (cache.clone(), key.clone());
+                std::thread::spawn(move || {
+                    for _ in 0..20 {
+                        // Windows는 같은 파일로 동시에 rename하면 하나가 실패할 수 있다(캐시 쓰기는 실패해도 된다).
+                        let _ = cache.put(&key, &chunk(&i.to_string().repeat(500)));
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        let value: Chunk = cache.get(&key).expect("깨지지 않은 값 하나가 남는다");
+        assert!(value.commits[0].summary.len() == 500);
     }
 
     #[test]
@@ -381,7 +366,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cache = DiskCache::new(dir.path().to_path_buf(), 0);
         let keys: Vec<CacheKey> = (0..5)
-            .map(|i| CacheKey::commit(Path::new("/r"), &i.to_string(), "a.rs"))
+            .map(|i| CacheKey::commit(Path::new("/r"), &i.to_string(), "a.rs", ""))
             .collect();
         let size = {
             cache.put(&keys[0], &chunk("x")).unwrap();

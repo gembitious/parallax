@@ -37,7 +37,8 @@ baseline 표가 `bench/results.md`에 있다.
 - [x] `,` 부모 리비전 blame: porcelain의 `previous <sha> <path>` 사용, 커밋 diff로 줄 위치 매핑
       (그 커밋에서 추가된 줄은 해당 hunk 시작으로) — Windows·macOS 실기 확인 필요
 - [x] `<`/`>` 리비전 이동, 탐색 스택(`q`로 뒤로) — Windows·macOS 실기 확인 필요
-- [x] 캐시: 커밋 고정 blame은 디스크 영구 캐시, 작업트리 blame은 HEAD + 파일 지문 — Windows·macOS 실기 확인 필요
+- [x] 캐시: 커밋 고정 blame은 디스크 영구 캐시, 작업트리 blame은 HEAD + 파일 내용(git에 준 내용). 둘 다 blame 설정을
+      열쇠에 넣고 얕은 클론은 넣지 않는다 — Windows·macOS 실기 확인 필요
 
 **완료 기준:** blame 성능 예산 충족. 부모 이동 줄 매핑이 fixtures(이동·rename·merge 포함) 골든 테스트를 통과한다.
 

@@ -11,6 +11,7 @@ import { scrollToRow, visibleRange } from "../history/list";
 import { lastName, type Navigation } from "../nav";
 import { afterPaint, getPerfInfo, nowMs, record } from "../perf";
 import { drawRows, graphWidth, readPalette, ROW_HEIGHT, type Palette, type Visible } from "./draw";
+import { reloadFocus, type Focus } from "./focus";
 import { CHUNK, RowCache, rowWidth } from "./rows";
 import { nextRow, parseQuery, rowMatches, type Query } from "./search";
 import { CANCELLED, openGraph, type GraphHandle } from "./session";
@@ -108,11 +109,12 @@ const TOAST_MS = 1800;
 const FIRST_SCREEN_BUDGET_MS = 150;
 /** 그리는 범위 앞뒤로 미리 읽는 행 수 */
 const OVERSCAN = 60;
+/** 읽지 못한 행 묶음을 다시 읽기까지(ms) */
+const RETRY_MS = 1000;
 /** 한 행에 보이는 이름표 수(나머지는 +N) */
 const MAX_LABELS = 3;
 
 /** 세션을 열고 고를 행: 그 리비전, HEAD, 또는 맨 위(다시 읽을 때 맨 위를 보고 있었다) */
-type Focus = { kind: "rev"; rev: string; offset?: number } | { kind: "head" } | { kind: "top" };
 
 /** 마지막으로 한 검색(n/N이 되풀이한다). 경로 검색은 일치 행들을 한 번 구해 둔다. */
 type Found = { kind: "text"; text: string } | { kind: "path"; path: string; rows: number[]; set: ReadonlySet<number> };
@@ -169,6 +171,10 @@ function GraphPane({
   /** 다시 읽는 중인 세션(첫 화면이 오면 보이는 세션과 바꾼다) */
   const pending = useRef<GraphHandle | null>(null);
   const sessionSeq = useRef(0);
+  /** 아직 이루지 못한 처음 요청(`G`로 연 커밋 등). 그사이 다시 읽으면 새 세션도 이것을 고른다. */
+  const pendingFocus = useRef<Focus | null>(null);
+  /** 고른 행의 sha(그 행의 묶음이 캐시에서 밀려나도 다시 읽을 때 같은 커밋을 고른다) */
+  const selectedSha = useRef<{ index: number; sha: string | null }>({ index: -1, sha: null });
   const listRef = useRef<HTMLDivElement>(null);
   const quickOpen = useQuickOpen({
     repo: meta?.repo ?? repo,
@@ -227,6 +233,11 @@ function GraphPane({
   );
   useEffect(() => () => scrollMeter.current?.dispose(), []);
   latest.current = { active, meta, selected, help, total, found, openFiles: quickOpen.open, palette: commandPalette.open };
+  {
+    const row = cache.current.get(selected);
+    if (selectedSha.current.index !== selected) selectedSha.current = { index: selected, sha: row?.sha ?? null };
+    else if (row) selectedSha.current.sha = row.sha;
+  }
 
   const showToast = (message: string) => {
     setToast(message);
@@ -296,7 +307,7 @@ function GraphPane({
           setTotal(event.total);
           setProgress({ kind: "layout" });
           setGeneration(seq);
-          focusRow(graph, seq, focusOn);
+          focusRow(graph, focusOn);
           break;
         case "progress":
           if (showing) setAvailable(event.available);
@@ -320,15 +331,18 @@ function GraphPane({
   };
 
   /** 새 세션의 첫 화면에서 고를 행 */
-  const focusRow = (graph: GraphHandle, seq: number, focusOn: Focus) => {
+  const focusRow = (graph: GraphHandle, focusOn: Focus) => {
     if (focusOn.kind === "top") {
+      pendingFocus.current = null;
       setSelected(0);
       if (listRef.current) listRef.current.scrollTop = 0;
       return;
     }
     graph.find(focusOn.kind === "rev" ? focusOn.rev : "HEAD").then(
       (row) => {
-        if (seq !== sessionSeq.current) return;
+        // 보이는 세션의 답이면 쓴다(더 새 세션을 읽는 중이어도: 바꿔 끼우면 그 세션이 같은 요청을 이룬다).
+        if (handle.current !== graph) return;
+        if (pendingFocus.current === focusOn) pendingFocus.current = null;
         if (row === null) {
           if (focusOn.kind === "rev" && focusOn.offset === undefined) {
             showToast(`이 그래프에 없는 커밋이다: ${shortSha(focusOn.rev)}`);
@@ -348,19 +362,31 @@ function GraphPane({
     );
   };
 
-  /** 저장소가 바뀌었다: 맨 위를 보고 있었으면 맨 위(새 커밋)를, 아니면 고른 커밋을 같은 자리에 두고 다시 읽는다. */
+  /**
+   * 저장소가 바뀌었다: 맨 위를 보고 있었으면 맨 위(새 커밋)를, 아니면 고른 커밋을 같은 자리에 두고 다시 읽는다.
+   * 처음 요청한 커밋을 아직 고르지 못했으면(그래프를 읽는 중에 커밋이 생겼다) 그 요청을 이어 간다.
+   */
   const reload = () => {
-    const list = listRef.current;
     const { selected: at } = latest.current;
-    const top = list?.scrollTop ?? 0;
-    const sha = cache.current.get(at)?.sha;
-    const atTop = top < ROW_HEIGHT && at === 0;
-    openSession(atTop || !sha ? { kind: "top" } : { kind: "rev", rev: sha, offset: at * ROW_HEIGHT - top }, true);
+    const top = listRef.current?.scrollTop ?? 0;
+    // 고른 행의 묶음이 캐시에서 밀려났으면 기억한 sha, 그것도 없으면 보이는 첫 행(늘 캐시에 있다)을 같은 자리에 둔다.
+    const remembered = selectedSha.current.index === at ? selectedSha.current.sha : null;
+    const focusOn = reloadFocus({
+      pending: pendingFocus.current,
+      scrollTop: top,
+      rowHeight: ROW_HEIGHT,
+      selected: at,
+      selectedSha: cache.current.get(at)?.sha ?? remembered,
+      firstVisibleSha: cache.current.get(Math.floor(top / ROW_HEIGHT))?.sha ?? null,
+    });
+    openSession(focusOn, true);
   };
 
   // 그래프를 연다. 화면을 떠나면(끝난 뒤에도) 닫아 백엔드의 레이아웃을 버린다.
   useEffect(() => {
-    openSession(focus ? { kind: "rev", rev: focus } : { kind: "head" }, false);
+    const initial: Focus = focus ? { kind: "rev", rev: focus } : { kind: "head" };
+    pendingFocus.current = initial;
+    openSession(initial, false);
     return () => {
       sessionSeq.current += 1;
       handle.current?.close();
@@ -437,12 +463,18 @@ function GraphPane({
         (window) => {
           if (cache.current !== rows) return;
           rows.put(window);
+          // 덜 받은 묶음(레이아웃 진행 중에 요청)이면 다음 실행이 나머지를 다시 읽는다(version이 바뀐다).
           setVersion((v) => v + 1);
         },
-        () => cache.current === rows && rows.failed(index),
+        () => {
+          if (cache.current !== rows) return;
+          rows.failed(index);
+          // 실패한 묶음은 잠시 뒤 다시 읽는다(곧바로 되풀이하지 않게).
+          window.setTimeout(() => setVersion((v) => v + 1), RETRY_MS);
+        },
       );
     }
-  }, [viewport, available, total, generation]);
+  }, [viewport, available, total, generation, version]);
 
   // 목록 크기를 따라간다.
   useEffect(() => {

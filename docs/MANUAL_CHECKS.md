@@ -79,6 +79,8 @@ npm run tauri build -- --bundles app   # macOS: target/release/bundle/macos/para
 | 3 | `q`를 여러 번 | 한 단계씩 돌아오고, 돌아온 화면은 커서·스크롤이 그대로다. 맨 앞에서 `q`는 창을 숨긴다 |
 | 4 | `<` / `>` | 파일을 바꾼 이전·다음 커밋 버전으로 간다. `<` 다음 `>`는 원래 화면으로 돌아온다 |
 | 5 | 같은 파일을 다시 `plx` | 거터가 거의 즉시 찬다(캐시). HUD를 켰다면 `(캐시)` 기록 |
+| 6 | **Windows:** `core.autocrlf=true`(Git for Windows 기본값)인 저장소에서 커밋하지 않고 고친 줄에 `,`, 바꾸지 않은 파일에서 `<` | `,`는 그 줄 근처로 간다(1번 줄로 가지 않는다). 바꾸지 않은 파일의 `<`는 HEAD가 아니라 그 앞 리비전이다 |
+| 7 | 큰 저장소에서 `<`를 누르고 답이 오기 전에 `q` | 닫은 화면의 답으로 새 화면이 쌓이지 않는다 |
 
 ## 4. 커밋 상세 (M2)
 
@@ -107,6 +109,7 @@ npm run tauri build -- --bundles app   # macOS: target/release/bundle/macos/para
 | 7 | `/` 후 단어, `Enter`·`Shift+Enter`, `Esc` 뒤 `n`/`N` | 맞는 커밋이 노랗게 칠해지고 그리로 옮겨 간다 |
 | 8 | blame 화면에서 `H` | 그 리비전부터의 파일 히스토리(작업트리 blame이면 HEAD부터) |
 | 9 | 지운 파일: `plx log <지운 경로>` | 지운 커밋(`D`)부터 보인다 |
+| 10 | 저장소 폴더에서 `plx log .` | `git log`와 같은 커밋들(빈 커밋, merge 포함) |
 
 ## 6. 라인 히스토리 (M2)
 
