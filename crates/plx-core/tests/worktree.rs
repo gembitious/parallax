@@ -170,10 +170,53 @@ fn canonical_or(path: &Path) -> PathBuf {
     })
 }
 
+/// 링크된 워크트리 폴더를 `git worktree repair` 없이 옮겨도, 옮긴 폴더에서 보면 그것이 지금 작업트리다.
+#[test]
+fn moved_worktree_is_still_current() {
+    let temp = tempfile::tempdir().unwrap();
+    let (main, agent, _) = setup(temp.path());
+    let moved = temp.path().join("옮긴 워크트리");
+    std::fs::rename(&agent, &moved).unwrap();
+    let repos = RepoCache::new();
+    let repo = repos.for_path(&moved).unwrap();
+    let list = worktree::list(&repo).unwrap();
+    let current: Vec<&Worktree> = list.iter().filter(|w| w.current).collect();
+    assert_eq!(current.len(), 1, "{list:?}");
+    assert_eq!(current[0].id.as_deref(), Some("에이전트-워크트리"));
+    assert_eq!(Path::new(&current[0].path), canonical(&moved));
+    assert!(!current[0].missing);
+    // 지금 작업트리의 브랜치는 "다른 워크트리"가 아니다.
+    let elsewhere = worktree::checked_out_elsewhere(&repo);
+    assert!(!elsewhere.branches.contains_key("agent/1"), "{elsewhere:?}");
+    assert!(elsewhere.branches.contains_key("main"));
+    // 주 작업트리에서 보면 옛 폴더는 사라진 것이다(git worktree list와 같다).
+    let from_main = worktree::list(&repos.for_path(&main).unwrap()).unwrap();
+    assert!(by_name(&from_main, "에이전트 워크트리").missing);
+}
+
 #[test]
 fn graph_labels_name_other_worktrees() {
     let temp = tempfile::tempdir().unwrap();
-    let (main, agent, _) = setup(temp.path());
+    let (main, agent, detached) = setup(temp.path());
+    // detached 워크트리에서 브랜치 없이 커밋했다(어느 브랜치에서도 닿지 않는다).
+    git_as_user(
+        &detached,
+        &["commit", "--quiet", "--allow-empty", "-m", "detached 커밋"],
+    );
+    let detached_head = git_text(&detached, &["rev-parse", "HEAD"]);
+    // 한 브랜치를 두 워크트리가 체크아웃했다(-f).
+    let again = temp.path().join("또 하나");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-f",
+            again.to_str().unwrap(),
+            "agent/1",
+        ],
+    );
     let sessions = GraphSessions::new();
     let repos = RepoCache::new();
     let (tx, rx) = mpsc::channel();
@@ -192,7 +235,11 @@ fn graph_labels_name_other_worktrees() {
     let row = rows.iter().find(|r| r.sha == agent_head).unwrap();
     let label = row.labels.iter().find(|l| l.name == "agent/1").unwrap();
     assert_eq!(label.kind, LabelKind::Branch);
-    assert_eq!(label.worktree.as_deref(), Some("에이전트 워크트리"));
+    assert_eq!(
+        label.worktree.as_deref(),
+        Some("또 하나, 에이전트 워크트리"),
+        "체크아웃한 워크트리 모두"
+    );
     // 지금 보는 작업트리의 브랜치에는 워크트리 이름이 없다.
     let main_label = rows
         .iter()
@@ -201,11 +248,32 @@ fn graph_labels_name_other_worktrees() {
         .unwrap();
     assert!(main_label.current);
     assert_eq!(main_label.worktree, None);
-    // 다른 워크트리의 detached HEAD
+    // 다른 워크트리의 detached HEAD: 브랜치에서 닿지 않아도 그 커밋까지 걷는다(git log --all처럼).
+    let row = rows
+        .iter()
+        .find(|r| r.sha == detached_head)
+        .unwrap_or_else(|| panic!("detached 커밋이 그래프에 없다"));
     assert!(
-        rows.iter()
-            .flat_map(|r| &r.labels)
+        row.labels
+            .iter()
             .any(|l| l.kind == LabelKind::Head && l.worktree.as_deref() == Some("detached"))
     );
+    // 순서는 git log --topo-order와 같다(다른 워크트리의 HEAD를 시작점 끝에 더한다).
+    let expected: Vec<String> = git_text(
+        &main,
+        &[
+            "log",
+            "--topo-order",
+            "--format=%H",
+            "HEAD",
+            "--branches",
+            &detached_head,
+        ],
+    )
+    .lines()
+    .map(str::to_owned)
+    .collect();
+    let ours: Vec<String> = rows.iter().map(|r| r.sha.clone()).collect();
+    assert_eq!(ours, expected);
     let _ = GraphEvent::Cancelled;
 }

@@ -13,6 +13,7 @@ import { BlameModel } from "./model";
 import type { Navigation } from "../nav";
 import { watchFile, watchRepo } from "../watch";
 import { WorktreePicker } from "../worktree/WorktreePicker";
+import { blameSwitch } from "../worktree/switch";
 import { openBlame, type BlameTarget } from "./session";
 import type { BlameMeta, BlameStats, CommitInfo, Neighbor, Version } from "./types";
 
@@ -492,6 +493,7 @@ export function BlameView({
       if (!latest.current.active || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
       const target = e.target as HTMLElement | null;
       if (target?.closest(".cm-editor") || target?.closest("input, textarea")) return;
+      // W는 코드 뷰가 없는 화면(바이너리, 오류)에서도 먹는다.
       const handled =
         e.key === "q"
           ? actions.current.back()
@@ -499,7 +501,9 @@ export function BlameView({
             ? actions.current.help()
             : e.key === "H"
               ? actions.current.history()
-              : e.key === "Escape" && actions.current.escape();
+              : e.key === "W"
+                ? actions.current.worktrees()
+                : e.key === "Escape" && actions.current.escape();
       if (handled) e.preventDefault();
     };
     window.addEventListener("keydown", onKey);
@@ -582,25 +586,19 @@ export function BlameView({
           }}
         />
       )}
-      {worktrees && meta && (
+      {worktrees && (
         <WorktreePicker
-          repo={meta.repo}
+          repo={meta?.repo ?? target.repo ?? target.path}
           onClose={() => {
             setWorktrees(false);
             editor.current?.view.focus();
           }}
           onPick={(worktree) => {
             setWorktrees(false);
-            // 다른 워크트리의 같은 파일(작업트리 버전), 같은 줄
-            if (!worktree.current) {
-              onNavigate({
-                kind: "file",
-                target: { repo: worktree.path, path: meta.path, rev: null },
-                line: editor.current ? cursorLine() : null,
-              });
-            } else {
-              editor.current?.view.focus();
-            }
+            // 작업트리 blame은 그 워크트리의 같은 파일·줄, 리비전 blame은 같은 리비전(src/worktree/switch.ts)
+            const next = blameSwitch(worktree, meta, editor.current ? cursorLine() : null);
+            if (next) onNavigate(next);
+            else editor.current?.view.focus();
           }}
         />
       )}

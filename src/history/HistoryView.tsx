@@ -5,6 +5,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Help } from "../Help";
 import { WorktreePicker } from "../worktree/WorktreePicker";
+import { historySwitch } from "../worktree/switch";
+import { call } from "../ipc";
 import { copyText } from "../clipboard";
 import { formatCount, formatDate, parseTz, relativeTime, shortSha } from "../blame/format";
 import { STATUS_LETTER, STATUS_NAME } from "../commit/types";
@@ -505,14 +507,14 @@ export function HistoryView({
           onClose={() => setWorktrees(false)}
           onPick={(worktree) => {
             setWorktrees(false);
-            // 다른 워크트리의 같은 경로(라인 히스토리면 같은 줄 범위)
-            if (!worktree.current) {
-              onNavigate({
-                kind: "history",
-                target: { repo: worktree.path, path: meta.path, rev: null },
-                lines: meta.lines ?? undefined,
-              });
-            }
+            // 리비전에서 시작한 히스토리는 그대로, HEAD에서 시작한 것은 그 워크트리의 HEAD에서(라인 히스토리면 줄 범위를
+            // 그 워크트리의 작업트리 줄로 옮긴다: src/worktree/switch.ts).
+            const mapLine = (from: { rev: string; path: string }, line: number) =>
+              call<number>("blame_map_line", { repo: worktree.path, from, to: { rev: null, path: from.path }, line });
+            void historySwitch(worktree, meta, async (from, range) => {
+              const [start, end] = await Promise.all([mapLine(from, range.start), mapLine(from, range.end)]);
+              return { start, end: Math.max(start, end) };
+            }).then((next) => next && onNavigate(next));
           }}
         />
       )}
