@@ -9,7 +9,7 @@ import { Hud } from "./Hud";
 import { Notices, openNotices, useNoticesRequest } from "./notices/Notices";
 import { call } from "./ipc";
 import {
-  backDirectionOf,
+  backDirectionAt,
   titleOf,
   viewReducer,
   type Navigation,
@@ -141,8 +141,12 @@ export default function App() {
     if (title) invoke("set_window_title", { title }).catch(() => {});
   }, [top, rootLabel]);
 
+  // 키 처리기를 한 번만 만드는 화면은 처음 받은 onBack을 계속 부른다. 그때의 스택이 아니라 지금 스택을 본다
+  // (스택이 MAX_STACK을 넘어 아래를 버리면 그 화면이 맨 아래가 될 수 있다).
+  const stackRef = useRef(stack);
+  stackRef.current = stack;
   const back = () => {
-    if (stack.length > 1) dispatch({ type: "back" });
+    if (stackRef.current.length > 1) dispatch({ type: "back" });
     else hideWindow();
   };
 
@@ -169,7 +173,7 @@ export default function App() {
                     {...common}
                     target={entry.target}
                     line={entry.line}
-                    backDirection={backDirectionOf(entry.via)}
+                    backDirection={backDirectionAt(stack, i)}
                     cold={cold}
                   />
                 ) : entry.view === "history" ? (

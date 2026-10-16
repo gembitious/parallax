@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { MAX_STACK, backDirectionOf, lastName, titleOf, viewReducer, type PlxRequest, type ViewState } from "./nav";
+import {
+  MAX_STACK,
+  backDirectionAt,
+  backDirectionOf,
+  lastName,
+  titleOf,
+  viewReducer,
+  type PlxRequest,
+  type ViewState,
+} from "./nav";
 
 const request = (id: number, request: PlxRequest["request"]): PlxRequest => ({
   id,
@@ -124,6 +133,17 @@ describe("viewReducer", () => {
     expect(state.stack).toHaveLength(MAX_STACK);
     expect(state.stack[MAX_STACK - 1]).toMatchObject({ target: { rev: `p${MAX_STACK + 4}` } });
   });
+
+  it("아래를 버려 맨 아래가 된 `<` 화면의 `>`는 돌아가지 않고 새로 연다", () => {
+    let state = viewReducer(empty, { type: "request", request: blame(1), receivedMs: 0 });
+    for (let i = 0; i < MAX_STACK; i++) state = navigate(state, "older", `o${i}`);
+    expect(state.stack).toHaveLength(MAX_STACK);
+    expect(state.stack.map((e) => e.via)).toEqual(Array(MAX_STACK).fill("older"));
+    expect(backDirectionAt(state.stack, 0)).toBeUndefined();
+    expect(backDirectionAt(state.stack, 1)).toBe("newer");
+    while (state.stack.length > 1) state = viewReducer(state, { type: "back" });
+    expect(backDirectionAt(state.stack, 0)).toBeUndefined();
+  });
 });
 
 describe("탐색 도우미", () => {
@@ -132,6 +152,10 @@ describe("탐색 도우미", () => {
     expect(backDirectionOf("newer")).toBe("older");
     expect(backDirectionOf("parent")).toBeUndefined();
     expect(backDirectionOf("request")).toBeUndefined();
+    let state = viewReducer(empty, { type: "request", request: blame(1), receivedMs: 0 });
+    state = navigate(state, "older", "o1");
+    state = navigate(state, "newer", "n1");
+    expect([0, 1, 2].map((i) => backDirectionAt(state.stack, i))).toEqual([undefined, "newer", "older"]);
   });
 
   it("창 제목", () => {

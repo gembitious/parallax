@@ -167,6 +167,13 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
 export const backDirectionOf = (via: StackEntry["via"]) =>
   via === "older" ? "newer" : via === "newer" ? "older" : undefined;
 
+/**
+ * 스택의 `index`번 화면에서 돌아가는 방향 키. 맨 아래 화면에는 돌아갈 곳이 없다: 스택이 MAX_STACK을 넘어 아래를
+ * 버리면 `<`로 온 화면이 맨 아래가 되는데, 그때 `>`는 새 화면(다음 리비전)을 연다.
+ */
+export const backDirectionAt = (stack: readonly StackEntry[], index: number) =>
+  index > 0 ? backDirectionOf(stack[index].via) : undefined;
+
 /** 탐색으로 연 화면의 창 제목. 경로는 저장소 기준이다. */
 export function titleOf(entry: StackEntry): string {
   if (entry.view === "commit") return `커밋 ${shortSha(entry.rev)}`;
