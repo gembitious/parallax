@@ -543,7 +543,7 @@ impl Repo {
     /// `id` 커밋이 첫 부모의 다른 파일을 옮겨(rename) `path`를 만들었다면 그 원래 경로.
     ///
     /// `git log --follow`처럼 이 파일 하나의 원본만 찾는다: 그 커밋에서 지운 파일 가운데 내용이 같은 것,
-    /// 없으면 git과 같은 유사도([`crate::similarity`])가 50% 이상인 것 중 가장 비슷한 것(같으면 파일 이름이
+    /// 없으면 git과 같은 기준의 유사도([`crate::similarity`])가 50% 이상인 것 중 가장 비슷한 것(같으면 파일 이름이
     /// 같은 것). 커밋 전체의 rename을 찾지 않으므로 파일 수백 개를 옮긴 커밋에서도 빠르다.
     /// 복사(copy)는 따라가지 않는다. 얕은 클론의 경계처럼 부모가 없으면 `None`.
     pub fn rename_source(&self, id: ObjectId, path: &str) -> Result<Option<String>> {
