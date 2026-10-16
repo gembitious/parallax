@@ -48,6 +48,8 @@ pub struct PlxRequest {
     pub cwd: String,
     /// 호출 시작 시각(epoch ms).
     pub t0_ms: f64,
+    /// 호출한 프로세스가 `main()`에 들어온 시각(epoch ms). 모르면 0.
+    pub main_ms: f64,
     /// 이 인스턴스가 받은 시각(epoch ms).
     pub recv_ms: f64,
     /// 콜드 스타트(이 프로세스를 띄운 호출)인지.
@@ -94,6 +96,7 @@ impl Requests {
             args: invocation.args,
             cwd: invocation.cwd,
             t0_ms: invocation.t0_ms,
+            main_ms: invocation.main_ms,
             recv_ms,
             cold,
         };
@@ -195,7 +198,7 @@ pub fn start(t_main_ms: f64, requests: Arc<Requests>) -> Server {
         }
     }
 
-    let invocation = current_invocation(t0_ms).unwrap_or_else(|msg| fail(&msg, 2));
+    let invocation = current_invocation(t0_ms, t_main_ms).unwrap_or_else(|msg| fail(&msg, 2));
     let cwd = PathBuf::from(&invocation.cwd);
     // 잘못된 인자는 상주 인스턴스를 건드리지 않고 이 터미널에서 바로 알린다.
     let request = match cli::parse(&invocation.args, &cwd, cli::stat) {
@@ -319,7 +322,7 @@ fn should_detach(detached: bool, detach: Option<&str>) -> bool {
     }
 }
 
-fn current_invocation(t0_ms: f64) -> Result<Invocation, String> {
+fn current_invocation(t0_ms: f64, main_ms: f64) -> Result<Invocation, String> {
     let args = std::env::args_os()
         .skip(1)
         .map(|arg| {
@@ -344,6 +347,7 @@ fn current_invocation(t0_ms: f64) -> Result<Invocation, String> {
         args,
         cwd,
         t0_ms,
+        main_ms,
         pid: std::process::id(),
         env: Env::capture(),
     })

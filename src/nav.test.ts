@@ -17,6 +17,7 @@ const request = (id: number, request: PlxRequest["request"]): PlxRequest => ({
   args: [],
   cwd: "/repo",
   t0Ms: 0,
+  mainMs: 0,
   recvMs: 0,
   cold: false,
 });

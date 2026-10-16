@@ -320,5 +320,9 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
 - 2026-10-16: 콜드 스타트 측정(bench/results.md, CI 세 플랫폼과 linux-container). WebView를 만드는 구간이 가장 크다(Windows
   0.43초, macOS CI VM 2.1초, Linux 0.25초)라 앱이 줄일 수 있는 것부터 고쳤다. blame은 git을 따로 스레드에서 띄우고 내용을
   먼저 보낸다(전에는 git 프로세스를 만든 뒤 내용을 보냈다: CI의 macOS에서 첫 git 실행이 0.9초, Windows 60ms). 상주 앱은
-  뜰 때 WebView를 만드는 동안 git을 한 번 띄워 둔다(`plx_core::git::warm_up`, 그 버전을 기억해 가속 설정이 쓴다). 남은
-  후보는 JS·첫 렌더 구간(macOS CI 0.53초)이다: 첫 JS 묶음(717KB)을 화면별로 나눠 불러오면 줄 수 있다(아직 재지 않았다).
+  뜰 때 WebView를 만드는 동안 git을 한 번 띄워 둔다(`plx_core::git::warm_up`, 그 버전을 기억해 가속 설정이 쓴다).
+  JS·첫 렌더 구간(macOS CI 0.53초)은 나눠 재 보니(linux-container) 묶음을 읽고 실행하는 것은 절반 남짓이고 빈 첫 화면 렌더와
+  차례로 도는 시작 IPC 셋(그중 요청 듣기 37ms)이 나머지였다. 그래서 시작 IPC를 JS 묶음 맨 앞(`src/boot.ts`)에서 함께 보내
+  모듈을 실행하는 동안 오가게 하고, 첫 렌더는 답을 받은 뒤 요청한 화면으로 바로 한다. 듣기 전에 온 요청은 듣기 시작한 뒤
+  current_request를 한 번 더 물어 받는다. 화면별로 나눠 불러오기는 blame 화면이 CodeMirror 대부분을 써서 덜 수 있는 것이
+  첫 묶음의 12% 남짓이라 하지 않았다.
