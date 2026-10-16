@@ -127,7 +127,8 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
 - `PLX_T0`: 호출 시작 시각(epoch ms). 없으면 OS가 plx 프로세스를 만든 시각이 지연 측정 기준점이다.
 - `PLX_PERF=1`: 릴리스 빌드에서도 성능 HUD를 켠다(개발 빌드는 항상 켜짐. 입력란 밖에서 `` ` `` 키로 보이기·숨기기).
   `PLX_PERF_LOG=<파일>`을 함께 주면 끝난 요청을 JSON 한 줄씩 기록한다(`bench/app-latency.sh`가 쓴다).
-- `PLX_CACHE_DIR=<디렉터리>`: blame 캐시 위치(기본: OS 캐시 위치의 `com.gembitious.parallax/blame`, 한도 512MB).
+- `PLX_CACHE_DIR=<디렉터리>`: 결과 캐시(blame·히스토리·커밋 표) 위치. 그 아래 `results/`에 쓴다(기본: OS 캐시 위치의
+  `com.gembitious.parallax`, 한도 512MB).
   측정·자동 확인 스크립트는 임시 디렉터리를 줘서 사용자 캐시와 섞지 않는다.
 - `PLX_EDITOR`: `o`(에디터로 열기)가 띄울 에디터. 이름·경로(`code`, `zed`, `cursor`, `subl`, `idea` …, 줄 넘기는 법을
   안다) 또는 `{file}`·`{line}`·`{col}`을 넣은 명령 틀(`"my-editor --line {line} {file}"`). 없으면 `VISUAL`·`EDITOR`가
@@ -177,8 +178,7 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
   rename 원본은 그 파일 하나만 git과 같은 기준의 유사도(`plx_core::similarity`, 50%)로 찾는다.
   gix의 rename 추적은 짝 수(추가×삭제)가 1,000을 넘으면 유사도 비교를 건너뛰어 파일을 많이 옮긴 커밋을 놓친다.
 - 2026-10-15: "가속 설정"은 히스토리 머리줄의 버튼을 눌러 확인한 뒤 `git commit-graph write --reachable --changed-paths`만
-  실행한다(`plx_core::commit_graph`). git 2.46 이상이면 `-c commitGraph.changedPathsVersion=2`로 필터 v2를 쓴다
-  (v1은 0x80 이상 바이트가 든 경로, 즉 한글 경로의 해시가 `char` 부호에 따라 달라진다). 저장소 설정은 바꾸지 않는다:
+  실행한다(`plx_core::commit_graph`). 필터 버전은 git에 맡긴다(2026-10-16 리뷰 수정). 저장소 설정은 바꾸지 않는다:
   MILESTONES 초안의 `commitGraph.changedPaths`는 git에 없는 설정이고, `--changed-paths`로 쓴 뒤의 commit-graph 쓰기
   (git gc 포함)는 필터를 유지한다. 상태는 commit-graph 파일 머리(청크 표, BDAT 버전)와 HEAD가 그래프에 있는지로 본다.
 - 2026-10-15: 커밋 그래프는 gix의 topo 워크 대신 시작점에서 닿는 DAG를 직접 읽어 git의 `--topo-order`와 같은
@@ -295,6 +295,20 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
   줄이 없는 것은 표준 문구). 그래도 못 채우면 빌드를 실패시킨다. 결과(크레이트 402개·npm 57개, 문구 223개, 732KB)는
   Vite가 dist로 옮겨 실행 파일에 묻히고, 앱의 "오픈 소스 라이선스" 창이 읽는다. 커밋하지 않는다(의존성을 바꿀 때 따로
   갱신할 것이 없다). 창은 App이 그리고 열려 있는 동안 키를 모두 먹는다(화면들은 window에서 키를 받는다).
+- 2026-10-16: 가속 설정·결과 캐시 리뷰 수정. 필터 v2를 강제하지 않는다(`-c commitGraph.changedPathsVersion=2`를 뺐다).
+  git 기본값대로 그래프에 있는 버전, 없으면 v1이다. 이유: git 2.39~2.45는 v2 그래프를 다시 쓰다(gc, fetch.writeCommitGraph)
+  SIGSEGV로 죽는다. Finder로 띄운 macOS 앱의 `/usr/bin/git`(Apple Git 2.39), Ubuntu 24.04(2.43)처럼 흔한 git이고 앱이
+  쓰는 git도 띄운 방법에 따라 다르다. v1의 한글 경로 해시는 `char`가 부호 있는 플랫폼(x86-64, Windows·macOS의 ARM64)끼리
+  같고, Linux ARM64와 .git을 나눠 쓸 때만 어긋난다(확인 창에 알린다). 그래프에 v2가 있는데 git이 2.46보다 낮으면 쓰지 않는다.
+  상태는 git이 보는 대로 본다: 객체 디렉터리마다(저장소, alternates) 단일 파일을 사슬보다 먼저, 층마다 BDAT 머리(버전,
+  해시 수, 비트)가 맨 위 층과 같아야 필터로 친다. git이 commit-graph를 쓰지 않는 저장소(얕은 클론, grafts, `git replace`,
+  `core.commitGraph=false`)와 필터를 읽지 않는 설정, 트리를 받지 않은 부분 클론(`--filter=tree:0`: 필터를 만들려면 커밋마다
+  트리를 받아 온다)은 까닭을 보이고 권하지 않는다. 쓰기는 `GIT_NO_LAZY_FETCH=1`로 하고, git이 성공으로 끝나도 필터가 없거나
+  파일이 그대로면(Windows에서 다른 프로그램이 연 파일) 실패로 알린다. 한 저장소에는 한 번에 하나만 쓰고(화면 둘에서
+  눌러도), 상태는 쓰기 시작·끝과 창으로 돌아올 때 다시 읽는다. HEAD가 그래프에 없어도(새 커밋, 브랜치에서 닿지 않는
+  detached HEAD) 가속됨으로 본다(나머지는 필터를 쓴다. 다시 쓰기는 팔레트로). 결과 캐시: 파일·라인 히스토리 열쇠에 mailmap
+  (`%aN`)과 `-L`의 diff·rename 설정을 넣고, `git replace`·grafts가 있으면 얕은 클론처럼 넣지 않는다. 커밋 표(`.bin`)는 값의
+  FNV 해시를 머리에 둬 끝이 0으로 채워진 파일을 버리고, 쓰기에 실패하면 임시 파일을 지우며, 한도 정리는 따로 스레드에서 한다.
 - 2026-10-16: 화면 공통 동작 리뷰 수정. 작업트리 blame·HEAD부터의 히스토리를 다시 열 때(화면을 새로 만든다) 보이는
   화면에 창(도움말·워크트리·Quick Open·팔레트·고정 카드)이나 검색 칸이 열려 있으면 닫을 때까지 미루고(머리줄에
   `바뀜`), 검색어는 새 화면으로 넘긴다(`n`/`N`이 이어서 찾는다). 이유: 에이전트가 파일을 저장할 때마다 그 창과 치던
