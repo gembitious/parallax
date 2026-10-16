@@ -14,6 +14,7 @@ import type { Navigation } from "../nav";
 import { watchFile, watchRepo } from "../watch";
 import { WorktreePicker } from "../worktree/WorktreePicker";
 import { isQuickOpenKey, useQuickOpen } from "../quickopen/QuickOpen";
+import { blameSwitch } from "../worktree/switch";
 import { openBlame, type BlameTarget } from "./session";
 import type { BlameMeta, BlameStats, CommitInfo, Neighbor, Version } from "./types";
 
@@ -153,23 +154,22 @@ export function BlameView({
   };
 
   // 작업트리 blame: HEAD가 바뀌거나(이 파일을 커밋하는 등) 파일을 고치면(에이전트·편집기) 커서 줄을 지켜 다시 연다.
-  // 고정 리비전은 바뀌지 않는다.
-  const watched = meta && meta.rev === null ? meta.repo : null;
-  const watchedFile = watched && meta ? `${watched}/${meta.path}` : null;
+  // 고정 리비전은 바뀌지 않는다. 열기를 시작할 때 요청 대상으로 구독한다: meta를 기다리면 다시 열다 실패한 화면
+  // (체크아웃으로 파일이 사라짐)은 파일이 돌아와도 더는 바뀌지 않는다.
   useEffect(() => {
-    if (!watched || !watchedFile || !onReload) return;
+    if (rev !== null || !onReload) return;
     const reload = () => onReload(editor.current ? cursorLine() : line);
-    const stopRepo = watchRepo(watched, (change) => {
+    const stopRepo = watchRepo(target.repo ?? path, (change) => {
       if (change.headChanged) reload();
     });
-    const stopFile = watchFile(watchedFile, reload);
+    const stopFile = watchFile(target.repo ? `${target.repo}/${path}` : path, reload);
     return () => {
       stopRepo();
       stopFile();
     };
-    // cursorLine은 ref만 읽는다.
+    // 요청마다 새 컴포넌트다(App이 key를 준다). cursorLine은 ref만 읽는다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [watched, watchedFile]);
+  }, []);
 
   const openCard = (n: number, anchor: DOMRect, pinned: boolean) => {
     const sha = model.current?.sha(n);
@@ -514,6 +514,7 @@ export function BlameView({
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       const target = e.target as HTMLElement | null;
       if (target?.closest(".cm-editor") || target?.closest("input, textarea")) return;
+      // W는 코드 뷰가 없는 화면(바이너리, 오류)에서도 먹는다.
       const handled =
         e.key === "q"
           ? actions.current.back()
@@ -521,7 +522,9 @@ export function BlameView({
             ? actions.current.help()
             : e.key === "H"
               ? actions.current.history()
-              : e.key === "Escape" && actions.current.escape();
+              : e.key === "W"
+                ? actions.current.worktrees()
+                : e.key === "Escape" && actions.current.escape();
       if (handled) e.preventDefault();
     };
     window.addEventListener("keydown", onKey);
@@ -604,25 +607,19 @@ export function BlameView({
           }}
         />
       )}
-      {worktrees && meta && (
+      {worktrees && (
         <WorktreePicker
-          repo={meta.repo}
+          repo={meta?.repo ?? target.repo ?? target.path}
           onClose={() => {
             setWorktrees(false);
             editor.current?.view.focus();
           }}
           onPick={(worktree) => {
             setWorktrees(false);
-            // 다른 워크트리의 같은 파일(작업트리 버전), 같은 줄
-            if (!worktree.current) {
-              onNavigate({
-                kind: "file",
-                target: { repo: worktree.path, path: meta.path, rev: null },
-                line: editor.current ? cursorLine() : null,
-              });
-            } else {
-              editor.current?.view.focus();
-            }
+            // 작업트리 blame은 그 워크트리의 같은 파일·줄, 리비전 blame은 같은 리비전(src/worktree/switch.ts)
+            const next = blameSwitch(worktree, meta, editor.current ? cursorLine() : null);
+            if (next) onNavigate(next);
+            else editor.current?.view.focus();
           }}
         />
       )}

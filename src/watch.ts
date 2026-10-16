@@ -17,6 +17,13 @@ export type FileChange = { path: string };
 
 type Watching = { id: number; target: string };
 
+/**
+ * 구독을 끝낸 뒤 백엔드 감시를 이만큼 더 둔다. 화면을 다시 열면(변화가 와서 reload) 새 화면이 같은 감시를 이어받아,
+ * 그 변화 때의 지문과 견준다. 감시를 바로 버리면 새 화면이 자기 데이터를 읽은 뒤에야 새 지문을 재서, 그사이의
+ * 변화(예: 저장 직후 포매터가 다시 쓴 파일)를 놓친다.
+ */
+const UNWATCH_DELAY_MS = 2000;
+
 type Channel<T> = { event: string; key(payload: T): string; subscribers: Map<string, Set<(payload: T) => void>> };
 
 const repoChannel: Channel<RepoChange> = { event: "repo-changed", key: (c) => c.repo, subscribers: new Map() };
@@ -56,7 +63,8 @@ function subscribe<T>(
     const set = channel.subscribers.get(watching.target);
     set?.delete(onChange);
     if (set?.size === 0) channel.subscribers.delete(watching.target);
-    call("unwatch_repo", { id: watching.id }).catch(() => {});
+    const { id } = watching;
+    window.setTimeout(() => call("unwatch_repo", { id }).catch(() => {}), UNWATCH_DELAY_MS);
   };
 }
 

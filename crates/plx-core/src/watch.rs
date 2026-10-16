@@ -6,6 +6,8 @@
 //! 이벤트가 몰려 오니 [`DEBOUNCE`]만큼 조용해질 때까지 모은 뒤, HEAD와 참조의 지문이 실제로 달라졌을 때만 알린다.
 //!
 //! 링크된 워크트리는 HEAD가 `<공통>/worktrees/<이름>/HEAD`에 있고 참조는 공통 디렉터리에 있다. 둘 다 본다.
+//! 그래프 이름표는 다른 워크트리가 체크아웃한 것에 달라지므로 다른 워크트리의 HEAD와 워크트리가 생기고 없어지는 것도
+//! 본다(`<공통>/worktrees`를 재귀로, 아직 없으면 생길 때부터). 이것은 참조 변화로 알린다.
 
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
@@ -65,6 +67,8 @@ struct Fingerprint {
     /// HEAD가 가리키는 참조 이름(detached면 없다)
     head_ref: Option<String>,
     refs: u64,
+    /// 다른 워크트리들(id와 HEAD 파일 내용)
+    others: u64,
 }
 
 fn fingerprint(repo: &Repo) -> Fingerprint {
@@ -91,7 +95,34 @@ fn fingerprint(repo: &Repo) -> Fingerprint {
         head,
         head_ref,
         refs: hasher.finish(),
+        others: other_worktrees(local.git_dir(), local.common_dir()),
     }
+}
+
+/// 다른 워크트리들의 지문: 주 작업트리의 HEAD(지금 것이 아니면)와 `<공통>/worktrees/<id>/HEAD`의 내용.
+/// 워크트리가 생기거나 없어지거나 다른 브랜치·커밋을 체크아웃하면 달라진다.
+fn other_worktrees(git_dir: &Path, common_dir: &Path) -> u64 {
+    let canonical = |p: &Path| dunce::canonicalize(p).unwrap_or_else(|_| p.to_owned());
+    let here = canonical(git_dir);
+    let mut heads: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut add = |dir: &Path, id: String| {
+        if canonical(dir) != here {
+            heads.push((id, std::fs::read(dir.join("HEAD")).unwrap_or_default()));
+        }
+    };
+    add(common_dir, String::new());
+    if let Ok(entries) = std::fs::read_dir(common_dir.join("worktrees")) {
+        for entry in entries.flatten() {
+            add(
+                &entry.path(),
+                entry.file_name().to_string_lossy().into_owned(),
+            );
+        }
+    }
+    heads.sort();
+    let mut hasher = DefaultHasher::new();
+    heads.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// 파일의 지문: 없으면 None
@@ -114,14 +145,19 @@ struct Watched {
     git_dir: PathBuf,
     /// 공통 디렉터리(refs/, packed-refs가 있는 곳)
     common_dir: PathBuf,
+    /// 링크된 워크트리들의 git 디렉터리가 있는 곳(`<공통>/worktrees`)
+    worktrees_dir: PathBuf,
+    /// `worktrees_dir`를 재귀로 보고 있다(없던 것이 생기면 그때부터 본다)
+    watching_worktrees: bool,
     /// 이 저장소를 보는 구독 수
     count: usize,
     last: Fingerprint,
-    _watcher: notify::RecommendedWatcher,
+    watcher: notify::RecommendedWatcher,
 }
 
 impl Watched {
-    /// 이 저장소에 의미 있는 파일인가(HEAD, packed-refs, refs/ 아래). lock 파일은 뺀다.
+    /// 이 저장소에 의미 있는 파일인가(HEAD, packed-refs, refs/ 아래, 워크트리가 생기고 없어지는 것과 그 HEAD).
+    /// lock 파일은 뺀다.
     fn relevant(&self, path: &Path) -> bool {
         if path.extension().is_some_and(|e| e == "lock") {
             return false;
@@ -131,6 +167,23 @@ impl Watched {
             || (path.parent() == Some(self.common_dir.as_path())
                 && matches!(name, Some("HEAD" | "packed-refs")))
             || path.starts_with(self.common_dir.join("refs"))
+            || path == self.worktrees_dir
+            || path.parent() == Some(self.worktrees_dir.as_path())
+            || (name == Some("HEAD")
+                && path.parent().and_then(Path::parent) == Some(self.worktrees_dir.as_path()))
+    }
+
+    /// `<공통>/worktrees`가 생겼으면 그때부터 재귀로 본다(첫 `git worktree add`).
+    fn watch_new_worktrees(&mut self) {
+        if !self.watching_worktrees
+            && self.worktrees_dir.is_dir()
+            && self
+                .watcher
+                .watch(&self.worktrees_dir, RecursiveMode::Recursive)
+                .is_ok()
+        {
+            self.watching_worktrees = true;
+        }
     }
 }
 
@@ -174,15 +227,27 @@ impl Watchers {
     }
 
     /// `path`(저장소 안의 아무 경로)가 든 저장소를 본다. (구독 id, 작업트리 경로)를 돌려준다.
+    /// 감시를 새로 만들 때(OS 감시 등록, 참조 지문)는 잠금 밖에서 한다(다른 구독·알림을 막지 않게).
     pub fn watch(&self, repos: &RepoCache, path: &Path) -> Result<(u64, String), String> {
         let repo = repos.for_path(path).map_err(|e| e.to_string())?;
         let workdir = repo.workdir().to_path_buf();
-        let mut inner = self.inner.lock().unwrap();
-        if let Some(watched) = inner.repos.get_mut(&workdir) {
-            watched.count += 1;
+        let fresh = if self.inner.lock().unwrap().repos.contains_key(&workdir) {
+            None
         } else {
-            let watched = self.start(repo)?;
-            inner.repos.insert(workdir.clone(), watched);
+            Some(self.start(repo)?)
+        };
+        let mut inner = self.inner.lock().unwrap();
+        match (inner.repos.get_mut(&workdir), fresh) {
+            (Some(watched), _) => watched.count += 1,
+            (None, Some(watched)) => {
+                inner.repos.insert(workdir.clone(), watched);
+            }
+            // 그사이 다른 구독이 감시를 끝냈다: 이번에는 잠금 안에서 만든다(드물다).
+            (None, None) => {
+                let repo = repos.for_path(path).map_err(|e| e.to_string())?;
+                let watched = self.start(repo)?;
+                inner.repos.insert(workdir.clone(), watched);
+            }
         }
         inner.next_id += 1;
         let id = inner.next_id;
@@ -201,35 +266,22 @@ impl Watchers {
             .ok_or_else(|| format!("파일 이름이 없다: {}", path.display()))?;
         let parent = dunce::canonicalize(parent).map_err(|e| format!("경로: {e}"))?;
         let file = parent.join(name);
-        let mut inner = self.inner.lock().unwrap();
-        if let Some(watched) = inner.files.get_mut(&file) {
-            watched.count += 1;
+        // OS 감시는 잠금 밖에서 만든다.
+        let fresh = if self.inner.lock().unwrap().files.contains_key(&file) {
+            None
         } else {
-            let events = self.events.clone();
-            let key = Key::File(file.clone());
-            let mut watcher =
-                notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-                    let Ok(event) = event else { return };
-                    if matches!(event.kind, EventKind::Access(_)) {
-                        return;
-                    }
-                    for path in event.paths {
-                        let _ = events.send((key.clone(), path));
-                    }
-                })
-                .map_err(|e| format!("파일 감시 실패: {e}"))?;
-            watcher
-                .watch(&parent, RecursiveMode::NonRecursive)
-                .map_err(|e| format!("파일 감시 실패({}): {e}", parent.display()))?;
-            let last = file_fingerprint(&file);
-            inner.files.insert(
-                file.clone(),
-                WatchedFile {
-                    count: 1,
-                    last,
-                    _watcher: watcher,
-                },
-            );
+            Some(self.start_file(&parent, &file)?)
+        };
+        let mut inner = self.inner.lock().unwrap();
+        match (inner.files.get_mut(&file), fresh) {
+            (Some(watched), _) => watched.count += 1,
+            (None, Some(watched)) => {
+                inner.files.insert(file.clone(), watched);
+            }
+            (None, None) => {
+                let watched = self.start_file(&parent, &file)?;
+                inner.files.insert(file.clone(), watched);
+            }
         }
         inner.next_id += 1;
         let id = inner.next_id;
@@ -238,29 +290,61 @@ impl Watchers {
     }
 
     /// 구독을 끝낸다. 그 저장소를 보는 구독이 없으면 감시를 멈춘다. 모르는 id면 `false`.
+    /// OS 감시는 잠금 밖에서 버린다(macOS FSEvents는 버릴 때 스레드를 기다린다).
     pub fn unwatch(&self, id: u64) -> bool {
-        let mut inner = self.inner.lock().unwrap();
-        match inner.subscriptions.remove(&id) {
-            Some(Key::Repo(workdir)) => {
-                if let Some(watched) = inner.repos.get_mut(&workdir) {
-                    watched.count -= 1;
-                    if watched.count == 0 {
-                        inner.repos.remove(&workdir);
+        let mut stopped_repo = None;
+        let mut stopped_file = None;
+        let known = {
+            let mut inner = self.inner.lock().unwrap();
+            match inner.subscriptions.remove(&id) {
+                Some(Key::Repo(workdir)) => {
+                    if let Some(watched) = inner.repos.get_mut(&workdir) {
+                        watched.count -= 1;
+                        if watched.count == 0 {
+                            stopped_repo = inner.repos.remove(&workdir);
+                        }
                     }
+                    true
                 }
-                true
-            }
-            Some(Key::File(file)) => {
-                if let Some(watched) = inner.files.get_mut(&file) {
-                    watched.count -= 1;
-                    if watched.count == 0 {
-                        inner.files.remove(&file);
+                Some(Key::File(file)) => {
+                    if let Some(watched) = inner.files.get_mut(&file) {
+                        watched.count -= 1;
+                        if watched.count == 0 {
+                            stopped_file = inner.files.remove(&file);
+                        }
                     }
+                    true
                 }
-                true
+                None => false,
             }
-            None => false,
-        }
+        };
+        drop(stopped_repo);
+        drop(stopped_file);
+        known
+    }
+
+    fn start_file(&self, parent: &Path, file: &Path) -> Result<WatchedFile, String> {
+        let events = self.events.clone();
+        let key = Key::File(file.to_path_buf());
+        let mut watcher =
+            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                let Ok(event) = event else { return };
+                if matches!(event.kind, EventKind::Access(_)) {
+                    return;
+                }
+                for path in event.paths {
+                    let _ = events.send((key.clone(), path));
+                }
+            })
+            .map_err(|e| format!("파일 감시 실패: {e}"))?;
+        watcher
+            .watch(parent, RecursiveMode::NonRecursive)
+            .map_err(|e| format!("파일 감시 실패({}): {e}", parent.display()))?;
+        Ok(WatchedFile {
+            count: 1,
+            last: file_fingerprint(file),
+            _watcher: watcher,
+        })
     }
 
     /// 감시 중인 저장소·파일 수
@@ -301,14 +385,18 @@ impl Watchers {
             watch(&mut watcher, &refs, RecursiveMode::Recursive)?;
         }
         let last = fingerprint(&repo);
-        Ok(Watched {
+        let mut watched = Watched {
             repo,
             git_dir,
+            worktrees_dir: common_dir.join("worktrees"),
             common_dir,
+            watching_worktrees: false,
             count: 1,
             last,
-            _watcher: watcher,
-        })
+            watcher,
+        };
+        watched.watch_new_worktrees();
+        Ok(watched)
     }
 }
 
@@ -358,8 +446,10 @@ fn repo_change(state: &Mutex<Inner>, workdir: &Path) -> Option<RepoChange> {
     let now = fingerprint(&repo);
     let mut inner = state.lock().unwrap();
     let watched = inner.repos.get_mut(workdir)?;
+    watched.watch_new_worktrees();
     let head_changed = now.head != watched.last.head || now.head_ref != watched.last.head_ref;
-    let refs_changed = now.refs != watched.last.refs;
+    // 다른 워크트리의 HEAD는 그래프 이름표(체크아웃한 워크트리)만 바꾼다: 참조 변화로 알린다.
+    let refs_changed = now.refs != watched.last.refs || now.others != watched.last.others;
     if !head_changed && !refs_changed {
         return None;
     }
