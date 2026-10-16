@@ -8,7 +8,7 @@ import { WorktreePicker } from "../worktree/WorktreePicker";
 import { call } from "../ipc";
 import { useQuickOpen } from "../quickopen/QuickOpen";
 import { commonCommands, usePalette, type Command } from "../palette/Palette";
-import { routeKey } from "../keys";
+import { isComposing, routeKey } from "../keys";
 import { openInEditor } from "../editor";
 import { toggleHud } from "../Hud";
 import { historySwitch } from "../worktree/switch";
@@ -519,6 +519,8 @@ export function HistoryView({
             aria-label="히스토리 검색"
             onChange={(e) => setSearch({ open: true, query: e.target.value })}
             onKeyDown={(e) => {
+              // IME 조합 중의 Enter·Esc는 조합을 끝내는 키다(Quick Open·팔레트와 같다).
+              if (isComposing(e.nativeEvent)) return;
               if (e.key === "Enter") {
                 e.preventDefault();
                 findNext(e.shiftKey ? -1 : 1);

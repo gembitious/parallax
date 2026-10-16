@@ -19,7 +19,7 @@ import { watchRepo } from "../watch";
 import { WorktreePicker } from "../worktree/WorktreePicker";
 import { useQuickOpen } from "../quickopen/QuickOpen";
 import { commonCommands, usePalette, type Command } from "../palette/Palette";
-import { routeKey } from "../keys";
+import { isComposing, routeKey } from "../keys";
 import { openInEditor } from "../editor";
 import { toggleHud } from "../Hud";
 import { ScrollMeter } from "../scrollMeter";
@@ -853,6 +853,8 @@ function GraphPane({
             aria-label="그래프 검색"
             onChange={(e) => setSearch({ open: true, input: e.target.value })}
             onKeyDown={(e) => {
+              // IME 조합 중의 Enter·Esc는 조합을 끝내는 키다(Quick Open·팔레트와 같다).
+              if (isComposing(e.nativeEvent)) return;
               if (e.key === "Enter") {
                 e.preventDefault();
                 runSearch(!e.shiftKey, search.input);

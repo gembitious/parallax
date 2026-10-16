@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { routeKey } from "./keys";
+import { isComposing, routeKey } from "./keys";
 
 type Mods = Partial<Record<"ctrlKey" | "metaKey" | "altKey" | "shiftKey" | "defaultPrevented", boolean>>;
 
@@ -61,5 +61,13 @@ describe("routeKey", () => {
     expect(route(key("j", { altKey: true })).result).toBe("skip");
     expect(route(key("c", { metaKey: true })).result).toBe("skip");
     expect(route(key("j", {}, "input")).result).toBe("skip");
+  });
+});
+
+describe("isComposing", () => {
+  it("조합 중이거나(Chromium) 조합을 끝낸 keyCode 229(WebKit)", () => {
+    expect(isComposing({ isComposing: true, keyCode: 229 })).toBe(true);
+    expect(isComposing({ isComposing: false, keyCode: 229 })).toBe(true);
+    expect(isComposing({ isComposing: false, keyCode: 13 })).toBe(false);
   });
 });

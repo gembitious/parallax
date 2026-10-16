@@ -124,6 +124,7 @@ npm run tauri build -- --bundles app   # macOS: target/release/bundle/macos/para
 | 8 | blame 화면에서 `H` | 그 리비전부터의 파일 히스토리(작업트리 blame이면 HEAD부터) |
 | 9 | 지운 파일: `plx log <지운 경로>` | 지운 커밋(`D`)부터 보인다 |
 | 10 | 저장소 폴더에서 `plx log .` | `git log`와 같은 커밋들(빈 커밋, merge 포함) |
+| 11 | 한글 IME로 `/` 검색 칸에 `수정`(두벌식)을 치고 조합 중에 `Enter` 한 번, 다시 조합 중에 `Esc` | `Enter`는 첫 일치로 가거나 조합만 끝낸다(두 번째 일치로 건너뛰지 않는다). 조합 중의 `Esc`는 칸을 닫지 않는다. 그래프의 `/`도 같다 |
 
 ## 6. 라인 히스토리 (M2)
 
