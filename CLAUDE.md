@@ -127,6 +127,8 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
 - `PLX_T0`: 호출 시작 시각(epoch ms). 없으면 OS가 plx 프로세스를 만든 시각이 지연 측정 기준점이다.
 - `PLX_PERF=1`: 릴리스 빌드에서도 성능 HUD를 켠다(개발 빌드는 항상 켜짐. 입력란 밖에서 `` ` `` 키로 보이기·숨기기).
   `PLX_PERF_LOG=<파일>`을 함께 주면 끝난 요청을 JSON 한 줄씩 기록한다(`bench/app-latency.sh`가 쓴다).
+- `PLX_TRACE=1`: `plx` 호출이 상주 인스턴스에 넘기기까지의 구간(인자 · 인자 검사 · 저장소 열기 · 인스턴스 자리 · 넘기기,
+  ms)을 표준 오류에 쓴다(측정용, `bench/app-latency.sh`가 쓴다).
 - `PLX_CACHE_DIR=<디렉터리>`: 결과 캐시(blame·히스토리·커밋 표) 위치. 그 아래 `results/`에 쓴다(기본: OS 캐시 위치의
   `com.gembitious.parallax`, 한도 512MB).
   측정·자동 확인 스크립트는 임시 디렉터리를 줘서 사용자 캐시와 섞지 않는다.
