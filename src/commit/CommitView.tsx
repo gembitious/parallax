@@ -17,7 +17,7 @@ import { displayText } from "../blame/BlameView";
 import { formatDate, relativeTime, shortSha } from "../blame/format";
 import { call } from "../ipc";
 import type { Navigation } from "../nav";
-import { afterPaint, getPerfInfo, nowMs, record } from "../perf";
+import { afterPaint, getPerfInfo, longFrameIn, nowMs, record } from "../perf";
 import { scrollToRow } from "../history/list";
 import { drawWindow, insideDrawn, type DrawnRange } from "../scrollWindow";
 import {
@@ -326,7 +326,7 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
           { label: "diff 만듦", ms: t.diffMs - t.t0 },
           { label: "첫 파일 표시", ms: end - t.t0 },
         ].filter((p) => Number.isFinite(p.ms)),
-        detail: `파일 ${latest.current.full?.files.length ?? 0}개 · ${what}`,
+        detail: [`파일 ${latest.current.full?.files.length ?? 0}개`, what, longFrameIn(t.t0, end)].filter(Boolean).join(" · "),
         ok: painted !== null,
       });
     });

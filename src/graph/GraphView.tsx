@@ -9,7 +9,7 @@ import { formatCount, formatDate, relativeTime, shortSha } from "../blame/format
 import { Acceleration } from "../history/Acceleration";
 import { scrollToRow, visibleRange } from "../history/list";
 import { lastName, type Navigation } from "../nav";
-import { afterPaint, getPerfInfo, nowMs, record } from "../perf";
+import { afterPaint, getPerfInfo, longFrameIn, nowMs, record } from "../perf";
 import { drawRows, graphWidth, readPalette, ROW_HEIGHT, type Palette, type Visible } from "./draw";
 import { reloadFocus, type Focus } from "./focus";
 import { CHUNK, RowCache, rowWidth } from "./rows";
@@ -448,9 +448,13 @@ function GraphPane({
         totalMs: end - t.t0,
         budgetMs: cold ? undefined : FIRST_SCREEN_BUDGET_MS,
         phases,
-        detail:
-          `커밋 ${stats.rows} · 레인 ${stats.width} · DAG ${stats.loadMs.toFixed(1)}ms (${sources.join(", ") || "없음"})` +
-          (Number.isFinite(t.lanesDrawMs) ? ` · 캔버스 ${t.lanesDrawMs.toFixed(1)}ms` : ""),
+        detail: [
+          `커밋 ${stats.rows} · 레인 ${stats.width} · DAG ${stats.loadMs.toFixed(1)}ms (${sources.join(", ") || "없음"})`,
+          Number.isFinite(t.lanesDrawMs) && `캔버스 ${t.lanesDrawMs.toFixed(1)}ms`,
+          longFrameIn(t.t0, end),
+        ]
+          .filter(Boolean)
+          .join(" · "),
         ok: painted !== null,
       });
     });
