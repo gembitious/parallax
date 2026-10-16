@@ -250,11 +250,16 @@ traces=""
 traced=5
 for i in $(seq 1 "$traced"); do
   file="$(sed -n "${i}p" "$files")"
-  line="$(PLX_TRACE=1 "$bin" "$file:9" 2>&1 >/dev/null | sed -n 's/^plx: 구간(ms): //p' | tail -n 1)"
+  # 반복 횟수가 작으면 파일이 다섯보다 적다. 이 구간은 덤이라 호출이 실패해도(시간 한도 등) 앞의 측정을 버리지 않는다.
+  [ -n "$file" ] || break
+  out="$(PLX_TRACE=1 "$bin" "$file:9" 2>&1 >/dev/null)" || continue
+  line="$(printf '%s\n' "$out" | sed -n 's/^plx: 구간(ms): //p' | tail -n 1)"
   traces="$traces$line
 "
   wait_for "\"label\":\"blame $file:9\"" || true
 done
+# 잰 횟수(파일이 모자라거나 호출이 실패하면 다섯보다 적다)
+trace_count="$(printf '%s' "$traces" | grep -c . || true)"
 trace_medians="$(printf '%s' "$traces" | awk '
   {
     n = split($0, parts, " · ")
@@ -299,7 +304,7 @@ echo
 echo "- 콜드 스타트 구간(ms): $cold_phases"
 echo "- 콜드 스타트의 blame(ms): $cold_blame"
 echo "- 상주 인스턴스에 plx 호출, 구간별 중앙값(ms): $warm_phases"
-echo "- 상주 호출의 클라이언트 구간 중앙값(ms, PLX_TRACE, n=$traced): ${trace_medians:--}"
+echo "- 상주 호출의 클라이언트 구간 중앙값(ms, PLX_TRACE, n=$trace_count): ${trace_medians:--}"
 echo "- 가장 느린 기록(ms, 합계 · 구간 — 이름 (설명)):"
 echo "  - plx 호출: $slowest_plx"
 echo "  - blame, 처음 여는 파일: $slowest_blame"
