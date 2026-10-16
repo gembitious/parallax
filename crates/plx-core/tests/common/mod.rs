@@ -92,3 +92,35 @@ pub fn git_text(repo: &Path, args: &[&str]) -> String {
         .trim_end()
         .to_owned()
 }
+
+/// 테스트 하나가 쓰는 빈 저장소(브랜치 main, 커밋할 수 있는 사용자 설정). 같은 이름이면 지우고 다시 만든다.
+pub fn scratch_repo(name: &str) -> PathBuf {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("scratch-{name}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("저장소 디렉터리");
+    git(&dir, &["init", "-q", "-b", "main"]);
+    git(&dir, &["config", "user.name", "T"]);
+    git(&dir, &["config", "user.email", "t@example.com"]);
+    git(&dir, &["config", "core.autocrlf", "false"]);
+    dir
+}
+
+/// 작업트리를 모두 커밋하고 sha를 돌려준다.
+pub fn commit_all(dir: &Path, message: &str) -> String {
+    git(dir, &["add", "-A"]);
+    git(dir, &["commit", "-q", "-m", message]);
+    git_text(dir, &["rev-parse", "HEAD"])
+}
+
+/// 열 줄짜리 파일. `edited` 줄만 다르게 쓴다.
+pub fn ten_lines(edited: &[usize]) -> String {
+    (1..=10)
+        .map(|i| {
+            if edited.contains(&i) {
+                format!("line {i} edited, the quick brown fox jumps\n")
+            } else {
+                format!("line {i}: the quick brown fox jumps over\n")
+            }
+        })
+        .collect()
+}

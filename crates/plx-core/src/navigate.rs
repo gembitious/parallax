@@ -30,18 +30,15 @@ pub enum Direction {
     Newer,
 }
 
-/// 버전의 내용. 그 버전에 파일이 없으면 `None`.
+/// 버전의 내용. 그 버전에 파일이 없으면 `None`. 작업트리 파일은 git에 넣을 때의 모양(clean)이다:
+/// 줄 끝이 CRLF인 작업트리(Git for Windows 기본값)도 blob과 줄 단위로 비교한다.
 pub fn content(repo: &Repo, version: &Version) -> Result<Option<Vec<u8>>> {
     match &version.rev {
         Some(rev) => {
             let commit = repo.resolve_commit(rev)?;
             repo.blob_at(commit, &version.path)
         }
-        None => match std::fs::read(repo.workdir().join(&version.path)) {
-            Ok(bytes) => Ok(Some(bytes)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(Error(format!("파일을 읽지 못했다 ({}): {e}", version.path))),
-        },
+        None => repo.worktree_clean(&version.path),
     }
 }
 

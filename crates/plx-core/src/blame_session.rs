@@ -1,18 +1,18 @@
 //! 파일 하나의 blame 요청 처리. 앱(Tauri 명령)은 이벤트를 채널로 넘기기만 한다.
 //!
-//! 순서: 저장소 찾기 → 저장소 기준 경로 → git blame을 먼저 띄움 → 그동안 파일 내용을 읽어 [`BlameMeta`]
-//! → [`Blame::stream`]으로 블록 묶음. 화면은 내용을 먼저 그리고 거터를 점진적으로 채운다.
+//! 순서: 저장소 찾기 → 저장소 기준 경로 → 리비전은 git blame을 먼저 띄우고 그동안 blob을 읽고, 작업트리는 파일을
+//! 읽어 그 내용으로 git blame을 띄움(`--contents -`) → [`BlameMeta`] → [`Blame::stream`]으로 블록 묶음.
+//! 화면은 내용을 먼저 그리고 거터를 점진적으로 채운다.
 //! 요청은 [`Sessions`]에 id로 등록하고, 화면이 다른 파일·리비전으로 넘어가면 그 id로 취소한다.
 
-use std::path::Path;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime};
+use std::time::Instant;
 
 use serde::Serialize;
 
 use crate::blame::{Blame, BlameBlock, BlameCommit, BlameError, Chunk, Stats};
 use crate::cache::{CacheKey, DiskCache};
-use crate::repo::RepoCache;
+use crate::repo::{FilePath, Repo, RepoCache};
 use crate::requests::Requests;
 use crate::text::{self, Decoded};
 
@@ -68,93 +68,125 @@ enum Source {
     Git(Blame, Option<CacheKey>),
     /// 캐시에서 읽었다.
     Cached(Chunk),
-    /// 작업트리 파일이 HEAD에 없다(새 파일·추적하지 않는 파일). 모든 줄이 커밋 안 됨이다.
+    /// 추적하지 않는 작업트리 파일(HEAD에도 인덱스에도 없다). 모든 줄이 커밋 안 됨이다.
     /// git blame은 이 경우 실패하므로 띄우지 않고 직접 만든다.
     Uncommitted(Chunk),
     /// 바이너리 파일
     Nothing,
 }
 
-/// 요청을 열고 git blame을 띄운다. git을 먼저 띄우고 그동안 파일을 읽는다. 캐시에 있으면 git을 띄우지 않는다.
+/// 요청을 열고 git blame을 띄운다. 캐시에 있으면 git을 띄우지 않는다.
+/// 리비전은 git을 먼저 띄우고 그동안 blob을 읽는다. 작업트리는 파일을 먼저 읽어 그 내용을 git에 준다
+/// (`--contents -`): 화면에 보이는 내용과 blame한 내용이 같고, 내용으로 캐시 열쇠를 만든다.
 fn start(
     repos: &RepoCache,
     cache: Option<&DiskCache>,
-    path: &Path,
+    file: &FilePath,
     rev: Option<&str>,
 ) -> Result<(BlameMeta, Source), String> {
-    let repo = repos.for_path(path).map_err(|e| e.to_string())?;
-    let rel = repo.relative_path(path).map_err(|e| e.to_string())?;
+    let (repo, rel) = repos.locate(file).map_err(|e| e.to_string())?;
     let commit = rev
         .map(|rev| repo.resolve_commit(rev))
         .transpose()
         .map_err(|e| e.to_string())?;
-    let sha = commit.map(|c| c.to_string());
-    let head = match commit {
-        Some(_) => None,
-        None => repo.head().map_err(|e| e.to_string())?,
+    let Some(commit) = commit else {
+        return start_worktree(&repo, cache, &rel);
     };
-    let tracked = match (commit, head) {
-        (Some(_), _) => true,
-        (None, Some(head)) => repo.has_file(head, &rel).map_err(|e| e.to_string())?,
-        (None, None) => false,
-    };
-
-    // 열쇠: 커밋 고정이면 (커밋, 경로), 작업트리면 파일을 읽기 전의 크기·수정 시각까지.
-    let key = match (&sha, head) {
-        _ if !tracked || cache.is_none() => None,
-        (Some(sha), _) => Some(CacheKey::commit(repo.workdir(), sha, &rel)),
-        (None, Some(head)) => std::fs::metadata(path).ok().map(|meta| {
-            CacheKey::worktree(
-                repo.workdir(),
-                &head.to_string(),
-                &rel,
-                &meta,
-                SystemTime::now(),
-            )
-        }),
-        (None, None) => None,
-    };
+    let sha = commit.to_string();
+    // 얕은 클론은 이력을 더 받으면 결과가 바뀐다.
+    let key = cache
+        .filter(|_| !repo.is_shallow())
+        .map(|_| CacheKey::commit(repo.workdir(), &sha, &rel, &repo.blame_settings()));
     let cached = key
         .as_ref()
         .zip(cache)
         .and_then(|(key, cache)| cache.get(key));
-
-    // 파일을 읽는 동안 git이 일을 시작하도록 먼저 띄운다.
-    let blame = (tracked && cached.is_none())
-        .then(|| Blame::spawn(repo.workdir(), &rel, sha.as_deref()))
+    // blob을 읽는 동안 git이 일을 시작하도록 먼저 띄운다.
+    let blame = cached
+        .is_none()
+        .then(|| Blame::spawn(repo.workdir(), &rel, Some(&sha)))
         .transpose()
         .map_err(|e| format!("git blame 실행 실패: {e}"))?;
-    let bytes = match commit {
-        Some(commit) => repo.blob_at(commit, &rel).and_then(|blob| {
-            blob.ok_or_else(|| {
-                crate::repo::Error(format!(
-                    "{}에 {rel} 파일이 없다",
-                    short(sha.as_deref().unwrap_or(""))
-                ))
-            })
-        }),
-        None => std::fs::read(path).map_err(|e| {
-            crate::repo::Error(format!("파일을 읽지 못했다 ({}): {e}", path.display()))
-        }),
-    };
     // 실패하거나 바이너리면 git은 버린다(Drop이 끝내고 거둔다).
-    let bytes = bytes.map_err(|e| e.to_string())?;
+    let bytes = repo
+        .blob_at(commit, &rel)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("{}에 {rel} 파일이 없다", short(&sha)))?;
     let binary = text::is_binary(&bytes);
     let content = (!binary).then(|| text::decode(&bytes));
     let source = match (blame, cached, &content) {
         (_, _, None) => Source::Nothing,
         (Some(blame), _, Some(_)) => Source::Git(blame, key),
         (None, Some(chunk), Some(_)) => Source::Cached(chunk),
-        (None, None, Some(content)) => Source::Uncommitted(uncommitted(&rel, content.line_count)),
+        (None, None, Some(_)) => unreachable!("캐시에 없으면 git을 띄운다"),
     };
     let meta = BlameMeta {
         repo: repo.workdir().to_string_lossy().into_owned(),
         path: rel,
-        rev: sha,
+        rev: Some(sha),
         content,
         binary,
     };
     Ok((meta, source))
+}
+
+fn start_worktree(
+    repo: &Repo,
+    cache: Option<&DiskCache>,
+    rel: &str,
+) -> Result<(BlameMeta, Source), String> {
+    // 심볼릭 링크는 가리키는 파일을 blame한다(터미널에서 준 경로도 실제 경로로 푼다).
+    let rel = repo.resolve_link(rel).map_err(|e| e.to_string())?;
+    let bytes = repo
+        .worktree_bytes(&rel)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("작업트리에 {rel} 파일이 없다"))?;
+    let binary = text::is_binary(&bytes);
+    let content = (!binary).then(|| text::decode(&bytes));
+    let meta = |content| BlameMeta {
+        repo: repo.workdir().to_string_lossy().into_owned(),
+        path: rel.clone(),
+        rev: None,
+        content,
+        binary,
+    };
+    let Some(decoded) = content else {
+        return Ok((meta(None), Source::Nothing));
+    };
+    let head = repo.head().map_err(|e| e.to_string())?;
+    let in_head = match head {
+        Some(head) => repo.has_file(head, &rel).map_err(|e| e.to_string())?,
+        None => false,
+    };
+    // 인덱스에만 있는 파일(새로 add했거나 `git mv`로 옮겼다)도 git이 blame한다: 옮긴 파일은 원래 이력을 찾는다.
+    // 커밋이 하나도 없으면 git blame은 실패한다.
+    let tracked = in_head || (head.is_some() && repo.in_index(&rel).map_err(|e| e.to_string())?);
+    if !tracked {
+        let chunk = uncommitted(&rel, decoded.line_count);
+        return Ok((meta(Some(decoded)), Source::Uncommitted(chunk)));
+    }
+    // 인덱스에만 있는 파일의 결과는 인덱스에 따라서도 바뀌므로 넣지 않는다.
+    let key = match head {
+        Some(head) if in_head && cache.is_some() && !repo.is_shallow() => Some(CacheKey::worktree(
+            repo.workdir(),
+            &head.to_string(),
+            &rel,
+            &repo.blame_settings(),
+            &bytes,
+            &repo.to_git(&rel, &bytes),
+        )),
+        _ => None,
+    };
+    if let Some(chunk) = key
+        .as_ref()
+        .zip(cache)
+        .and_then(|(key, cache)| cache.get(key))
+    {
+        return Ok((meta(Some(decoded)), Source::Cached(chunk)));
+    }
+    let blame = Blame::spawn_contents(repo.workdir(), &rel, bytes)
+        .map_err(|e| format!("git blame 실행 실패: {e}"))?;
+    Ok((meta(Some(decoded)), Source::Git(blame, key)))
 }
 
 /// 모든 줄이 커밋 안 됨인 묶음. git이 미커밋 줄에 쓰는 값을 따른다.
@@ -236,11 +268,11 @@ impl Sessions {
         &self,
         id: u64,
         repos: &RepoCache,
-        path: &Path,
+        file: impl Into<FilePath>,
         rev: Option<&str>,
         mut on_event: impl FnMut(SessionEvent) -> bool,
     ) {
-        let end = self.drive(id, repos, path, rev, &mut on_event);
+        let end = self.drive(id, repos, &file.into(), rev, &mut on_event);
         self.requests.finish(id);
         on_event(end);
     }
@@ -249,7 +281,7 @@ impl Sessions {
         &self,
         id: u64,
         repos: &RepoCache,
-        path: &Path,
+        file: &FilePath,
         rev: Option<&str>,
         on_event: &mut impl FnMut(SessionEvent) -> bool,
     ) -> SessionEvent {
@@ -257,7 +289,7 @@ impl Sessions {
         if self.requests.is_cancelled(id) {
             return SessionEvent::Cancelled;
         }
-        let (meta, source) = match start(repos, self.cache(), path, rev) {
+        let (meta, source) = match start(repos, self.cache(), file, rev) {
             Ok(started) => started,
             Err(message) => return SessionEvent::Error { message },
         };

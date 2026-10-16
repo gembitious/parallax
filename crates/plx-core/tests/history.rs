@@ -397,7 +397,7 @@ fn cancel_before_and_during_a_request() {
     let id = sessions.register();
     assert!(sessions.cancel(id));
     let mut events = Vec::new();
-    sessions.run(id, &repos, &dir.join("src/lib.rs"), None, |e| {
+    sessions.run(id, &repos, dir.join("src/lib.rs"), None, |e| {
         events.push(e);
         true
     });

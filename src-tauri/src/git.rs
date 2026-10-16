@@ -12,7 +12,7 @@ use plx_core::files::{FileLists, FileSearch};
 use plx_core::graph::{GraphEvent, GraphOptions, GraphSessions, GraphWindow};
 use plx_core::history::{HistoryEvent, HistorySessions, LineRange};
 use plx_core::navigate::{self, Direction, Version};
-use plx_core::repo::{CommitInfo, RepoCache};
+use plx_core::repo::{CommitInfo, FilePath, RepoCache};
 use plx_core::watch::{Change, Watchers};
 use serde::Serialize;
 use tauri::State;
@@ -79,14 +79,6 @@ impl GitState {
     }
 }
 
-/// `repo`가 있으면 `path`는 그 저장소 기준 경로이고, 없으면 절대 경로다.
-fn resolve(repo: Option<&str>, path: &str) -> PathBuf {
-    match repo {
-        Some(repo) => Path::new(repo).join(path),
-        None => PathBuf::from(path),
-    }
-}
-
 /// 파일 blame을 시작하고 요청 id를 바로 돌려준다. 결과는 `on_event`로 온다
 /// (`meta` → `chunk`* → `done`·`error`·`cancelled`). `rev`가 없으면 작업트리 파일이다.
 #[tauri::command]
@@ -99,10 +91,11 @@ pub async fn blame_open(
 ) -> Result<u64, String> {
     let git = git.inner().clone();
     let id = git.blames.register();
-    let path = resolve(repo.as_deref(), &path);
+    // `repo`가 있으면 `path`는 그 저장소 기준 경로(git이 준 경로라 그대로 쓴다), 없으면 터미널에서 준 절대 경로다.
+    let file = FilePath::from_request(repo.as_deref(), &path);
     tauri::async_runtime::spawn_blocking(move || {
         git.blames
-            .run(id, &git.repos, &path, rev.as_deref(), |event| {
+            .run(id, &git.repos, file, rev.as_deref(), |event| {
                 on_event.send(event).is_ok()
             });
     });
@@ -127,10 +120,11 @@ pub async fn history_open(
 ) -> Result<u64, String> {
     let git = git.inner().clone();
     let id = git.histories.register();
-    let path = resolve(repo.as_deref(), &path);
+    // `repo`가 있으면 `path`는 그 저장소 기준 경로(git이 준 경로라 그대로 쓴다), 없으면 터미널에서 준 절대 경로다.
+    let file = FilePath::from_request(repo.as_deref(), &path);
     tauri::async_runtime::spawn_blocking(move || {
         git.histories
-            .run(id, &git.repos, &path, rev.as_deref(), |event| {
+            .run(id, &git.repos, file, rev.as_deref(), |event| {
                 on_event.send(event).is_ok()
             });
     });
@@ -153,12 +147,13 @@ pub async fn line_history_open(
 ) -> Result<u64, String> {
     let git = git.inner().clone();
     let id = git.histories.register();
-    let path = resolve(repo.as_deref(), &path);
+    // `repo`가 있으면 `path`는 그 저장소 기준 경로(git이 준 경로라 그대로 쓴다), 없으면 터미널에서 준 절대 경로다.
+    let file = FilePath::from_request(repo.as_deref(), &path);
     tauri::async_runtime::spawn_blocking(move || {
         git.histories.run_lines(
             id,
             &git.repos,
-            &path,
+            file,
             rev.as_deref(),
             LineRange { start, end },
             |event| on_event.send(event).is_ok(),

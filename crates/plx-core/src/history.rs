@@ -14,7 +14,6 @@
 //! 받은 커밋을 다음 출력까지 붙잡지 않고 16ms 안에 보낸다.
 
 use std::collections::HashSet;
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread::JoinHandle;
@@ -29,7 +28,7 @@ use crate::git::Canceller;
 use crate::line_log::LineLogStream;
 use crate::linemap::LineMap;
 use crate::log::{EntrySource, LogEntry, LogError, LogStream};
-use crate::repo::{Repo, RepoCache};
+use crate::repo::{FilePath, Repo, RepoCache};
 use crate::requests::Requests;
 use crate::text;
 
@@ -137,11 +136,10 @@ enum Plan<S> {
 fn start(
     repos: &RepoCache,
     cache: Option<&DiskCache>,
-    path: &Path,
+    file: &FilePath,
     rev: Option<&str>,
 ) -> Result<(HistoryMeta, Plan<LogStream>), String> {
-    let repo = repos.for_path(path).map_err(|e| e.to_string())?;
-    let mut rel = repo.relative_path(path).map_err(|e| e.to_string())?;
+    let (repo, mut rel) = repos.locate(file).map_err(|e| e.to_string())?;
     if rel.is_empty() {
         rel = ".".to_owned();
     }
@@ -184,12 +182,11 @@ fn start(
 fn start_lines(
     repos: &RepoCache,
     cache: Option<&DiskCache>,
-    path: &Path,
+    file: &FilePath,
     rev: Option<&str>,
     lines: LineRange,
 ) -> Result<(HistoryMeta, Plan<LineLogStream>), String> {
-    let repo = repos.for_path(path).map_err(|e| e.to_string())?;
-    let rel = repo.relative_path(path).map_err(|e| e.to_string())?;
+    let (repo, rel) = repos.locate(file).map_err(|e| e.to_string())?;
     let start = match rev {
         Some(rev) => Some(repo.resolve_commit(rev).map_err(|e| e.to_string())?),
         None => repo.head().map_err(|e| e.to_string())?,
@@ -222,8 +219,9 @@ fn start_lines(
         return Err(format!("{short}의 {rel}은 빈 파일이다"));
     }
     let (mut first, mut last) = (lines.start.min(lines.end), lines.start.max(lines.end));
+    // 작업트리 줄은 clean 모양(줄 끝을 git처럼 바꾼 것)으로 옮긴다: CRLF 작업트리도 blob과 줄 단위로 맞는다.
     if rev.is_none()
-        && let Ok(worktree) = std::fs::read(path)
+        && let Ok(Some(worktree)) = repo.worktree_clean(&rel)
         && worktree != blob
     {
         let map = LineMap::new(&blob, &worktree);
@@ -293,11 +291,11 @@ impl HistorySessions {
         &self,
         id: u64,
         repos: &RepoCache,
-        path: &Path,
+        file: impl Into<FilePath>,
         rev: Option<&str>,
         mut on_event: impl FnMut(HistoryEvent) -> bool,
     ) {
-        let end = self.drive(id, repos, path, rev, &mut on_event);
+        let end = self.drive(id, repos, &file.into(), rev, &mut on_event);
         self.requests.finish(id);
         on_event(end);
     }
@@ -307,12 +305,12 @@ impl HistorySessions {
         &self,
         id: u64,
         repos: &RepoCache,
-        path: &Path,
+        file: impl Into<FilePath>,
         rev: Option<&str>,
         lines: LineRange,
         mut on_event: impl FnMut(HistoryEvent) -> bool,
     ) {
-        let end = self.drive_lines(id, repos, path, rev, lines, &mut on_event);
+        let end = self.drive_lines(id, repos, &file.into(), rev, lines, &mut on_event);
         self.requests.finish(id);
         on_event(end);
     }
@@ -321,7 +319,7 @@ impl HistorySessions {
         &self,
         id: u64,
         repos: &RepoCache,
-        path: &Path,
+        file: &FilePath,
         rev: Option<&str>,
         lines: LineRange,
         on_event: &mut impl FnMut(HistoryEvent) -> bool,
@@ -330,7 +328,7 @@ impl HistorySessions {
         if self.requests.is_cancelled(id) {
             return HistoryEvent::Cancelled;
         }
-        let (meta, plan) = match start_lines(repos, self.cache.as_deref(), path, rev, lines) {
+        let (meta, plan) = match start_lines(repos, self.cache.as_deref(), file, rev, lines) {
             Ok(started) => started,
             Err(message) => return HistoryEvent::Error { message },
         };
@@ -372,7 +370,7 @@ impl HistorySessions {
         &self,
         id: u64,
         repos: &RepoCache,
-        path: &Path,
+        file: &FilePath,
         rev: Option<&str>,
         on_event: &mut impl FnMut(HistoryEvent) -> bool,
     ) -> HistoryEvent {
@@ -380,7 +378,7 @@ impl HistorySessions {
         if self.requests.is_cancelled(id) {
             return HistoryEvent::Cancelled;
         }
-        let (meta, plan) = match start(repos, self.cache.as_deref(), path, rev) {
+        let (meta, plan) = match start(repos, self.cache.as_deref(), file, rev) {
             Ok(started) => started,
             Err(message) => return HistoryEvent::Error { message },
         };

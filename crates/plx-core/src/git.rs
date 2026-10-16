@@ -2,6 +2,8 @@
 //!
 //! 이력 질의(blame, log)는 git CLI를 스트리밍으로 쓴다. 모든 호출은 이 모듈의 [`command`]로 만든다.
 //! - `-c core.quotepath=false`: 한글 경로를 `\355\225\234`처럼 이스케이프하지 않는다.
+//! - `-c i18n.logOutputEncoding=UTF-8`: 작성자·커밋 메시지를 사용자 설정(예: cp949)이 아니라 UTF-8로 받는다
+//!   (git은 커밋의 `encoding` 헤더에서 이 인코딩으로 바꿔 내보낸다). 파일 내용·경로는 바꾸지 않는다.
 //! - `GIT_OPTIONAL_LOCKS=0`: 읽기 전용 앱이 index.lock 같은 선택적 락을 잡지 않게 한다.
 //! - Windows는 `CREATE_NO_WINDOW`로 콘솔 창이 뜨지 않게 한다.
 
@@ -20,7 +22,12 @@ pub fn command(repo_dir: &Path) -> Command {
     let mut command = Command::new("git");
     command
         .current_dir(repo_dir)
-        .args(["-c", "core.quotepath=false"])
+        .args([
+            "-c",
+            "core.quotepath=false",
+            "-c",
+            "i18n.logOutputEncoding=UTF-8",
+        ])
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null());
@@ -89,6 +96,13 @@ impl Canceller {
         self.cancelled.store(true, Ordering::SeqCst);
         let _ = self.child.lock().unwrap_or_else(|e| e.into_inner()).kill();
     }
+
+    /// 취소가 아닌 이유(해석 오류 등)로 git을 끝낸다. 거두기는 [`Streaming`]을 버릴 때 한다.
+    /// 그 전에 취소됐으면 `true`(읽던 쪽은 자기 오류 대신 취소로 끝낸다).
+    pub fn abort(&self) -> bool {
+        let _ = self.child.lock().unwrap_or_else(|e| e.into_inner()).kill();
+        self.cancelled.load(Ordering::SeqCst)
+    }
 }
 
 /// 스트리밍이 성공하지 못한 이유.
@@ -115,11 +129,31 @@ impl std::error::Error for StreamError {}
 impl Streaming {
     /// `command`([`command`]로 만들고 인자를 붙인 것)를 띄운다. 표준 출력·오류는 여기서 파이프로 바꾼다.
     /// `label`은 실패 메시지 앞머리다.
-    pub fn spawn(mut command: Command, label: &'static str) -> io::Result<Streaming> {
+    pub fn spawn(command: Command, label: &'static str) -> io::Result<Streaming> {
+        Self::spawn_with_input(command, label, None)
+    }
+
+    /// [`Streaming::spawn`]과 같고 `input`을 표준 입력으로 준다(`git blame --contents -`).
+    /// 쓰기는 따로 스레드에서 한다: git이 입력을 다 읽기 전에 출력을 쓰기 시작해도 막히지 않는다.
+    pub fn spawn_with_input(
+        mut command: Command,
+        label: &'static str,
+        input: Option<Vec<u8>>,
+    ) -> io::Result<Streaming> {
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        if input.is_some() {
+            command.stdin(Stdio::piped());
+        }
         let started = Instant::now();
         let mut child = command.spawn()?;
         let spawn_ms = started.elapsed().as_secs_f64() * 1000.0;
+        if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+            // git이 먼저 끝나면(경로 오류 등) 쓰기가 실패한다. 이유는 표준 오류와 종료 코드로 알린다.
+            std::thread::spawn(move || {
+                use std::io::Write;
+                let _ = stdin.write_all(&input);
+            });
+        }
         let stdout = child.stdout.take().expect("stdout");
         let mut stderr = child.stderr.take().expect("stderr");
         let stderr = std::thread::spawn(move || {

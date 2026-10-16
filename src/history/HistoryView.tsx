@@ -19,6 +19,7 @@ import { lastName, type Navigation } from "../nav";
 import { watchRepo } from "../watch";
 import { afterPaint, getPerfInfo, nowMs, record } from "../perf";
 import { ScrollMeter } from "../scrollMeter";
+import { useMounted } from "../mounted";
 import { drawWindow, insideDrawn, type DrawnRange } from "../scrollWindow";
 import { Acceleration } from "./Acceleration";
 import { findMatch, formerPaths, matches, scrollToRow } from "./list";
@@ -130,6 +131,7 @@ export function HistoryView({
     }),
   ];
   const palette = usePalette(commands, () => listRef.current?.focus({ preventScroll: true }));
+  const mounted = useMounted();
   const latest = useRef({ active, meta, selected, help, search, count, openFiles: quickOpen.open, palette: palette.open });
   latest.current = { active, meta, selected, help, search, count, openFiles: quickOpen.open, palette: palette.open };
   // 스크롤 프레임 측정(성능 HUD가 켜져 있을 때만)
@@ -606,7 +608,10 @@ export function HistoryView({
             void historySwitch(worktree, meta, async (from, range) => {
               const [start, end] = await Promise.all([mapLine(from, range.start), mapLine(from, range.end)]);
               return { start, end: Math.max(start, end) };
-            }).then((next) => next && onNavigate(next));
+            }).then((next) => {
+              // 줄을 옮기는 동안 이 화면을 닫았거나 다른 화면을 열었으면 가지 않는다.
+              if (next && mounted.current && latest.current.active) onNavigate(next);
+            });
           }}
         />
       )}
