@@ -10,6 +10,7 @@ import { commonCommands, usePalette, type Command } from "../palette/Palette";
 import { routeKey } from "../keys";
 import { openInEditor } from "../editor";
 import { toggleHud } from "../Hud";
+import { commitSwitch } from "../worktree/switch";
 import { copyText } from "../clipboard";
 import { displayText } from "../blame/BlameView";
 import { formatDate, relativeTime, shortSha } from "../blame/format";
@@ -451,7 +452,9 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
           onClose={() => setWorktrees(false)}
           onPick={(worktree) => {
             setWorktrees(false);
-            onNavigate({ kind: "graph", repo: worktree.path, rev: null });
+            // 그 워크트리의 그래프에서 이 커밋을 고른다(객체는 워크트리끼리 같다).
+            const next = commitSwitch(worktree, latest.current.detail?.info.sha ?? rev);
+            if (next) onNavigate(next);
           }}
         />
       )}
