@@ -614,6 +614,12 @@ mod tests {
         );
     }
 
+    /// 같은 파일인가. Windows는 파일 이름의 대소문자를 가리지 않고 `which`는 PATHEXT의 확장자(`.EXE`)를 그대로
+    /// 붙여 돌려주므로 글자로 견주지 않는다.
+    fn same_file(a: &Path, b: &Path) -> bool {
+        std::fs::canonicalize(a).unwrap() == std::fs::canonicalize(b).unwrap()
+    }
+
     /// `dir`에 실행 파일 `name`을 만든다(Windows는 `.exe`).
     fn fake_editor(dir: &Path, name: &str) -> PathBuf {
         let exe = dir.join(if cfg!(windows) {
@@ -646,9 +652,10 @@ mod tests {
         // 앱 자신의 PATH에는 없고 셸의 PATH에만 있다
         assert_eq!(Env::default().which("plx-test-editor"), None);
         let env = shell(&[("PATH", path), ("PLX_EDITOR", "plx-test-editor {file}")]);
-        assert_eq!(env.which("plx-test-editor"), Some(exe.clone()));
+        let found = env.which("plx-test-editor").expect("셸의 PATH에서 찾는다");
+        assert!(same_file(&found, &exe), "{found:?}");
         let editor = Editor::find(&env).unwrap();
-        assert_eq!(editor.program, exe);
+        assert!(same_file(&editor.program, &exe), "{:?}", editor.program);
         // 띄울 때 PATH는 셸의 것이 앞이다
         let given = editor.path.expect("셸의 PATH를 넘긴다");
         assert_eq!(
