@@ -141,23 +141,22 @@ export function BlameView({
   };
 
   // 작업트리 blame: HEAD가 바뀌거나(이 파일을 커밋하는 등) 파일을 고치면(에이전트·편집기) 커서 줄을 지켜 다시 연다.
-  // 고정 리비전은 바뀌지 않는다.
-  const watched = meta && meta.rev === null ? meta.repo : null;
-  const watchedFile = watched && meta ? `${watched}/${meta.path}` : null;
+  // 고정 리비전은 바뀌지 않는다. 열기를 시작할 때 요청 대상으로 구독한다: meta를 기다리면 다시 열다 실패한 화면
+  // (체크아웃으로 파일이 사라짐)은 파일이 돌아와도 더는 바뀌지 않는다.
   useEffect(() => {
-    if (!watched || !watchedFile || !onReload) return;
+    if (rev !== null || !onReload) return;
     const reload = () => onReload(editor.current ? cursorLine() : line);
-    const stopRepo = watchRepo(watched, (change) => {
+    const stopRepo = watchRepo(target.repo ?? path, (change) => {
       if (change.headChanged) reload();
     });
-    const stopFile = watchFile(watchedFile, reload);
+    const stopFile = watchFile(target.repo ? `${target.repo}/${path}` : path, reload);
     return () => {
       stopRepo();
       stopFile();
     };
-    // cursorLine은 ref만 읽는다.
+    // 요청마다 새 컴포넌트다(App이 key를 준다). cursorLine은 ref만 읽는다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [watched, watchedFile]);
+  }, []);
 
   const openCard = (n: number, anchor: DOMRect, pinned: boolean) => {
     const sha = model.current?.sha(n);

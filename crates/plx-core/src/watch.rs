@@ -174,15 +174,27 @@ impl Watchers {
     }
 
     /// `path`(저장소 안의 아무 경로)가 든 저장소를 본다. (구독 id, 작업트리 경로)를 돌려준다.
+    /// 감시를 새로 만들 때(OS 감시 등록, 참조 지문)는 잠금 밖에서 한다(다른 구독·알림을 막지 않게).
     pub fn watch(&self, repos: &RepoCache, path: &Path) -> Result<(u64, String), String> {
         let repo = repos.for_path(path).map_err(|e| e.to_string())?;
         let workdir = repo.workdir().to_path_buf();
-        let mut inner = self.inner.lock().unwrap();
-        if let Some(watched) = inner.repos.get_mut(&workdir) {
-            watched.count += 1;
+        let fresh = if self.inner.lock().unwrap().repos.contains_key(&workdir) {
+            None
         } else {
-            let watched = self.start(repo)?;
-            inner.repos.insert(workdir.clone(), watched);
+            Some(self.start(repo)?)
+        };
+        let mut inner = self.inner.lock().unwrap();
+        match (inner.repos.get_mut(&workdir), fresh) {
+            (Some(watched), _) => watched.count += 1,
+            (None, Some(watched)) => {
+                inner.repos.insert(workdir.clone(), watched);
+            }
+            // 그사이 다른 구독이 감시를 끝냈다: 이번에는 잠금 안에서 만든다(드물다).
+            (None, None) => {
+                let repo = repos.for_path(path).map_err(|e| e.to_string())?;
+                let watched = self.start(repo)?;
+                inner.repos.insert(workdir.clone(), watched);
+            }
         }
         inner.next_id += 1;
         let id = inner.next_id;
@@ -201,35 +213,22 @@ impl Watchers {
             .ok_or_else(|| format!("파일 이름이 없다: {}", path.display()))?;
         let parent = dunce::canonicalize(parent).map_err(|e| format!("경로: {e}"))?;
         let file = parent.join(name);
-        let mut inner = self.inner.lock().unwrap();
-        if let Some(watched) = inner.files.get_mut(&file) {
-            watched.count += 1;
+        // OS 감시는 잠금 밖에서 만든다.
+        let fresh = if self.inner.lock().unwrap().files.contains_key(&file) {
+            None
         } else {
-            let events = self.events.clone();
-            let key = Key::File(file.clone());
-            let mut watcher =
-                notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-                    let Ok(event) = event else { return };
-                    if matches!(event.kind, EventKind::Access(_)) {
-                        return;
-                    }
-                    for path in event.paths {
-                        let _ = events.send((key.clone(), path));
-                    }
-                })
-                .map_err(|e| format!("파일 감시 실패: {e}"))?;
-            watcher
-                .watch(&parent, RecursiveMode::NonRecursive)
-                .map_err(|e| format!("파일 감시 실패({}): {e}", parent.display()))?;
-            let last = file_fingerprint(&file);
-            inner.files.insert(
-                file.clone(),
-                WatchedFile {
-                    count: 1,
-                    last,
-                    _watcher: watcher,
-                },
-            );
+            Some(self.start_file(&parent, &file)?)
+        };
+        let mut inner = self.inner.lock().unwrap();
+        match (inner.files.get_mut(&file), fresh) {
+            (Some(watched), _) => watched.count += 1,
+            (None, Some(watched)) => {
+                inner.files.insert(file.clone(), watched);
+            }
+            (None, None) => {
+                let watched = self.start_file(&parent, &file)?;
+                inner.files.insert(file.clone(), watched);
+            }
         }
         inner.next_id += 1;
         let id = inner.next_id;
@@ -238,29 +237,61 @@ impl Watchers {
     }
 
     /// 구독을 끝낸다. 그 저장소를 보는 구독이 없으면 감시를 멈춘다. 모르는 id면 `false`.
+    /// OS 감시는 잠금 밖에서 버린다(macOS FSEvents는 버릴 때 스레드를 기다린다).
     pub fn unwatch(&self, id: u64) -> bool {
-        let mut inner = self.inner.lock().unwrap();
-        match inner.subscriptions.remove(&id) {
-            Some(Key::Repo(workdir)) => {
-                if let Some(watched) = inner.repos.get_mut(&workdir) {
-                    watched.count -= 1;
-                    if watched.count == 0 {
-                        inner.repos.remove(&workdir);
+        let mut stopped_repo = None;
+        let mut stopped_file = None;
+        let known = {
+            let mut inner = self.inner.lock().unwrap();
+            match inner.subscriptions.remove(&id) {
+                Some(Key::Repo(workdir)) => {
+                    if let Some(watched) = inner.repos.get_mut(&workdir) {
+                        watched.count -= 1;
+                        if watched.count == 0 {
+                            stopped_repo = inner.repos.remove(&workdir);
+                        }
                     }
+                    true
                 }
-                true
-            }
-            Some(Key::File(file)) => {
-                if let Some(watched) = inner.files.get_mut(&file) {
-                    watched.count -= 1;
-                    if watched.count == 0 {
-                        inner.files.remove(&file);
+                Some(Key::File(file)) => {
+                    if let Some(watched) = inner.files.get_mut(&file) {
+                        watched.count -= 1;
+                        if watched.count == 0 {
+                            stopped_file = inner.files.remove(&file);
+                        }
                     }
+                    true
                 }
-                true
+                None => false,
             }
-            None => false,
-        }
+        };
+        drop(stopped_repo);
+        drop(stopped_file);
+        known
+    }
+
+    fn start_file(&self, parent: &Path, file: &Path) -> Result<WatchedFile, String> {
+        let events = self.events.clone();
+        let key = Key::File(file.to_path_buf());
+        let mut watcher =
+            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                let Ok(event) = event else { return };
+                if matches!(event.kind, EventKind::Access(_)) {
+                    return;
+                }
+                for path in event.paths {
+                    let _ = events.send((key.clone(), path));
+                }
+            })
+            .map_err(|e| format!("파일 감시 실패: {e}"))?;
+        watcher
+            .watch(parent, RecursiveMode::NonRecursive)
+            .map_err(|e| format!("파일 감시 실패({}): {e}", parent.display()))?;
+        Ok(WatchedFile {
+            count: 1,
+            last: file_fingerprint(file),
+            _watcher: watcher,
+        })
     }
 
     /// 감시 중인 저장소·파일 수

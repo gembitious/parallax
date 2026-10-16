@@ -190,8 +190,10 @@ function GraphPane({
     pending.current?.close();
     pending.current = null;
     const graph = openGraph(repo, scope, (event) => {
-      if (seq !== sessionSeq.current) return;
       const showing = handle.current === graph;
+      // 더 새 세션이 열렸으면 이 세션의 이벤트는 버린다. 단 보이는 세션은 바꿔 끼울 때까지 그린다(다시 읽기가
+      // 실패해도 보이는 그래프가 멈추지 않게).
+      if (seq !== sessionSeq.current && !showing) return;
       switch (event.kind) {
         case "meta": {
           const { kind: _kind, ...m } = event;
@@ -215,6 +217,7 @@ function GraphPane({
             pending.current = null;
             cache.current = new RowCache();
             if (nextMeta) setMeta(nextMeta);
+            refreshSearch(graph);
             const total = event.total;
             const receivedMs = nowMs();
             // 바뀐 저장소를 다시 그린 데까지(외부 커밋 → 화면 반영, 예산 1초의 우리 몫)
@@ -306,6 +309,7 @@ function GraphPane({
     return () => {
       sessionSeq.current += 1;
       handle.current?.close();
+      handle.current = null;
       pending.current?.close();
       window.clearTimeout(toastTimer.current);
     };
@@ -313,14 +317,17 @@ function GraphPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 저장소의 HEAD·참조가 바뀌면(다른 터미널·워크트리의 커밋 등) 다시 읽는다.
-  const watchedRepo = meta?.repo ?? null;
+  // 저장소의 HEAD·참조가 바뀌면(다른 터미널·워크트리의 커밋 등) 다시 읽는다. 다른 화면 아래 숨어 있으면(스크롤
+  // 위치를 읽을 수 없다) 표시만 해 두고 다시 보일 때 읽는다.
+  const stale = useRef(false);
   useEffect(() => {
-    if (!watchedRepo) return;
-    return watchRepo(watchedRepo, () => reload());
-    // reload는 ref만 읽는다.
+    return watchRepo(repo, () => {
+      if (latest.current.active) reload();
+      else stale.current = true;
+    });
+    // reload는 ref만 읽는다. 범위마다 새 컴포넌트다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [watchedRepo]);
+  }, []);
 
   // 첫 화면을 그린 시각
   useLayoutEffect(() => {
@@ -367,13 +374,16 @@ function GraphPane({
   useEffect(() => {
     if (total === null) return;
     const { start, end } = visibleRange(viewport.top, viewport.height, ROW_HEIGHT, total, OVERSCAN);
-    for (const index of cache.current.take(start, end, available)) {
+    // 응답이 오기 전에 세션을 바꿔 끼웠으면(다시 읽기) 그 응답은 앞 세션의 행이라 버린다.
+    const rows = cache.current;
+    for (const index of rows.take(start, end, available)) {
       handle.current?.rows(index * CHUNK, (index + 1) * CHUNK).then(
         (window) => {
-          cache.current.put(window);
+          if (cache.current !== rows) return;
+          rows.put(window);
           setVersion((v) => v + 1);
         },
-        () => cache.current.failed(index),
+        () => cache.current === rows && rows.failed(index),
       );
     }
   }, [viewport, available, total, generation]);
@@ -406,9 +416,15 @@ function GraphPane({
       if (list.scrollTop !== savedTop.current) list.scrollTop = savedTop.current;
       setViewport({ top: list.scrollTop, height: list.clientHeight });
       list.focus({ preventScroll: true });
+      if (stale.current) {
+        stale.current = false;
+        reload();
+      }
     } else {
       setHelp(false);
     }
+    // reload는 ref만 읽는다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
   /** `index`를 고르고 보이게 스크롤한다(`center`면 화면 밖일 때 가운데로). */
@@ -448,6 +464,25 @@ function GraphPane({
   };
 
   const changeScope = (next: GraphScope) => onScope(next, current()?.sha ?? null);
+
+  /**
+   * 세션을 바꿔 끼웠다: 하던 검색은 버리고(앞 세션의 행 번호다), 경로 일치는 새 세션에서 다시 구한다(위에 커밋이
+   * 생기면 행 번호가 밀린다). 메시지 검색은 행마다 다시 맞춰 보므로 그대로 둔다.
+   */
+  const refreshSearch = (graph: GraphHandle) => {
+    const seq = ++searchSeq.current;
+    setSearching(false);
+    const last = latest.current.found;
+    if (last?.kind !== "path") return;
+    graph.searchPath(last.path).then(
+      (matched) => {
+        if (seq === searchSeq.current) setFound({ kind: "path", path: last.path, rows: matched, set: new Set(matched) });
+      },
+      () => {
+        if (seq === searchSeq.current) setFound(null);
+      },
+    );
+  };
 
   /**
    * 고른 행 다음(`forward`가 아니면 앞)의 일치로 간다. `input`을 주면 그 입력으로 찾고, 없으면 마지막 검색을 되풀이한다.
