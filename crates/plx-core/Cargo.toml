@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [dependencies]
 # 저장소·객체 읽기, 리비전 해석, 트리·blob diff (프로세스를 띄우지 않는다)
