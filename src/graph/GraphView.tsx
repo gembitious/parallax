@@ -116,9 +116,8 @@ const MAX_LABELS = 3;
 /**
  * 레인 캔버스의 문맥 설정. WebKit(macOS·Linux)에는 CPU 캔버스(willReadFrequently, 픽셀을 읽지는 않는다)를 청한다.
  * GPU 캔버스를 처음 쓸 때 준비하느라 앱이 뜬 뒤 첫 그래프가 늦었다(macOS CI 0.9~3.1초 → CPU 캔버스로 0.27~0.56초).
- * 레인은 선과 점뿐이고 그리는 범위가 바뀔 때만 다시 그려 CPU로 충분하다. Chromium(Windows WebView2)에는 설정을 주지
- * 않는다(기본 GPU 캔버스): `willReadFrequently`를 주면 true든 false든 첫 그래프의 그린 뒤 화면까지가 CI에서 77~111ms였다
- * (주지 않으면 36~41ms, bench/results.md).
+ * 레인은 선과 점뿐이고 그리는 범위가 바뀔 때만 다시 그려 CPU로 충분하다. Chromium(Windows WebView2)은 기본(GPU 캔버스)으로
+ * 둔다: CPU 캔버스로 빨라지지 않았다(CI 첫 그래프의 그린 뒤 화면까지 CPU 77·111ms, GPU 97·98·101ms, bench/results.md).
  */
 const CANVAS_SETTINGS: CanvasRenderingContext2DSettings | undefined = /\bChrome\//.test(navigator.userAgent)
   ? undefined

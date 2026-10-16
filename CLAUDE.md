@@ -255,9 +255,8 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
   WebKit(macOS·Linux)에서는 레인 캔버스에 CPU 캔버스(`willReadFrequently`)를 청한다. macOS WebKit은 GPU 캔버스를 처음 쓸
   때 준비하느라 앱이 뜬 뒤 처음 연 그래프가 CI에서 0.9~3.1초였다(그리기에 메인 스레드 0.16~0.38초, 그 뒤 화면까지
   1.0~2.7초). CPU 캔버스로 0.27~0.56초다(프로세스에서 처음 그리는 0.18~0.38초는 남는다). 레인은 24개까지만 그려 CPU로
-  충분하고, Linux의 git/git 스크롤은 프레임 간격이 오히려 줄었다. Chromium(Windows)에는 캔버스 설정을 주지 않는다:
-  `willReadFrequently`를 주면 true든 false든 첫 그래프의 그린 뒤 화면까지가 CI에서 77~111ms였다(주지 않으면 36~41ms,
-  bench/results.md).
+  충분하고, Linux의 git/git 스크롤은 프레임 간격이 오히려 줄었다. Chromium(Windows)은 기본(GPU 캔버스)으로 둔다: CPU
+  캔버스로 빨라지지 않았다(CI 첫 그래프의 그린 뒤 화면까지 CPU 77·111ms, GPU 97·98·101ms, bench/results.md).
 - 2026-10-16: blame 파이프라인 리뷰 수정. 화면이 준 경로는 저장소 기준 경로 그대로 쓰고(`repo::FilePath::InRepo`),
   터미널에서 준 절대 경로만 실제 경로(심볼릭 링크·대소문자)로 푼다. 이유: 리비전의 경로를 오늘의 파일 시스템으로 풀면
   그 사이 대소문자만 바꾼 rename이나 심볼릭 링크로 바뀐 파일이 다른 파일이 된다. 작업트리 파일을 blob과 비교하거나 줄을
