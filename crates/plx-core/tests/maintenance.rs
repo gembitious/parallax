@@ -1,6 +1,8 @@
 //! 앱이 저장소를 열어 둔 채로 사용자가 git 정리(repack·gc·commit-graph write)를 해도 git이 막히지 않아야 한다.
-//! gix는 pack·idx·commit-graph를 메모리 매핑하는데, Windows는 매핑된 파일을 지우지 못한다(Git for Windows는
-//! 다시 시도하다 터미널에서는 "Unlink of file … failed. Should I try again? (y/n)"을 묻는다).
+//! 상주 앱은 저장소를 열어 두고 gix는 pack·idx·commit-graph를 메모리 매핑한다. Windows는 다른 프로세스가 연 파일을
+//! 지우지 못하는 경우가 있고(Git for Windows는 다시 시도하다 터미널에서 "Unlink of file … failed. Should I try
+//! again? (y/n)"을 묻는다), 그러면 옛 pack이 남고 commit-graph를 바꾸지 못한다. windows-latest(Git for Windows 2.56)에서는
+//! 지우고 바꾼다(2026-10-16 CI). 매핑하는 방식이나 열어 두는 것을 바꿀 때 이 테스트가 지킨다.
 
 mod common;
 
