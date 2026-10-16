@@ -10,12 +10,18 @@ export type QuickOpenPick = {
   line: number | null;
   /** 파일 히스토리로(Shift+Enter) */
   history: boolean;
+  /** 작업트리에 없다(지웠다) */
+  missing: boolean;
 };
 
-/** 고른 파일로 가는 탐색: 작업트리 파일의 blame(그 줄) 또는 파일 히스토리 */
+/**
+ * 고른 파일로 가는 탐색: 작업트리 파일의 blame(그 줄) 또는 파일 히스토리. 작업트리에서 지운 파일은 작업트리
+ * blame을 열 수 없어 HEAD 버전의 blame으로 간다(히스토리는 지운 경로도 된다).
+ */
 export function quickOpenNavigation(pick: QuickOpenPick): Navigation {
   const target = { repo: pick.repo, path: pick.path, rev: null };
-  return pick.history ? { kind: "history", target } : { kind: "file", target, line: pick.line };
+  if (pick.history) return { kind: "history", target };
+  return { kind: "file", target: pick.missing ? { ...target, rev: "HEAD" } : target, line: pick.line };
 }
 
 type KeyLike = Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey" | "target">;
