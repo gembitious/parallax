@@ -309,3 +309,7 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
   detached HEAD) 가속됨으로 본다(나머지는 필터를 쓴다. 다시 쓰기는 팔레트로). 결과 캐시: 파일·라인 히스토리 열쇠에 mailmap
   (`%aN`)과 `-L`의 diff·rename 설정을 넣고, `git replace`·grafts가 있으면 얕은 클론처럼 넣지 않는다. 커밋 표(`.bin`)는 값의
   FNV 해시를 머리에 둬 끝이 0으로 채워진 파일을 버리고, 쓰기에 실패하면 임시 파일을 지우며, 한도 정리는 따로 스레드에서 한다.
+- 2026-10-16: 상주 앱이 연 저장소가 사용자의 git 정리를 막는지 확인했다(가속 설정 리뷰의 인접 위험). gix가 pack·idx·
+  commit-graph를 메모리 매핑한 채로(저장소 캐시, 그래프 화면) `git repack -a -d`·`git commit-graph write`를 하면 Windows
+  (windows-latest, Git for Windows 2.56)에서도 git이 옛 pack을 지우고 commit-graph를 새 파일로 바꾼다(`tests/maintenance.rs`,
+  세 플랫폼 CI). 그래서 매핑을 놓는 장치(쉴 때 저장소 닫기 등)는 만들지 않고 이 테스트를 회귀 확인으로 둔다.
