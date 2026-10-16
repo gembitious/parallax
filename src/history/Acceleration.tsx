@@ -30,7 +30,7 @@ type State =
 
 /**
  * `repo`(작업트리 경로)의 가속 상태. 가속돼 있으면 `가속됨` 표만 그린다. `request`가 바뀌면(명령 팔레트) 버튼을 누른
- * 것처럼 확인 창을 연다.
+ * 것처럼 확인 창을 연다. 상태를 아직 읽는 중이면 기억해 뒀다가 읽은 뒤 연다.
  */
 export function Acceleration({
   repo,
@@ -44,22 +44,38 @@ export function Acceleration({
   const [state, setState] = useState<State>({ kind: "unknown" });
   const latest = useRef({ state, onDone });
   latest.current = { state, onDone };
+  /** 상태를 읽기 전에 온 요청 */
+  const pending = useRef(false);
 
-  useEffect(() => {
-    if (request === 0) return;
-    const { state: now, onDone: tell } = latest.current;
+  /** 요청(팔레트)에 답한다: 가속되지 않았으면 확인 창, 아니면 왜 열지 않는지 알린다. */
+  const answer = (now: State) => {
+    const tell = latest.current.onDone;
     if (now.kind === "known" && !accelerated(now.status)) setState({ kind: "confirming", status: now.status });
     else if (now.kind === "known") tell("이미 가속돼 있다(commit-graph와 Bloom 필터가 있다).");
     else if (now.kind === "running") tell("가속 설정 중이다.");
     else if (now.kind === "failed") tell(`가속 상태를 모른다: ${now.message}`);
-    else if (now.kind === "unknown") tell("가속 상태를 읽는 중이다. 잠시 뒤 다시 한다.");
+  };
+
+  useEffect(() => {
+    if (request === 0) return;
+    const now = latest.current.state;
+    if (now.kind === "unknown") pending.current = true;
+    else answer(now);
   }, [request]);
 
   useEffect(() => {
     let disposed = false;
+    const settle = (next: State) => {
+      if (disposed) return;
+      setState(next);
+      if (pending.current) {
+        pending.current = false;
+        answer(next);
+      }
+    };
     call<GraphStatus>("repo_acceleration", { repo }).then(
-      (status) => !disposed && setState({ kind: "known", status }),
-      (e: unknown) => !disposed && setState({ kind: "failed", message: String(e) }),
+      (status) => settle({ kind: "known", status }),
+      (e: unknown) => settle({ kind: "failed", message: String(e) }),
     );
     return () => {
       disposed = true;

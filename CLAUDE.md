@@ -118,7 +118,8 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
 - `PLX_EDITOR`: `o`(에디터로 열기)가 띄울 에디터. 이름·경로(`code`, `zed`, `cursor`, `subl`, `idea` …, 줄 넘기는 법을
   안다) 또는 `{file}`·`{line}`·`{col}`을 넣은 명령 틀(`"my-editor --line {line} {file}"`). 없으면 `VISUAL`·`EDITOR`가
   아는 GUI 에디터일 때 그것, 다음은 PATH의 `code`·`cursor`·`windsurf`·`zed`·`subl`, 그다음 설치 위치(Windows VS Code,
-  macOS VS Code 앱)를 쓴다.
+  macOS VS Code 앱)를 쓴다. 이 변수들과 PATH는 마지막으로 `plx`를 부른 셸의 값을 먼저 본다(`plx`가 상주 인스턴스에
+  넘긴다. Finder·시작 메뉴에서 뜬 앱의 PATH에는 `code`가 없을 수 있다). 바꾼 값은 다음 `plx` 호출부터 쓴다.
 
 ## 키맵
 - 탐색은 tig와 같게: `j`/`k` 이동, `Enter` 커밋 상세, `,` 부모 리비전 blame, `/` 검색, `q` 뒤로

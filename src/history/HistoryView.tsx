@@ -6,8 +6,9 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Help } from "../Help";
 import { WorktreePicker } from "../worktree/WorktreePicker";
 import { call } from "../ipc";
-import { isQuickOpenKey, useQuickOpen } from "../quickopen/QuickOpen";
-import { commonCommands, isPaletteKey, usePalette, type Command } from "../palette/Palette";
+import { useQuickOpen } from "../quickopen/QuickOpen";
+import { commonCommands, usePalette, type Command } from "../palette/Palette";
+import { routeKey } from "../keys";
 import { openInEditor } from "../editor";
 import { toggleHud } from "../Hud";
 import { copyText } from "../clipboard";
@@ -347,15 +348,8 @@ export function HistoryView({
   // 키: 화면이 맨 위일 때만. 검색 입력 중이면 넘긴다(입력 칸이 Enter·Esc를 따로 다룬다).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!latest.current.active || e.defaultPrevented) return;
-      if (isQuickOpenKey(e) || isPaletteKey(e)) {
-        if (isPaletteKey(e)) latest.current.palette();
-        else latest.current.openFiles();
-        e.preventDefault();
-        return;
-      }
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
-      if ((e.target as HTMLElement | null)?.closest("input, textarea")) return;
+      const { active: on, openFiles, palette: openPalette } = latest.current;
+      if (!on || routeKey(e, { files: openFiles, palette: openPalette }) !== "view") return;
       const { selected: at, help: helpOpen } = latest.current;
       let handled = true;
       switch (e.key) {

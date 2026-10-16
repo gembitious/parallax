@@ -1,4 +1,5 @@
-// 결과 한 줄을 파일 이름과 디렉터리로 나누고 맞은 글자를 덩어리로 묶는다. 순수 함수라 단위 테스트한다.
+// 결과 한 줄을 파일 이름과 디렉터리로 나누고 맞은 글자를 덩어리로 묶는다(명령 팔레트도 쓴다). 순수 함수라 단위
+// 테스트한다.
 
 export type Run = { text: string; hit: boolean };
 
@@ -11,6 +12,12 @@ export function splitPath(path: string, positions: readonly number[]): { dir: Ru
   const base = chars.lastIndexOf("/") + 1;
   const hits = new Set(positions);
   return { dir: runs(chars, 0, base, hits), name: runs(chars, base, chars.length, hits) };
+}
+
+/** `text` 전체를 맞은 글자(`positions`, 코드 포인트 위치)와 아닌 글자의 덩어리로 묶는다. */
+export function highlightRuns(text: string, positions: readonly number[]): Run[] {
+  const chars = Array.from(text);
+  return runs(chars, 0, chars.length, new Set(positions));
 }
 
 function runs(chars: string[], start: number, end: number, hits: Set<number>): Run[] {

@@ -349,16 +349,19 @@ pub struct Opened {
 }
 
 /// 작업트리 파일을 에디터(`PLX_EDITOR`, PATH의 code·zed …)로 연다. `path`(저장소 기준)가 없으면 작업트리 폴더를
-/// 연다. `rev`의 `line`은 작업트리 파일의 줄로 옮긴다. 저장소는 바꾸지 않는다.
+/// 연다. `rev`의 `line`은 작업트리 파일의 줄로 옮긴다. 환경 변수는 마지막 `plx` 호출의 셸 값을 먼저 본다.
+/// 저장소는 바꾸지 않는다.
 #[tauri::command]
 pub async fn open_in_editor(
     git: State<'_, Arc<GitState>>,
+    requests: State<'_, Arc<crate::instance::Requests>>,
     repo: String,
     path: Option<String>,
     rev: Option<String>,
     line: Option<u32>,
 ) -> Result<Opened, String> {
     let git = git.inner().clone();
+    let env = requests.editor_env();
     tauri::async_runtime::spawn_blocking(move || {
         let repo = git
             .repos
@@ -366,7 +369,7 @@ pub async fn open_in_editor(
             .map_err(|e| e.to_string())?;
         let target = plx_core::editor::locate(&repo, path.as_deref(), rev.as_deref(), line)
             .map_err(|e| e.to_string())?;
-        let editor = plx_core::editor::Editor::find()?;
+        let editor = plx_core::editor::Editor::find(&env)?;
         editor
             .open(&target)
             .map_err(|e| format!("{}를 띄우지 못했다: {e}", editor.name))?;
