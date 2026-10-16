@@ -570,6 +570,36 @@ fn session_stops_when_the_receiver_is_gone() {
     );
 }
 
+/// 한 번에 다 있는 결과(캐시, 모두 미커밋)도 받는 쪽이 meta에서 사라졌으면 취소로 끝난다. git 결과가 묶음 하나로
+/// 다 온 뒤에 사라진 경우(바쁜 머신에서 첫 묶음 전에 git이 끝났다)와 같은 길이다.
+#[test]
+fn whole_results_end_cancelled_when_the_receiver_is_gone() {
+    let repo = scratch_repo("session-gone");
+    std::fs::write(repo.join("a.txt"), ten_lines(&[])).unwrap();
+    commit_all(&repo, "first");
+    std::fs::write(repo.join("new.txt"), "untracked\n").unwrap();
+    let sessions = Sessions::new();
+    let id = sessions.register();
+    let events = events_with(&sessions, id, &repo.join("new.txt"), None, |_| false);
+    assert!(
+        matches!(events[..], [SessionEvent::Meta(_), SessionEvent::Cancelled]),
+        "{events:?}"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let sessions =
+        Sessions::with_cache(Arc::new(DiskCache::new(dir.path().to_path_buf(), 1 << 30)));
+    let file = repo.join("a.txt");
+    let (_, cached) = cached_session(&sessions, &file, Some("HEAD"));
+    assert!(!cached);
+    let id = sessions.register();
+    let events = events_with(&sessions, id, &file, Some("HEAD"), |_| false);
+    assert!(
+        matches!(events[..], [SessionEvent::Meta(_), SessionEvent::Cancelled]),
+        "{events:?}"
+    );
+}
+
 #[test]
 fn session_events_serialize_for_the_ui() {
     let events = events(&history().join("src/lib.rs"), None);

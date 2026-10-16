@@ -315,7 +315,9 @@ impl Sessions {
             }
         };
         let canceller = blame.canceller();
-        if !sent {
+        // 받는 쪽이 사라졌다. git이 이미 다 냈어도(마지막 묶음에서 알았다) 끝은 취소다.
+        let mut gone = !sent;
+        if gone {
             canceller.cancel();
         }
         // 캐시에 넣을 결과를 모은다.
@@ -325,18 +327,24 @@ impl Sessions {
                 all.commits.extend_from_slice(&chunk.commits);
                 all.blocks.extend_from_slice(&chunk.blocks);
             }
-            if !on_event(SessionEvent::Chunk(chunk)) {
+            if !gone && !on_event(SessionEvent::Chunk(chunk)) {
+                gone = true;
                 canceller.cancel();
             }
         });
         match result {
             Ok(stats) => {
+                // 다 받은 결과는 받는 쪽이 사라졌어도 넣어 둔다(다음에 열 때 쓴다).
                 if let (Some(cache), Some(key), Some(all)) = (self.cache(), &key, &all)
                     && let Err(e) = cache.put(key, all)
                 {
                     eprintln!("plx: blame 캐시에 쓰지 못했다: {e}");
                 }
-                SessionEvent::Done { meta_ms, stats }
+                if gone {
+                    SessionEvent::Cancelled
+                } else {
+                    SessionEvent::Done { meta_ms, stats }
+                }
             }
             Err(BlameError::Cancelled) => SessionEvent::Cancelled,
             Err(e) => SessionEvent::Error {
@@ -360,7 +368,7 @@ fn whole(
         cached,
         ..Stats::default()
     };
-    if sent && !on_event(SessionEvent::Chunk(chunk)) {
+    if !sent || !on_event(SessionEvent::Chunk(chunk)) {
         return SessionEvent::Cancelled;
     }
     SessionEvent::Done { meta_ms, stats }

@@ -4,9 +4,12 @@
 //! 상주 인스턴스는 넘겨받은 argv·cwd를 같은 함수로 다시 파싱한다.
 
 use std::fmt;
+use std::io;
 use std::path::{Component, Path, PathBuf};
 
 use serde::Serialize;
+
+use crate::repo::Repo;
 
 pub const USAGE: &str = "\
 사용법:
@@ -80,6 +83,8 @@ pub enum PathKind {
     File,
     Dir,
     Missing,
+    /// 있는지 볼 수 없다(권한이 없는 디렉터리 등). 그 까닭.
+    Unreadable(io::ErrorKind),
 }
 
 /// 실제 파일 시스템 조회.
@@ -87,8 +92,66 @@ pub fn stat(path: &Path) -> PathKind {
     match std::fs::metadata(path) {
         Ok(meta) if meta.is_dir() => PathKind::Dir,
         Ok(_) => PathKind::File,
-        Err(_) => PathKind::Missing,
+        Err(e)
+            if matches!(
+                e.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+            ) =>
+        {
+            PathKind::Missing
+        }
+        Err(e) => PathKind::Unreadable(e.kind()),
     }
+}
+
+/// 실행기가 붙이는 인자를 뺀다. macOS LaunchServices는 처음 실행할 때(격리를 푼 직후 등) `-psn_0_12345`를 붙인다.
+/// 남겨 두면 알 수 없는 옵션이라 앱이 뜨지 않는다(GUI 실행이라 오류도 보이지 않는다).
+pub fn without_launcher_args(args: Vec<String>) -> Vec<String> {
+    strip_process_serial(args, cfg!(target_os = "macos"))
+}
+
+fn strip_process_serial(args: Vec<String>, macos: bool) -> Vec<String> {
+    if !macos {
+        return args;
+    }
+    args.into_iter()
+        .filter(|arg| !arg.starts_with("-psn_"))
+        .collect()
+}
+
+/// 표준 입출력 가운데 터미널이 있다(사람이 쓰는 셸에서 불렀다). Git Bash(mintty)의 pty도 터미널로 본다.
+pub fn has_terminal() -> bool {
+    use std::io::IsTerminal;
+    io::stdin().is_terminal() || io::stdout().is_terminal() || io::stderr().is_terminal()
+}
+
+/// 터미널에 그대로 써도 되게 제어 문자(줄 바꿈·탭 말고)를 �로 바꾼다. 파일 이름이나 상주 인스턴스가 보낸 문장에
+/// 든 이스케이프 시퀀스가 터미널을 바꾸지 못하게 한다.
+pub fn printable(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c.is_control() && c != '\n' && c != '\t' {
+                '\u{FFFD}'
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+/// 상주 인스턴스에 넘기기 전에 대상 저장소를 앱과 같은 방법([`Repo::discover`])으로 열어 본다. 저장소가 아니거나
+/// `plx show`의 리비전이 없으면 창을 띄우지 않고 이 터미널에서 알린다.
+pub fn check_repo(request: &Request, cwd: &Path) -> Result<(), CliError> {
+    let path = match request {
+        Request::Graph | Request::Show { .. } => cwd,
+        Request::Blame { path, .. } | Request::Log { path } | Request::LineLog { path, .. } => path,
+    };
+    let repo = Repo::discover(path).map_err(|e| CliError(e.to_string()))?;
+    if let Request::Show { rev } = request {
+        repo.resolve_commit(rev)
+            .map_err(|e| CliError(e.to_string()))?;
+    }
+    Ok(())
 }
 
 /// 사용법 오류. 터미널에 그대로 보여 줄 문장이다.
@@ -135,33 +198,56 @@ pub fn parse(
     Ok(Parsed::Request(request))
 }
 
-/// `<file>[:<line>]`. 이름에 콜론이 든 파일이 실제로 있으면 줄 번호로 나누지 않는다.
+/// `<file>[:<line>]`, 컴파일러·grep이 쓰는 `<file>:<line>:<column>`(열은 버린다).
+/// 이름에 콜론이 든 파일이 실제로 있으면 그 이름이 먼저다.
 fn blame(spec: &str, cwd: &Path, stat: &impl Fn(&Path) -> PathKind) -> Result<Request, CliError> {
     if spec.is_empty() {
         return err("파일 이름이 비어 있다");
     }
-    let whole = resolve(cwd, spec);
-    match stat(&whole) {
+    let mut unreadable = None;
+    match stat(&resolve(cwd, spec)) {
         PathKind::File => {
             return Ok(Request::Blame {
-                path: whole,
+                path: resolve(cwd, spec),
                 line: None,
             });
         }
         PathKind::Dir => return err(format!("디렉터리는 blame할 수 없다: {spec}")),
+        PathKind::Unreadable(kind) => unreadable = Some((spec, kind)),
         PathKind::Missing => {}
     }
     let Some((file, line)) = split_line(spec)? else {
-        return err(format!("파일이 없다: {spec}"));
+        return Err(not_found(spec, unreadable));
     };
-    let path = resolve(cwd, file);
-    match stat(&path) {
-        PathKind::File => Ok(Request::Blame {
-            path,
-            line: Some(line),
-        }),
-        PathKind::Dir => err(format!("디렉터리는 blame할 수 없다: {file}")),
-        PathKind::Missing => err(format!("파일이 없다: {file}")),
+    // `file:line:column`이면 앞의 숫자가 줄이다(그런 이름의 파일이 없을 때).
+    let mut candidates = vec![(file, line)];
+    if let Some((file, line)) = split_line(file).ok().flatten() {
+        candidates.push((file, line));
+    }
+    for (file, line) in candidates {
+        match stat(&resolve(cwd, file)) {
+            PathKind::File => {
+                return Ok(Request::Blame {
+                    path: resolve(cwd, file),
+                    line: Some(line),
+                });
+            }
+            PathKind::Dir => return err(format!("디렉터리는 blame할 수 없다: {file}")),
+            PathKind::Unreadable(kind) => unreadable = unreadable.or(Some((file, kind))),
+            PathKind::Missing => {}
+        }
+    }
+    Err(not_found(file, unreadable))
+}
+
+/// 파일을 찾지 못한 까닭. 볼 수 없는 경로가 있었으면 그쪽을 알린다(권한 문제를 "없다"로 말하지 않는다).
+fn not_found(file: &str, unreadable: Option<(&str, io::ErrorKind)>) -> CliError {
+    match unreadable {
+        Some((path, io::ErrorKind::PermissionDenied)) => {
+            CliError(format!("파일을 볼 권한이 없다: {path}"))
+        }
+        Some((path, kind)) => CliError(format!("파일을 볼 수 없다: {path} ({kind})")),
+        None => CliError(format!("파일이 없다: {file}")),
     }
 }
 
@@ -504,6 +590,94 @@ mod tests {
         );
         assert_eq!(fs.error(&["-x"]), "알 수 없는 옵션: -x");
         assert_eq!(fs.error(&["--", ""]), "파일 이름이 비어 있다");
+    }
+
+    #[test]
+    fn blame_file_line_column() {
+        let fs = Fs::new();
+        // 컴파일러·grep의 `file:line:col`: 열은 버린다.
+        assert_eq!(
+            fs.request(&["src/lib.rs:12:5"]),
+            Request::Blame {
+                path: fs.path("src/lib.rs"),
+                line: Some(12)
+            }
+        );
+        // 콜론이 든 이름의 파일이 있으면 그 이름이 먼저다(weird:12의 3번 줄).
+        assert_eq!(
+            fs.request(&["weird:12:3"]),
+            Request::Blame {
+                path: fs.path("weird:12"),
+                line: Some(3)
+            }
+        );
+        assert!(fs.error(&["main.rs:3:x"]).starts_with("파일이 없다"));
+        assert!(fs.error(&["missing.rs:3:4"]).starts_with("파일이 없다"));
+        assert_eq!(fs.error(&["main.rs:3:0"]), "줄 번호는 1부터 센다");
+    }
+
+    #[test]
+    fn unreadable_paths_are_not_missing() {
+        let mut fs = Fs::new();
+        fs.add(
+            "secret/a.rs",
+            PathKind::Unreadable(io::ErrorKind::PermissionDenied),
+        );
+        fs.add(
+            "odd.rs",
+            PathKind::Unreadable(io::ErrorKind::InvalidFilename),
+        );
+        assert_eq!(
+            fs.error(&["secret/a.rs"]),
+            "파일을 볼 권한이 없다: secret/a.rs"
+        );
+        assert_eq!(
+            fs.error(&["secret/a.rs:3"]),
+            "파일을 볼 권한이 없다: secret/a.rs"
+        );
+        assert!(
+            fs.error(&["odd.rs"])
+                .starts_with("파일을 볼 수 없다: odd.rs ("),
+            "{}",
+            fs.error(&["odd.rs"])
+        );
+    }
+
+    #[test]
+    fn real_stat_reports_kinds() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.rs");
+        std::fs::write(&file, "x").unwrap();
+        assert_eq!(stat(&file), PathKind::File);
+        assert_eq!(stat(dir.path()), PathKind::Dir);
+        assert_eq!(stat(&dir.path().join("missing")), PathKind::Missing);
+        // 파일 아래의 경로(ENOTDIR)도 없는 것이다.
+        assert_eq!(stat(&file.join("b")), PathKind::Missing);
+    }
+
+    #[test]
+    fn process_serial_is_dropped_on_macos() {
+        let args = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            strip_process_serial(args(&["-psn_0_12345", "a.rs:3"]), true),
+            args(&["a.rs:3"])
+        );
+        assert_eq!(
+            strip_process_serial(args(&["-psn_0_12345"]), false),
+            args(&["-psn_0_12345"])
+        );
+    }
+
+    #[test]
+    fn printable_replaces_control_characters() {
+        assert_eq!(
+            printable("a\u{1b}[31mb\n\tc\u{9b}d\u{7}"),
+            "a\u{FFFD}[31mb\n\tc\u{FFFD}d\u{FFFD}"
+        );
+        assert_eq!(
+            printable("한글 경로/파일 이름.rs"),
+            "한글 경로/파일 이름.rs"
+        );
     }
 
     #[test]
