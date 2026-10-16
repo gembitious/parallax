@@ -20,6 +20,7 @@ import { routeKey } from "../keys";
 import { openInEditor } from "../editor";
 import { toggleHud } from "../Hud";
 import { openSearchPanel } from "@codemirror/search";
+import { runScopeHandlers } from "@codemirror/view";
 import { blameSwitch } from "../worktree/switch";
 import { openBlame, type BlameTarget } from "./session";
 import type { BlameBlock, BlameMeta, BlameStats, CommitInfo, Neighbor, Version } from "./types";
@@ -78,6 +79,21 @@ type Actions = {
   help(): boolean;
   escape(): boolean;
 };
+
+type NoEditorAction = "back" | "help" | "history" | "worktrees" | "graph" | "openEditor" | "older" | "newer" | "escape";
+
+/** 코드 뷰가 없는 화면(바이너리, 열지 못한 파일)에서도 먹는 키. 나머지는 줄이 있어야 한다. */
+const NO_EDITOR_KEYS = new Map<string, NoEditorAction>([
+  ["q", "back"],
+  ["?", "help"],
+  ["H", "history"],
+  ["W", "worktrees"],
+  ["G", "graph"],
+  ["o", "openEditor"],
+  ["<", "older"],
+  [">", "newer"],
+  ["Escape", "escape"],
+]);
 
 const SHOW_DELAY_MS = 150;
 const HIDE_DELAY_MS = 250;
@@ -159,14 +175,17 @@ export function BlameView({
   /** 이동 요청을 보내 놓고 답을 기다리는 중(키를 여러 번 눌러도 한 번만 간다) */
   const navigating = useRef(false);
   const mounted = useMounted();
-  const latest = useRef({ hover, help, meta, infos, active });
-  latest.current = { hover, help, meta, infos, active };
+  const latest = useRef({ hover, help, meta, infos, active, fatal });
+  latest.current = { hover, help, meta, infos, active, fatal };
 
   const showToast = (message: string) => {
     setToast(message);
     window.clearTimeout(timers.current.toast);
     timers.current.toast = window.setTimeout(() => setToast(null), TOAST_MS);
   };
+
+  /** 파일을 아직 열지 못했다(여는 중이거나 실패했다). */
+  const notOpened = () => showToast(latest.current.fatal ? "파일을 열지 못했다" : "아직 파일을 여는 중이다");
 
   const loadInfo = (sha: string) => {
     const repo = latest.current.meta?.repo;
@@ -341,7 +360,7 @@ export function BlameView({
     },
     history() {
       const m = latest.current.meta;
-      if (!m) showToast("아직 파일을 여는 중이다");
+      if (!m) notOpened();
       else onNavigate({ kind: "history", target: { repo: m.repo, path: m.path, rev: m.rev } });
       return true;
     },
@@ -349,7 +368,8 @@ export function BlameView({
       const m = latest.current.meta;
       const view = editor.current?.view;
       if (!m || !view) {
-        showToast(m?.binary ? "바이너리 파일은 라인 히스토리를 보지 않는다" : "아직 파일을 여는 중이다");
+        if (m?.binary) showToast("바이너리 파일은 라인 히스토리를 보지 않는다");
+        else notOpened();
         return true;
       }
       // 선택한 줄들(끝이 줄 맨 앞이면 그 줄은 뺀다), 선택이 없으면 커서 줄
@@ -364,7 +384,7 @@ export function BlameView({
     graph() {
       const m = latest.current.meta;
       if (!m) {
-        showToast("아직 파일을 여는 중이다");
+        notOpened();
         return true;
       }
       // 커서 줄의 커밋(미커밋 줄이면 이 리비전, 작업트리면 HEAD)을 골라서 연다.
@@ -392,7 +412,7 @@ export function BlameView({
     },
     openEditor() {
       const m = latest.current.meta;
-      if (!m) showToast("아직 파일을 여는 중이다");
+      if (!m) notOpened();
       else openInEditor({ repo: m.repo, path: m.path, rev: m.rev, line: cursorLine() }).then(showToast);
       return true;
     },
@@ -617,24 +637,25 @@ export function BlameView({
     }
   }, [active]);
 
-  // 에디터 밖(카드, 머리줄)에 포커스가 있어도 q·?·Esc는 먹게 한다.
+  // 코드 뷰 밖(머리줄·카드·버튼을 누른 뒤, 클립보드 대신 쓰기 뒤)에 포커스가 있어도 화면 키가 먹게 한다.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!latest.current.active || routeKey(e, actions.current) !== "view") return;
+      const target = e.target as HTMLElement | null;
       // 코드 뷰 안의 키는 코드 뷰의 키맵이 받는다.
-      if ((e.target as HTMLElement | null)?.closest(".cm-editor")) return;
-      // W는 코드 뷰가 없는 화면(바이너리, 오류)에서도 먹는다.
-      const handled =
-        e.key === "q"
-          ? actions.current.back()
-          : e.key === "?"
-            ? actions.current.help()
-            : e.key === "H"
-              ? actions.current.history()
-              : e.key === "W"
-                ? actions.current.worktrees()
-                : e.key === "Escape" && actions.current.escape();
-      if (handled) e.preventDefault();
+      if (target?.closest(".cm-editor")) return;
+      // 버튼에 포커스가 있으면 Enter·Space는 버튼이 받는다.
+      if (target?.closest("button") && (e.key === "Enter" || e.key === " ")) return;
+      const view = editor.current?.view;
+      if (view) {
+        // 코드 뷰의 키맵으로 처리하고 포커스를 돌려준다. 키가 입력 칸(검색 패널)을 열어 포커스를 가져갔으면 둔다.
+        if (!runScopeHandlers(view, e, "editor")) return;
+        e.preventDefault();
+        if (!document.activeElement?.closest("input, textarea, .cm-editor")) view.focus();
+        return;
+      }
+      const action = NO_EDITOR_KEYS.get(e.key);
+      if (action && actions.current[action]()) e.preventDefault();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
