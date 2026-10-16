@@ -208,7 +208,7 @@ function GraphPane({
         run: () => changeScope(s.scope),
       }),
     ),
-    { label: "검색 (메시지·작성자·sha, path:경로)", keys: "/", run: () => setSearch((s) => ({ ...s, open: true })) },
+    { label: "검색 (메시지·작성자·sha, path:경로)", keys: "/", run: () => openSearch() },
     { label: "다음 검색 결과", keys: "n", run: () => runSearch(true) },
     { label: "이전 검색 결과", keys: "N", run: () => runSearch(false) },
     { label: "맨 위(최근) 커밋으로", keys: "Home", run: () => select(0) },
@@ -635,6 +635,12 @@ function GraphPane({
     else if (latest.current.active) listRef.current?.focus({ preventScroll: true });
   }, [search.open]);
 
+  /** 검색 칸을 연다. 이미 열려 있으면(목록을 눌러 포커스가 떠났다) 그리로 포커스를 옮긴다. */
+  const openSearch = () => {
+    setSearch((s) => ({ ...s, open: true }));
+    searchRef.current?.focus();
+  };
+
   // 키: 화면이 맨 위일 때만.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -673,7 +679,7 @@ function GraphPane({
           copySha();
           break;
         case "/":
-          setSearch((s) => ({ ...s, open: true }));
+          openSearch();
           break;
         case "n":
           runSearch(true);

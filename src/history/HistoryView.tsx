@@ -115,7 +115,7 @@ export function HistoryView({
     { label: "바꾸기 전 리비전의 파일 blame", keys: ",", run: () => openBlame(true) },
     { label: "커밋 그래프 (고른 커밋)", keys: "G", run: () => openGraph() },
     { label: "커밋 sha 복사", keys: "y", run: () => copySha() },
-    { label: "검색 (요약·작성자·sha·경로)", keys: "/", run: () => setSearch((s) => ({ ...s, open: true })) },
+    { label: "검색 (요약·작성자·sha·경로)", keys: "/", run: () => openSearch() },
     { label: "다음 검색 결과", keys: "n", run: () => findNext(1) },
     { label: "이전 검색 결과", keys: "N", run: () => findNext(-1) },
     { label: "처음 커밋으로", keys: "Home", run: () => select(0) },
@@ -368,6 +368,12 @@ export function HistoryView({
     );
   };
 
+  /** 검색 칸을 연다. 이미 열려 있으면(목록을 눌러 포커스가 떠났다) 그리로 포커스를 옮긴다. */
+  const openSearch = () => {
+    setSearch((s) => ({ ...s, open: true }));
+    searchRef.current?.focus();
+  };
+
   const findNext = (direction: 1 | -1, from = latest.current.selected) => {
     const query = latest.current.search.query;
     if (!query.trim()) return;
@@ -418,7 +424,7 @@ export function HistoryView({
           copySha();
           break;
         case "/":
-          setSearch((s) => ({ ...s, open: true }));
+          openSearch();
           break;
         case "n":
           findNext(1);
