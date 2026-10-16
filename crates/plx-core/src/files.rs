@@ -37,6 +37,9 @@ const RECENT: usize = 50;
 pub struct FileList {
     paths: Vec<Box<str>>,
     meta: Vec<Meta>,
+    /// NFD 한글을 합친 경로(번호)의 글자마다 원래 글자 시작 위치(`fuzzy::compose_jamo`). 맞은 위치를 원래
+    /// 글자 위치로 돌려 화면이 자모 전부를 칠한다. 드물어 경로마다 두지 않는다.
+    origins: HashMap<u32, Box<[u32]>>,
 }
 
 struct Meta {
@@ -44,7 +47,7 @@ struct Meta {
     base: u32,
     /// 글자 수(같은 점수면 짧은 경로가 위)
     len: u32,
-    /// ASCII가 아닌 경로의 글자 배열(ASCII는 바이트를 그대로 쓴다)
+    /// ASCII가 아닌 경로의 글자 배열(ASCII는 바이트를 그대로 쓴다). NFD 한글은 합친 글자다.
     chars: Option<Box<[char]>>,
 }
 
@@ -52,26 +55,35 @@ impl FileList {
     /// 경로(저장소 기준, `/` 구분)들로 목록을 만든다. 정렬돼 있어야 `find`가 맞다(인덱스 순서는 정렬돼 있다).
     pub fn from_paths(paths: impl IntoIterator<Item = Box<str>>) -> FileList {
         let paths: Vec<Box<str>> = paths.into_iter().collect();
+        let mut origins = HashMap::new();
         let meta = paths
             .iter()
-            .map(|path| {
+            .enumerate()
+            .map(|(i, path)| {
                 if path.is_ascii() {
-                    Meta {
+                    return Meta {
                         base: fuzzy::base_of(path.as_bytes()) as u32,
                         len: path.len() as u32,
                         chars: None,
-                    }
-                } else {
-                    let chars: Box<[char]> = path.chars().collect();
-                    Meta {
-                        base: fuzzy::base_of(&chars[..]) as u32,
-                        len: chars.len() as u32,
-                        chars: Some(chars),
-                    }
+                    };
+                }
+                let mut chars: Vec<char> = path.chars().collect();
+                if let Some((composed, starts)) = fuzzy::compose_jamo(&chars) {
+                    chars = composed;
+                    origins.insert(i as u32, starts.into_boxed_slice());
+                }
+                Meta {
+                    base: fuzzy::base_of(&chars[..]) as u32,
+                    len: chars.len() as u32,
+                    chars: Some(chars.into_boxed_slice()),
                 }
             })
             .collect();
-        FileList { paths, meta }
+        FileList {
+            paths,
+            meta,
+            origins,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -116,6 +128,23 @@ impl FileList {
                 positions,
             ),
             Some(chars) => matcher.score(query, &chars[..], meta.base as usize, positions),
+        }
+    }
+
+    /// `i` 경로의 결과 한 줄. `positions`는 점수를 셀 때의 글자 위치이고, NFD 한글을 합친 경로면 원래 글자
+    /// 위치(합친 글자 하나 = 자모 여럿)로 돌린다.
+    fn item(&self, i: usize, positions: Vec<u32>) -> FileMatch {
+        let positions = match self.origins.get(&(i as u32)) {
+            None => positions,
+            Some(starts) => positions
+                .iter()
+                .flat_map(|&p| starts[p as usize]..starts[p as usize + 1])
+                .collect(),
+        };
+        FileMatch {
+            path: self.paths[i].to_string(),
+            positions,
+            missing: false,
         }
     }
 }
@@ -165,6 +194,8 @@ pub struct FileMatch {
     pub path: String,
     /// 맞은 글자 위치(유니코드 코드 포인트 단위, 오름차순)
     pub positions: Vec<u32>,
+    /// 인덱스에는 있지만 작업트리에 없다(지우고 아직 커밋하지 않았다). 작업트리 blame을 열 수 없다.
+    pub missing: bool,
 }
 
 /// 검색 결과
@@ -284,6 +315,8 @@ impl FileLists {
                 .filter(|last| Arc::ptr_eq(&last.list, &list) && query.narrows(&last.query))
                 .map(|last| last.matched.clone());
             let recent: Vec<String> = if query.is_empty() {
+                // 검색어를 다 지웠다: 다음 검색어는 처음부터 찾는다(앞 결과를 들고 있을 까닭이 없다).
+                state.last = None;
                 state.recent.iter().cloned().collect()
             } else {
                 Vec::new()
@@ -294,11 +327,13 @@ impl FileLists {
         let started = Instant::now();
         let workdir = repo.workdir().display().to_string();
         if query.is_empty() {
+            let mut items = first_files(&list, &recent, limit);
+            mark_missing(repo.workdir(), &mut items);
             return Ok(FileSearch {
                 repo: workdir,
                 files: list.len(),
                 matched: list.len(),
-                items: first_files(&list, &recent, limit),
+                items,
                 line: query.line,
                 load_ms,
                 search_ms: ms(started),
@@ -306,13 +341,14 @@ impl FileLists {
             });
         }
 
-        let found = search_list(
+        let mut found = search_list(
             &list,
             &query,
             previous.as_deref().map(Vec::as_slice),
             limit,
             &stale,
         )?;
+        mark_missing(repo.workdir(), &mut found.items);
         let matched = found.matched.len();
         if !stale() {
             files.state.lock().unwrap().last = Some(Last {
@@ -343,6 +379,20 @@ impl FileLists {
     }
 }
 
+/// 돌려줄 결과 가운데 작업트리에 없는(지운) 파일을 표시한다. 결과 수만큼 stat한다(인덱스의 stat 정보와
+/// 견주지 않는다: 지웠는지만 알면 된다). 디렉터리로 바뀐 경로도 파일로 열 수 없어 없는 것으로 본다.
+fn mark_missing(workdir: &Path, items: &mut [FileMatch]) {
+    for item in items {
+        item.missing = match std::fs::symlink_metadata(workdir.join(&item.path)) {
+            Ok(meta) => meta.is_dir(),
+            Err(e) => matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ),
+        };
+    }
+}
+
 /// 빈 검색어: 목록에 있는 최근 연 파일, 그 뒤로 인덱스 순서
 fn first_files(list: &FileList, recent: &[String], limit: usize) -> Vec<FileMatch> {
     let mut seen = HashSet::new();
@@ -351,10 +401,7 @@ fn first_files(list: &FileList, recent: &[String], limit: usize) -> Vec<FileMatc
         .chain(0..list.len())
         .filter(|&i| seen.insert(i))
         .take(limit)
-        .map(|i| FileMatch {
-            path: list.paths[i].to_string(),
-            positions: Vec::new(),
-        })
+        .map(|i| list.item(i, Vec::new()))
         .collect()
 }
 
@@ -419,10 +466,7 @@ pub fn search_list(
         .map(|&(_, i)| {
             let mut positions = Vec::new();
             list.score(&mut matcher, query, i as usize, Some(&mut positions));
-            FileMatch {
-                path: list.paths[i as usize].to_string(),
-                positions,
-            }
+            list.item(i as usize, positions)
         })
         .collect();
     Ok(Found { matched, items })
@@ -624,6 +668,22 @@ mod tests {
             assert_eq!(found.matched.len(), one.len());
             assert_eq!(names(&found), expected, "{query}");
         }
+    }
+
+    #[test]
+    fn nfd_paths_match_and_highlight_every_jamo() {
+        // 이름만 NFD로 저장된 경로(문서/파일.txt): 맞은 음절 하나가 자모 둘·셋이다
+        let nfd = "문서/\u{1111}\u{1161}\u{110B}\u{1175}\u{11AF}.txt";
+        let files = list(&[nfd, "파이.txt", "문서/파.txt"]);
+        let found = search_list(&files, &Query::parse("파일"), None, 10, NEVER).unwrap();
+        assert_eq!(names(&found), [nfd]);
+        assert_eq!(found.items[0].positions, [3, 4, 5, 6, 7]);
+        let found = search_list(&files, &Query::parse("ㅍㅇ.txt"), None, 10, NEVER).unwrap();
+        let item = found.items.iter().find(|item| item.path == nfd).unwrap();
+        assert_eq!(item.positions, [3, 4, 5, 6, 7, 8, 9, 10, 11]);
+        // 정렬 길이도 합친 글자 수다(문서/파일.txt = 9자)
+        let i = files.find(nfd).unwrap();
+        assert_eq!((files.meta[i].len, files.meta[i].base), (9, 3));
     }
 
     #[test]

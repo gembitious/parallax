@@ -1,10 +1,12 @@
 //! `plx` 호출을 받아 앱에 전달한다. 프로세스 사이 전송은 `plx_core::instance`가 맡는다.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use plx_core::cli::{self, Parsed, Request};
+use plx_core::editor::Env;
 use plx_core::instance::{self, Claim, Endpoint, Invocation, PROTOCOL_VERSION, Reply, Server};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -54,6 +56,8 @@ struct Inner {
     pending: bool,
     latest: Option<PlxRequest>,
     next_id: u64,
+    /// 마지막 호출의 셸 환경 변수(에디터 고르기)
+    env: BTreeMap<String, String>,
 }
 
 impl Requests {
@@ -70,6 +74,7 @@ impl Requests {
         let label = request.label(cwd);
         let mut inner = self.inner.lock().unwrap();
         inner.next_id += 1;
+        inner.env = invocation.env;
         let request = PlxRequest {
             id: inner.next_id,
             request,
@@ -107,6 +112,11 @@ impl Requests {
 
     pub fn latest(&self) -> Option<PlxRequest> {
         self.inner.lock().unwrap().latest.clone()
+    }
+
+    /// 에디터를 고를 환경: 마지막 `plx` 호출(지금 쓰는 터미널)의 셸 값을 먼저 본다.
+    pub fn editor_env(&self) -> Env {
+        Env::new(self.inner.lock().unwrap().env.clone())
     }
 }
 
@@ -229,6 +239,7 @@ fn current_invocation(t0_ms: f64) -> Result<Invocation, String> {
         cwd,
         t0_ms,
         pid: std::process::id(),
+        env: Env::capture(),
     })
 }
 

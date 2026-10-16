@@ -16,8 +16,9 @@ import { nextRow, parseQuery, rowMatches, type Query } from "./search";
 import { CANCELLED, openGraph, type GraphHandle } from "./session";
 import { watchRepo } from "../watch";
 import { WorktreePicker } from "../worktree/WorktreePicker";
-import { isQuickOpenKey, useQuickOpen } from "../quickopen/QuickOpen";
-import { commonCommands, isPaletteKey, usePalette, type Command } from "../palette/Palette";
+import { useQuickOpen } from "../quickopen/QuickOpen";
+import { commonCommands, usePalette, type Command } from "../palette/Palette";
+import { routeKey } from "../keys";
 import { openInEditor } from "../editor";
 import { toggleHud } from "../Hud";
 import type { GraphMeta, GraphRow, GraphScope, GraphStats, Label } from "./types";
@@ -556,18 +557,10 @@ function GraphPane({
   // 키: 화면이 맨 위일 때만.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!latest.current.active || e.defaultPrevented) return;
-      if (isQuickOpenKey(e) || isPaletteKey(e)) {
-        if (isPaletteKey(e)) latest.current.palette();
-        else latest.current.openFiles();
-        e.preventDefault();
-        return;
-      }
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
-      const target = e.target as HTMLElement | null;
-      if (target?.closest("input, textarea")) return;
+      const { active: on, openFiles, palette: openPalette } = latest.current;
+      if (!on || routeKey(e, { files: openFiles, palette: openPalette }) !== "view") return;
       // 머리줄 버튼에 초점이 있으면 Enter·Space는 버튼이 받는다.
-      if (target?.closest("button") && (e.key === "Enter" || e.key === " ")) return;
+      if ((e.target as HTMLElement | null)?.closest("button") && (e.key === "Enter" || e.key === " ")) return;
       const { selected: at, help: helpOpen } = latest.current;
       let handled = true;
       switch (e.key) {

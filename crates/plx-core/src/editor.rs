@@ -1,6 +1,6 @@
 //! 에디터로 열기(`o`): 파일을 VS Code·Zed 같은 GUI 에디터에서 `파일:줄:열`로 연다.
 //!
-//! 에디터는 이 순서로 고른다.
+//! 에디터는 이 순서로 고른다. 환경 변수는 마지막 `plx` 호출이 넘긴 셸의 값을 먼저 본다([`Env`]).
 //! 1. `PLX_EDITOR`: 아는 이름(`code`, `zed` …)이나 경로, 또는 `{file}`·`{line}`·`{col}`을 넣은 명령 틀
 //!    (예: `subl {file}:{line}`, `"C:\Program Files\Foo\foo.exe" --goto {file}:{line}`)
 //! 2. `VISUAL`·`EDITOR`가 아는 GUI 에디터일 때(`code --wait`의 `--wait`는 버린다). vim 같은 터미널 에디터는
@@ -10,6 +10,7 @@
 //!
 //! 띄운 에디터는 기다리지 않는다(거두기만 한다). Windows는 콘솔 창이 뜨지 않게 `CREATE_NO_WINDOW`로 띄운다.
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -52,6 +53,75 @@ const KNOWN: &[(&str, &str, Family)] = &[
 /// PATH에서 찾아보는 순서
 const SEARCH: &[&str] = &["code", "cursor", "windsurf", "zed", "subl"];
 
+/// `plx`를 부른 셸에서 상주 인스턴스로 넘기는 환경 변수(에디터 고르기)
+pub const FORWARDED_ENV: &[&str] = &["PLX_EDITOR", "VISUAL", "EDITOR", "PATH"];
+
+/// 에디터를 고를 때 보는 환경 변수. 상주 앱은 Finder·시작 메뉴나 오래전 셸에서 떠, 앱 자신의 환경(macOS
+/// Finder에서 뜬 앱의 PATH는 `/usr/bin:/bin:/usr/sbin:/sbin`)이 지금 쓰는 터미널과 다르다. 그래서 `plx`가 넘긴
+/// 셸의 값([`FORWARDED_ENV`])을 먼저 보고, 셸에 없는 변수만 앱 자신의 값을 쓴다. PATH는 셸의 것 뒤에 앱의 것을
+/// 잇고, 띄운 에디터도 그 PATH를 받는다.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Env {
+    shell: BTreeMap<String, String>,
+}
+
+impl Env {
+    /// 셸에서 넘겨받은 값들. 비었으면 앱 자신의 환경만 본다.
+    pub fn new(shell: BTreeMap<String, String>) -> Env {
+        Env { shell }
+    }
+
+    /// 이 프로세스의 [`FORWARDED_ENV`] 값들(`plx`가 상주 인스턴스에 넘긴다)
+    pub fn capture() -> BTreeMap<String, String> {
+        FORWARDED_ENV
+            .iter()
+            .filter_map(|&name| Some((name.to_owned(), std::env::var(name).ok()?)))
+            .collect()
+    }
+
+    fn var(&self, name: &str) -> Option<String> {
+        match self.shell.get(name) {
+            Some(value) => Some(value.clone()),
+            None => std::env::var(name).ok(),
+        }
+        .filter(|value| !value.trim().is_empty())
+    }
+
+    /// 실행 파일을 찾을 디렉터리: 셸의 PATH, 그 뒤에 앱의 PATH(겹치면 한 번, 빈 항목은 뺀다)
+    fn search_path(&self) -> Vec<PathBuf> {
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        let shell = self.shell.get("PATH").map(OsString::from);
+        for path in shell.into_iter().chain(std::env::var_os("PATH")) {
+            for dir in std::env::split_paths(&path) {
+                if !dir.as_os_str().is_empty() && !dirs.contains(&dir) {
+                    dirs.push(dir);
+                }
+            }
+        }
+        dirs
+    }
+
+    /// PATH에서 실행 파일을 찾는다(Windows는 PATHEXT의 확장자도).
+    pub fn which(&self, name: &str) -> Option<PathBuf> {
+        let extensions: Vec<String> = if cfg!(windows) {
+            std::env::var("PATHEXT")
+                .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_owned())
+                .split(';')
+                .filter(|e| !e.is_empty())
+                .map(str::to_owned)
+                .collect()
+        } else {
+            vec![String::new()]
+        };
+        self.search_path().into_iter().find_map(|dir| {
+            extensions.iter().find_map(|ext| {
+                let candidate = dir.join(format!("{name}{ext}"));
+                is_executable(&candidate).then_some(candidate)
+            })
+        })
+    }
+}
+
 /// 열 대상: 파일(줄·열) 또는 디렉터리
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Target {
@@ -69,6 +139,8 @@ pub struct Editor {
     pub name: String,
     program: PathBuf,
     how: How,
+    /// 띄울 때 줄 PATH(셸에서 넘겨받았을 때)
+    path: Option<OsString>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -85,23 +157,33 @@ enum How {
 
 impl Editor {
     /// 환경(`PLX_EDITOR`, `VISUAL`, `EDITOR`, PATH, 설치 위치)에서 에디터를 고른다.
-    pub fn find() -> Result<Editor, String> {
-        let var = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
-        if let Some(spec) = var("PLX_EDITOR") {
+    pub fn find(env: &Env) -> Result<Editor, String> {
+        let which = |name: &str| env.which(name);
+        let path = env
+            .shell
+            .contains_key("PATH")
+            .then(|| std::env::join_paths(env.search_path()).ok())
+            .flatten();
+        let found = |editor: Editor| Editor {
+            path: path.clone(),
+            ..editor
+        };
+        if let Some(spec) = env.var("PLX_EDITOR") {
             return from_spec(&spec, which)
+                .map(found)
                 .ok_or_else(|| format!("PLX_EDITOR의 에디터를 찾지 못했다: {spec}"));
         }
         for name in ["VISUAL", "EDITOR"] {
-            if let Some(editor) = var(name).and_then(|spec| known_gui(&spec, which)) {
-                return Ok(editor);
+            if let Some(editor) = env.var(name).and_then(|spec| known_gui(&spec, which)) {
+                return Ok(found(editor));
             }
         }
         for name in SEARCH {
             if let Some(program) = which(name) {
-                return Ok(known(name, program).expect("SEARCH는 KNOWN에 있다"));
+                return Ok(found(known(name, program).expect("SEARCH는 KNOWN에 있다")));
             }
         }
-        installed().ok_or_else(|| {
+        installed().map(found).ok_or_else(|| {
             "에디터를 찾지 못했다. VS Code(`code`)나 Zed(`zed`)를 PATH에 두거나 PLX_EDITOR를 정한다 \
              (예: PLX_EDITOR=zed, PLX_EDITOR=\"subl {file}:{line}\")"
                 .to_owned()
@@ -159,6 +241,9 @@ impl Editor {
             .stderr(Stdio::null());
         if let Some(dir) = target.path.parent() {
             command.current_dir(dir);
+        }
+        if let Some(path) = &self.path {
+            command.env("PATH", path);
         }
         #[cfg(windows)]
         {
@@ -236,6 +321,7 @@ fn known(name: &str, program: PathBuf) -> Option<Editor> {
             name: display.to_owned(),
             program,
             how: How::Known(family),
+            path: None,
         })
 }
 
@@ -266,12 +352,14 @@ fn from_spec(spec: &str, lookup: impl Fn(&str) -> Option<PathBuf>) -> Option<Edi
             name: display,
             program: path,
             how: How::Template(rest.to_vec()),
+            path: None,
         });
     }
     known(&name, path.clone()).or(Some(Editor {
         name,
         program: path,
         how: How::FileOnly,
+        path: None,
     }))
 }
 
@@ -325,27 +413,6 @@ fn split_words(spec: &str) -> Vec<String> {
     words
 }
 
-/// PATH에서 실행 파일을 찾는다(Windows는 PATHEXT의 확장자도).
-pub fn which(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    let extensions: Vec<String> = if cfg!(windows) {
-        std::env::var("PATHEXT")
-            .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_owned())
-            .split(';')
-            .filter(|e| !e.is_empty())
-            .map(str::to_owned)
-            .collect()
-    } else {
-        vec![String::new()]
-    };
-    std::env::split_paths(&path).find_map(|dir| {
-        extensions.iter().find_map(|ext| {
-            let candidate = dir.join(format!("{name}{ext}"));
-            is_executable(&candidate).then_some(candidate)
-        })
-    })
-}
-
 fn is_executable(path: &Path) -> bool {
     let Ok(meta) = std::fs::metadata(path) else {
         return false;
@@ -394,6 +461,7 @@ fn installed() -> Option<Editor> {
                 name: "VS Code".to_owned(),
                 program: PathBuf::from("/usr/bin/open"),
                 how: How::VsCodeUrl,
+                path: None,
             });
         }
     }
@@ -544,6 +612,66 @@ mod tests {
             strings(code.args(&folder)),
             [dir.path().to_string_lossy().into_owned()]
         );
+    }
+
+    /// `dir`에 실행 파일 `name`을 만든다(Windows는 `.exe`).
+    fn fake_editor(dir: &Path, name: &str) -> PathBuf {
+        let exe = dir.join(if cfg!(windows) {
+            format!("{name}.exe")
+        } else {
+            name.to_owned()
+        });
+        std::fs::write(&exe, "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        exe
+    }
+
+    #[test]
+    fn shell_values_come_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = fake_editor(dir.path(), "plx-test-editor");
+        let shell = |pairs: &[(&str, &str)]| {
+            Env::new(
+                pairs
+                    .iter()
+                    .map(|&(k, v)| (k.to_owned(), v.to_owned()))
+                    .collect(),
+            )
+        };
+        let path = dir.path().to_str().unwrap();
+        // 앱 자신의 PATH에는 없고 셸의 PATH에만 있다
+        assert_eq!(Env::default().which("plx-test-editor"), None);
+        let env = shell(&[("PATH", path), ("PLX_EDITOR", "plx-test-editor {file}")]);
+        assert_eq!(env.which("plx-test-editor"), Some(exe.clone()));
+        let editor = Editor::find(&env).unwrap();
+        assert_eq!(editor.program, exe);
+        // 띄울 때 PATH는 셸의 것이 앞이다
+        let given = editor.path.expect("셸의 PATH를 넘긴다");
+        assert_eq!(
+            std::env::split_paths(&given).next().as_deref(),
+            Some(dir.path())
+        );
+        // 셸이 비운 변수는 앱의 값으로 돌아가지 않는다
+        assert_eq!(shell(&[("PLX_EDITOR", " ")]).var("PLX_EDITOR"), None);
+        // 셸 값이 없으면 PATH를 따로 주지 않는다
+        let env = Env::default();
+        assert_eq!(env.var("PLX_TEST_NO_SUCH_VARIABLE"), None);
+    }
+
+    #[test]
+    fn search_path_skips_empty_and_repeated_dirs() {
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        let a = std::env::temp_dir().join("plx-a");
+        let joined = format!("{a}{sep}{sep}{a}", a = a.display(), sep = sep);
+        let env = Env::new(BTreeMap::from([("PATH".to_owned(), joined)]));
+        let dirs = env.search_path();
+        assert_eq!(dirs[0], a);
+        assert_eq!(dirs.iter().filter(|d| **d == a).count(), 1);
+        assert!(dirs.iter().all(|d| !d.as_os_str().is_empty()));
     }
 
     #[cfg(unix)]

@@ -1,9 +1,9 @@
 // 명령 팔레트(`:`, Ctrl·⌘+Shift+P): 지금 화면에서 할 수 있는 일을 이름으로 찾아 실행한다. 키를 몰라도 키보드만으로
 // 모든 기능을 쓸 수 있게 하고(마우스로만 되던 것 포함), 옆에 단축키를 보여 익히게 한다.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { highlightRuns } from "../quickopen/highlight";
+import { Runs } from "../quickopen/QuickOpen";
 import { filterByLabel } from "./match";
-
-export { isPaletteKey } from "./keys";
 
 export type Command = {
   /** 팔레트에 보이는 이름(검색 대상) */
@@ -54,7 +54,12 @@ function Palette({
   const [selected, setSelected] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
-  const results = useMemo(() => filterByLabel(query, commands), [query, commands]);
+  // 명령 목록은 화면이 렌더마다 새로 만든다(실행할 함수가 새 상태를 본다). 맞추기는 이름이 바뀔 때만 다시 하고,
+  // 결과는 지금 목록의 명령으로 잇는다.
+  const labels = commands.map((command, index) => ({ label: command.label, index }));
+  const labelKey = labels.map(({ label }) => label).join("\n");
+  const matched = useMemo(() => filterByLabel(query, labels), [query, labelKey]);
+  const results = matched.map(({ item, match }) => ({ item: commands[item.index], match }));
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -114,7 +119,7 @@ function Palette({
               onClick={() => run(i)}
             >
               <span className="quick-open-name">
-                <Highlighted text={item.label} positions={match.positions} />
+                <Runs runs={highlightRuns(item.label, match.positions)} />
               </span>
               {item.detail && <span className="quick-open-dir">{item.detail}</span>}
               {item.keys && <kbd className="palette-keys">{item.keys}</kbd>}
@@ -125,31 +130,6 @@ function Palette({
         <p className="muted">↑↓ 고르기 · Enter 실행 · Esc 닫기</p>
       </div>
     </div>
-  );
-}
-
-function Highlighted({ text, positions }: { text: string; positions: number[] }) {
-  const hits = new Set(positions);
-  const chars = Array.from(text);
-  const runs: { text: string; hit: boolean }[] = [];
-  chars.forEach((c, i) => {
-    const hit = hits.has(i);
-    const last = runs[runs.length - 1];
-    if (last && last.hit === hit) last.text += c;
-    else runs.push({ text: c, hit });
-  });
-  return (
-    <>
-      {runs.map((run, i) =>
-        run.hit ? (
-          <mark key={i} className="quick-open-hit">
-            {run.text}
-          </mark>
-        ) : (
-          <span key={i}>{run.text}</span>
-        ),
-      )}
-    </>
   );
 }
 

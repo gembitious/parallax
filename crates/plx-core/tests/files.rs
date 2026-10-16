@@ -224,6 +224,48 @@ fn reloads_when_the_index_changes() {
 }
 
 #[test]
+fn marks_files_deleted_from_the_worktree() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo_dir = dir.path().join("repo");
+    clone(&history(), &repo_dir);
+    // 지우고 아직 커밋하지 않은 파일, 디렉터리로 바뀐 파일
+    std::fs::remove_file(repo_dir.join("src/lib.rs")).unwrap();
+    std::fs::remove_file(repo_dir.join("core/util.rs")).unwrap();
+    std::fs::create_dir(repo_dir.join("core/util.rs")).unwrap();
+    let repo = Repo::discover(&repo_dir).unwrap();
+    let lists = FileLists::new();
+    let missing = |query: &str| -> Vec<String> {
+        let found = lists.search(&repo, query, 1000).unwrap();
+        assert!(!found.items.is_empty(), "{query}");
+        found
+            .items
+            .into_iter()
+            .filter(|item| item.missing)
+            .map(|item| item.path)
+            .collect()
+    };
+    assert_eq!(missing("lib"), ["src/lib.rs"]);
+    let mut rs = missing("rs");
+    rs.sort();
+    assert_eq!(rs, ["core/util.rs", "src/lib.rs"]);
+    lists.touch(&repo, "src/lib.rs");
+    assert_eq!(missing(""), ["src/lib.rs", "core/util.rs"]);
+}
+
+#[test]
+fn clearing_the_query_starts_over() {
+    let repo = Repo::discover(&history()).unwrap();
+    let lists = FileLists::new();
+    assert!(!lists.search(&repo, "lib", 10).unwrap().narrowed);
+    assert!(lists.search(&repo, "lib", 10).unwrap().narrowed);
+    lists.search(&repo, "", 10).unwrap();
+    assert!(
+        !lists.search(&repo, "lib", 10).unwrap().narrowed,
+        "빈 검색어 뒤에는 목록 전체에서 찾는다"
+    );
+}
+
+#[test]
 fn typing_narrows_within_previous_results() {
     let repo = Repo::discover(&history()).unwrap();
     let lists = FileLists::new();

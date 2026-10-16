@@ -14,8 +14,9 @@ import { aiSummary, type AiAttribution, type AiItem } from "./ai";
 import type { Navigation } from "../nav";
 import { watchFile, watchRepo } from "../watch";
 import { WorktreePicker } from "../worktree/WorktreePicker";
-import { isQuickOpenKey, useQuickOpen } from "../quickopen/QuickOpen";
-import { commonCommands, isPaletteKey, usePalette, type Command } from "../palette/Palette";
+import { useQuickOpen } from "../quickopen/QuickOpen";
+import { commonCommands, usePalette, type Command } from "../palette/Palette";
+import { routeKey } from "../keys";
 import { openInEditor } from "../editor";
 import { toggleHud } from "../Hud";
 import { openSearchPanel } from "@codemirror/search";
@@ -613,16 +614,9 @@ export function BlameView({
   // 에디터 밖(카드, 머리줄)에 포커스가 있어도 q·?·Esc는 먹게 한다.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!latest.current.active || e.defaultPrevented) return;
-      if (isQuickOpenKey(e) || isPaletteKey(e)) {
-        if (isPaletteKey(e)) actions.current.palette();
-        else actions.current.files();
-        e.preventDefault();
-        return;
-      }
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
-      const target = e.target as HTMLElement | null;
-      if (target?.closest(".cm-editor") || target?.closest("input, textarea")) return;
+      if (!latest.current.active || routeKey(e, actions.current) !== "view") return;
+      // 코드 뷰 안의 키는 코드 뷰의 키맵이 받는다.
+      if ((e.target as HTMLElement | null)?.closest(".cm-editor")) return;
       const handled =
         e.key === "q"
           ? actions.current.back()

@@ -1206,6 +1206,12 @@ kbd {
   text-overflow: ellipsis;
 }
 
+/* 작업트리에서 지운 파일 */
+.quick-open-item.missing .quick-open-name {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
 .quick-open-dir {
   min-width: 0;
   overflow: hidden;
