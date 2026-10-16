@@ -128,6 +128,60 @@ fn commits_branches_and_worktrees_are_reported() {
     assert!(next(&rx, Duration::from_millis(600)).is_none());
 }
 
+/// 그래프 이름표는 다른 워크트리가 체크아웃한 것에 달라진다: 다른 워크트리의 HEAD 이동, 워크트리를 만들고 지우는
+/// 것도 (참조 변화로) 알린다. 첫 워크트리를 만들기 전에는 `<공통>/worktrees`가 없다.
+#[test]
+fn other_worktrees_heads_are_reported() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    git(&repo, &["init", "--quiet", "--initial-branch=main"]);
+    commit(&repo, "첫 커밋");
+    git(&repo, &["branch", "other"]);
+    let (tx, rx) = mpsc::channel();
+    let watchers = Watchers::new(move |change| {
+        if let Change::Repo(change) = change {
+            let _ = tx.send(change);
+        }
+    });
+    let repos = RepoCache::new();
+    let _ = watchers.watch(&repos, &repo).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+
+    // 참조를 바꾸지 않는 워크트리(detached)를 만든다: 워크트리가 생긴 것을 안다.
+    let wt = temp.path().join("wt");
+    git(
+        &repo,
+        &["worktree", "add", "--quiet", wt.to_str().unwrap(), "main~0"],
+    );
+    let change = next(&rx, Duration::from_secs(10)).expect("워크트리가 생긴 것을 알린다");
+    assert!(change.refs_changed && !change.head_changed);
+    while next(&rx, Duration::from_millis(400)).is_some() {}
+    std::thread::sleep(Duration::from_millis(300));
+
+    // 그 워크트리에서 다른 브랜치로 바꾼다(커밋도 참조도 그대로).
+    git(&wt, &["switch", "--quiet", "other"]);
+    let change = next(&rx, Duration::from_secs(10)).expect("다른 워크트리의 체크아웃을 알린다");
+    assert!(change.refs_changed && !change.head_changed);
+    while next(&rx, Duration::from_millis(400)).is_some() {}
+
+    // 다른 워크트리의 index 쓰기는 알리지 않는다.
+    std::fs::write(wt.join("새 파일.txt"), "내용\n").unwrap();
+    git(&wt, &["add", "새 파일.txt"]);
+    assert!(
+        next(&rx, Duration::from_millis(600)).is_none(),
+        "다른 워크트리의 index 쓰기는 무시"
+    );
+
+    // 워크트리를 지운다.
+    git(
+        &repo,
+        &["worktree", "remove", "--force", wt.to_str().unwrap()],
+    );
+    let change = next(&rx, Duration::from_secs(10)).expect("워크트리가 없어진 것을 알린다");
+    assert!(change.refs_changed);
+}
+
 #[test]
 fn several_subscriptions_share_one_watch() {
     let temp = tempfile::tempdir().unwrap();

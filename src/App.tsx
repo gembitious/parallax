@@ -170,7 +170,13 @@ export default function App() {
                     cold={cold}
                   />
                 ) : entry.view === "history" ? (
-                  <HistoryView {...common} target={entry.target} lines={entry.lines} cold={cold} />
+                  <HistoryView
+                    {...common}
+                    onReload={(lines) => dispatch({ type: "reload", key: entry.key, lines })}
+                    target={entry.target}
+                    lines={entry.lines}
+                    cold={cold}
+                  />
                 ) : entry.view === "graph" ? (
                   <GraphView {...common} repo={entry.repo} focus={entry.focus} cold={cold} />
                 ) : (

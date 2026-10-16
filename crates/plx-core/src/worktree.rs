@@ -46,30 +46,44 @@ fn canonical(path: &Path) -> PathBuf {
 }
 
 /// 저장소의 워크트리들: 주 작업트리(bare가 아니면) 먼저, 그다음 링크된 워크트리를 이름 순으로.
+///
+/// 지금 보고 있는 작업트리는 폴더가 아니라 git 디렉터리로 가린다. 링크된 워크트리 폴더를 `git worktree repair` 없이
+/// 옮기면 `.git/worktrees/<id>/gitdir`에는 옛 폴더가 남지만 그 작업트리는 지금 보고 있는 곳이다(경로도 지금 것).
 pub fn list(repo: &Repo) -> Result<Vec<Worktree>> {
     let local = repo.local();
-    let current = canonical(repo.workdir());
+    let here = canonical(local.git_dir());
+    let workdir = canonical(repo.workdir());
     let mut out = Vec::new();
     let main = local.main_repo().map_err(|e| err("주 저장소", e))?;
-    if let Some(workdir) = main.workdir() {
-        let path = canonical(workdir);
-        out.push(describe(&main, &path, None, false, &current));
+    if let Some(main_workdir) = main.workdir() {
+        let current = canonical(main.git_dir()) == here;
+        let path = if current {
+            workdir.clone()
+        } else {
+            canonical(main_workdir)
+        };
+        out.push(describe(&main, &path, None, false, current));
     }
     let mut linked = Vec::new();
     for proxy in local.worktrees().map_err(|e| err("워크트리 목록", e))? {
         let id = proxy.id().ok().map(|id| id.to_str_lossy().into_owned());
         let locked = proxy.is_locked();
+        let current = canonical(proxy.git_dir()) == here;
         let base = proxy.base().ok();
         let Ok(wt) = proxy.into_repo_with_possibly_inaccessible_worktree() else {
             continue;
         };
-        let path = base.as_deref().map_or_else(PathBuf::new, canonical_lenient);
+        let path = if current {
+            workdir.clone()
+        } else {
+            base.as_deref().map_or_else(PathBuf::new, canonical_lenient)
+        };
         linked.push(describe(
             &wt,
             &path,
             Some(id.unwrap_or_default()),
             locked,
-            &current,
+            current,
         ));
     }
     linked.sort_by(|a, b| a.name.cmp(&b.name));
@@ -94,7 +108,7 @@ fn describe(
     path: &Path,
     id: Option<String>,
     locked: bool,
-    current: &Path,
+    current: bool,
 ) -> Worktree {
     let name = path
         .file_name()
@@ -106,7 +120,7 @@ fn describe(
         name,
         main: id.is_none(),
         id,
-        current: path == current,
+        current,
         branch: None,
         head: None,
         summary: None,
@@ -138,11 +152,11 @@ fn describe(
     worktree
 }
 
-/// 다른 워크트리가 체크아웃한 것: 브랜치 이름 → 워크트리 이름, detached HEAD 커밋 → 워크트리 이름.
-/// 지금 보고 있는 작업트리는 뺀다(그 HEAD는 그래프가 따로 표시한다).
+/// 다른 워크트리가 체크아웃한 것: 브랜치 이름 → 워크트리 이름들(`git worktree add -f`로 한 브랜치를 여럿이 체크아웃할
+/// 수 있다), detached HEAD 커밋 → 워크트리 이름. 지금 보고 있는 작업트리는 뺀다(그 HEAD는 그래프가 따로 표시한다).
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct CheckedOut {
-    pub branches: HashMap<String, String>,
+    pub branches: HashMap<String, Vec<String>>,
     pub detached: Vec<(ObjectId, String)>,
 }
 
@@ -154,7 +168,7 @@ pub fn checked_out_elsewhere(repo: &Repo) -> CheckedOut {
     for worktree in worktrees.into_iter().filter(|w| !w.current) {
         match (worktree.branch, worktree.head) {
             (Some(branch), _) => {
-                out.branches.insert(branch, worktree.name);
+                out.branches.entry(branch).or_default().push(worktree.name);
             }
             (None, Some(head)) => {
                 if let Ok(id) = ObjectId::from_hex(head.as_bytes()) {

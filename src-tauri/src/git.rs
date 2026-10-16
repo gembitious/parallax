@@ -400,10 +400,14 @@ pub async fn ai_attribution(
     .await
 }
 
-/// 감시 구독(저장소·파일)을 끝낸다. 이미 끝났으면 `false`.
+/// 감시 구독(저장소·파일)을 끝낸다. 이미 끝났으면 `false`. OS 감시를 버리는 일(macOS는 스레드를 기다린다)이
+/// 메인 스레드를 막지 않게 비동기 명령이다.
 #[tauri::command]
-pub fn unwatch_repo(git: State<'_, Arc<GitState>>, id: u64) -> bool {
-    git.watchers.unwatch(id)
+pub async fn unwatch_repo(git: State<'_, Arc<GitState>>, id: u64) -> Result<bool, String> {
+    let git = git.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || git.watchers.unwatch(id))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// 그래프를 닫는다. 이미 닫혔으면 `false`.
