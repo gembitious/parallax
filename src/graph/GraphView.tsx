@@ -122,8 +122,6 @@ const MAX_LABELS = 3;
  */
 const CPU_CANVAS = !/\bChrome\//.test(navigator.userAgent);
 
-/** 세션을 열고 고를 행: 그 리비전, HEAD, 또는 맨 위(다시 읽을 때 맨 위를 보고 있었다) */
-
 /** 마지막으로 한 검색(n/N이 되풀이한다). 경로 검색은 일치 행들을 한 번 구해 둔다. */
 type Found = { kind: "text"; text: string } | { kind: "path"; path: string; rows: number[]; set: ReadonlySet<number> };
 
