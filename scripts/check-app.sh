@@ -198,6 +198,11 @@ else
   echo "---"
 fi
 
+# 두 번째 호출은 콜드 스타트의 blame이 끝난 뒤에 보낸다. 먼저 보내면 그 화면을 바꿔 blame을 취소해(기록도 캐시도
+# 없다) 아래 두 blame 확인이 경합에 진다.
+check "blame이 끝까지 와서 거터를 그림 (콜드 스타트, package.json)" \
+  wait_for_all '"kind":"blame"' '"label":"blame package.json (콜드 스타트)"'
+
 start="$(now_ms)"
 status=0
 "$bin" package.json:2 || status=$?
@@ -223,8 +228,6 @@ case "$os" in
     check "상주 인스턴스가 셸의 작업 디렉터리를 쥐고 있지 않다 (\`$primary_cwd\`, 실행 파일 \`$primary_exe\`)" cwd_is_exe_dir
     ;;
 esac
-check "blame이 끝까지 와서 거터를 그림 (콜드 스타트, package.json)" \
-  wait_for_all '"kind":"blame"' '"label":"blame package.json (콜드 스타트)"'
 # 얕은 클론은 결과를 캐시하지 않는다(CLAUDE.md "불변 결과는 영구 캐시"). 그런 클론에서 돌리면 이 확인은 건너뛴다.
 if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
   result PASS "같은 파일을 다시 열면 캐시에서 (package.json) — 얕은 클론이라 캐시하지 않아 건너뜀"
