@@ -9,9 +9,9 @@
 //! 쓴 것이라 경로 전체에서 찾는다.
 //!
 //! 한글: 호환 자모 자음(ㄱ~ㅎ)은 그 초성의 음절과 맞는다(`ㅍㅇ` → `파일`). IME가 조합 중일 수 있는 마지막 글자는
-//! 받침이 없으면 초성·중성이 같은 음절과 맞고(`파` → `팔`), 받침이 있으면 그 받침이 다음 음절의 초성이 될 수도
-//! 있다고 보고(`팡` → `파ㅇ`) 둘 중 나은 점수를 쓴다. 그래서 `파일`을 치는 동안(`ㅍ`·`파`·`팡`·`파이`·`파일`)
-//! 결과가 비지 않는다.
+//! 받침이 없으면 초성·중성이 같은 음절과 맞고(`파` → `팔`), 받침이 있으면 그 받침이 겹받침으로 자라거나(`달` →
+//! `닭`) 다음 음절의 초성이 될 수도 있다고 보고(`팡` → `파ㅇ`) 나은 점수를 쓴다. 그래서 `파일`을 치는 동안
+//! (`ㅍ`·`파`·`팡`·`파이`·`파일`)이나 `닭`을 치는 동안(`다`·`달`·`닭`) 결과가 비지 않는다.
 
 use std::cmp::Reverse;
 
@@ -87,8 +87,10 @@ enum Needle {
     Char { lower: char, exact: char },
     /// 한글 초성(호환 자모). 그 초성으로 시작하는 음절이나 같은 자모와 맞는다.
     Initial { index: u8, jamo: char },
-    /// 받침 없는 음절(조합 중일 수 있는 마지막 글자). 초성·중성이 같은 음절과 맞는다.
-    Open { syllable: char },
+    /// 조합 중일 수 있는 마지막 음절. 입력한 음절이나, 초성·중성이 같고 받침이 `finals`(종성 번호 비트) 가운데
+    /// 하나인 음절과 맞는다. 받침이 없으면 모든 받침(`파` → `팔`), 받침이 있으면 그 받침과 그것으로 시작하는
+    /// 겹받침(`달` → `닭`, 다음 자음을 치면 겹받침이 된다).
+    Syllable { typed: char, lead: u32, finals: u32 },
 }
 
 impl Needle {
@@ -124,14 +126,18 @@ impl Needle {
                     None
                 }
             }
-            Needle::Open { syllable } => {
-                if c == syllable {
+            Needle::Syllable {
+                typed,
+                lead,
+                finals,
+            } => {
+                if c == typed {
                     Some(true)
                 } else if c.is_ascii() {
                     None
                 } else {
-                    match (hangul(c), hangul(syllable)) {
-                        (Some((l1, v1, _)), Some((l2, v2, _))) if l1 == l2 && v1 == v2 => {
+                    match hangul(c) {
+                        Some((l, v, t)) if l * JUNG_COUNT + v == lead && finals & (1 << t) != 0 => {
                             Some(false)
                         }
                         _ => None,
@@ -162,6 +168,20 @@ const INITIALS: [char; 19] = [
     'ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ', 'ㅊ', 'ㅋ',
     'ㅌ', 'ㅍ', 'ㅎ',
 ];
+/// 받침 없음(종성 0)부터 ㅎ(27)까지 모든 받침
+const ALL_FINALS: u32 = (1 << JONG_COUNT) - 1;
+
+/// 받침에 자음을 더 치면 될 수 있는 겹받침(종성 번호 비트): ㄱ → ㄳ, ㄴ → ㄵ ㄶ, ㄹ → ㄺ…ㅀ, ㅂ → ㅄ
+fn growing_finals(t: u32) -> u32 {
+    match t {
+        1 => 1 << 3,
+        4 => (1 << 5) | (1 << 6),
+        8 => (9..=15).fold(0, |mask, j| mask | (1 << j)),
+        17 => 1 << 18,
+        _ => 0,
+    }
+}
+
 /// 받침(종성 번호)이 다음 음절로 넘어갈 때 남는 받침과 넘어가는 초성(`닭`+`ㅣ` → `달기`)
 const JONG_SPLIT: [(u8, u8); 28] = [
     (0, 0),  // 받침 없음(쓰지 않는다)
@@ -207,6 +227,55 @@ fn hangul(c: char) -> Option<(u32, u32, u32)> {
 
 fn compose(l: u32, v: u32, t: u32) -> char {
     char::from_u32(HANGUL_BASE + (l * JUNG_COUNT + v) * JONG_COUNT + t).expect("한글 음절 범위")
+}
+
+/// 조합형 자모(NFD)의 초성·중성·종성 번호
+fn conjoining(c: char, first: u32, count: u32) -> Option<u32> {
+    let i = (c as u32).checked_sub(first)?;
+    (i < count).then_some(i)
+}
+
+/// 조합형 자모(NFD로 저장된 한글: 초성 U+1100~, 중성 U+1161~, 종성 U+11A8~)를 완성형 음절로 합친다
+/// (유니코드 정규화 NFC의 한글 부분. 완성형 음절 뒤의 조합형 종성도 합친다). macOS 파일 시스템이나 다른 도구가
+/// NFD로 남긴 경로도 `파일`로 찾게 한다. 합친 것이 없으면 `None`, 있으면 합친 글자들과 글자마다 원래 글자의
+/// 시작 위치(끝에 원래 글자 수를 하나 더: 합친 글자 `i`는 원래 `starts[i]..starts[i + 1]`).
+pub fn compose_jamo(chars: &[char]) -> Option<(Vec<char>, Vec<u32>)> {
+    let lead = |c| conjoining(c, 0x1100, 19);
+    let vowel = |c| conjoining(c, 0x1161, JUNG_COUNT);
+    let tail = |c| conjoining(c, 0x11A7, JONG_COUNT).filter(|&t| t > 0);
+    // 중성·종성 자모가 없으면 합칠 것이 없다(거의 모든 경로).
+    if !chars
+        .iter()
+        .any(|&c| vowel(c).is_some() || tail(c).is_some())
+    {
+        return None;
+    }
+    let mut out = Vec::with_capacity(chars.len());
+    let mut starts = Vec::with_capacity(chars.len() + 1);
+    let mut i = 0;
+    while i < chars.len() {
+        starts.push(i as u32);
+        let mut c = chars[i];
+        i += 1;
+        if let Some(l) = lead(c)
+            && let Some(v) = chars.get(i).and_then(|&n| vowel(n))
+        {
+            c = compose(l, v, 0);
+            i += 1;
+        }
+        if let Some((l, v, 0)) = hangul(c)
+            && let Some(t) = chars.get(i).and_then(|&n| tail(n))
+        {
+            c = compose(l, v, t);
+            i += 1;
+        }
+        out.push(c);
+    }
+    if out.len() == chars.len() {
+        return None;
+    }
+    starts.push(chars.len() as u32);
+    Some((out, starts))
 }
 
 /// 초성으로 쓸 수 있는 호환 자모면 초성 번호
@@ -310,9 +379,15 @@ pub struct Query {
 }
 
 impl Query {
-    /// `raw`를 낱말로 나눈다. `\`는 `/`로 본다(Windows 경로를 붙여 넣어도 된다).
+    /// `raw`를 낱말로 나눈다. `\`는 `/`로 본다(Windows 경로를 붙여 넣어도 된다). NFD 한글은 합친다
+    /// (NFD로 저장된 파일 이름을 복사해 붙여 넣어도 된다).
     pub fn parse(raw: &str) -> Query {
-        let text = raw.trim_start().replace('\\', "/");
+        let mut text = raw.trim_start().replace('\\', "/");
+        if !text.is_ascii()
+            && let Some((composed, _)) = compose_jamo(&text.chars().collect::<Vec<char>>())
+        {
+            text = composed.into_iter().collect();
+        }
         // 공백으로 끝나면 마지막 낱말의 조합은 끝났다.
         let composing = !text.ends_with(char::is_whitespace);
         let (body, line) = split_line(text.trim_end());
@@ -331,14 +406,14 @@ impl Query {
     }
 
     /// 이 검색어에 맞는 경로가 모두 `previous`에도 맞는가(앞 결과 안에서만 찾아도 되는가).
-    /// 낱말마다 앞 낱말을 이어 친 것이면 그렇다(퍼지 일치는 글자를 더할수록 좁아진다).
+    /// 낱말마다 앞 낱말을 이어 친 것이면 그렇다(퍼지 일치는 글자를 더할수록 좁아진다). 글자가 같으면 맞추는
+    /// 방법도 같아야 한다: 조합이 끝난 `파 `를 지워 `파`로 돌아오면 `팔`도 맞으므로 앞 결과보다 넓다.
     pub fn narrows(&self, previous: &Query) -> bool {
         self.terms.len() >= previous.terms.len()
-            && self
-                .terms
-                .iter()
-                .zip(&previous.terms)
-                .all(|(new, old)| new.text.starts_with(&old.text))
+            && self.terms.iter().zip(&previous.terms).all(|(new, old)| {
+                new.text.starts_with(&old.text)
+                    && (new.text.len() > old.text.len() || new.variants == old.variants)
+            })
     }
 }
 
@@ -372,14 +447,20 @@ fn term(word: &str, composing: bool) -> Term {
     let chars: Vec<char> = word.chars().take(MAX_TERM_CHARS).collect();
     let mut needles: Vec<Needle> = chars.iter().map(|&c| Needle::of(c)).collect();
     let mut variants = Vec::with_capacity(2);
-    match chars.last().copied().and_then(hangul) {
-        Some((l, v, 0)) if composing => {
-            *needles.last_mut().expect("글자가 있다") = Needle::Open {
-                syllable: compose(l, v, 0),
+    match chars
+        .last()
+        .copied()
+        .and_then(|c| hangul(c).map(|h| (c, h)))
+    {
+        Some((typed, (l, v, 0))) if composing => {
+            *needles.last_mut().expect("글자가 있다") = Needle::Syllable {
+                typed,
+                lead: l * JUNG_COUNT + v,
+                finals: ALL_FINALS,
             };
             variants.push(needles);
         }
-        Some((l, v, t)) if composing => {
+        Some((typed, (l, v, t))) if composing => {
             let (rest, moved) = JONG_SPLIT[t as usize];
             let mut split = needles.clone();
             split.pop();
@@ -392,6 +473,11 @@ fn term(word: &str, composing: bool) -> Term {
                 index: moved,
                 jamo: INITIALS[moved as usize],
             });
+            *needles.last_mut().expect("글자가 있다") = Needle::Syllable {
+                typed,
+                lead: l * JUNG_COUNT + v,
+                finals: (1 << t) | growing_finals(t),
+            };
             variants.push(needles);
             variants.push(split);
         }
@@ -1021,6 +1107,18 @@ mod tests {
         // 겹받침: `닭`은 `달ㄱ`일 수 있다
         assert!(score_of("닭", "달걀.txt").is_some());
         assert!(score_of("닭 ", "달걀.txt").is_none());
+        // 반대로 `닭`을 치는 중의 `달`(다음 자음이 겹받침이 된다)
+        for typing in ["ㄷ", "다", "달", "닭"] {
+            assert!(score_of(typing, "닭.txt").is_some(), "{typing}");
+        }
+        assert!(score_of("달 ", "닭.txt").is_none(), "조합이 끝난 달");
+        assert!(score_of("각", "갃.txt").is_some(), "ㄱ → ㄳ");
+        assert!(score_of("간", "갅.txt").is_some(), "ㄴ → ㄵ");
+        assert!(score_of("갑", "값.txt").is_some(), "ㅂ → ㅄ");
+        assert!(
+            score_of("감", "갉.txt").is_none(),
+            "ㅁ은 겹받침이 되지 않는다"
+        );
         // 그대로 맞는 쪽이 위
         assert!(score_of("파", "파.rs") > score_of("파", "팔.rs"));
     }
@@ -1030,6 +1128,32 @@ mod tests {
         // macOS에서 정규화 없이 들어온 경로(조합형 자모)도 초성으로는 찾는다
         let nfd = "\u{1111}\u{1161}\u{110B}\u{1175}\u{11AF}.rs"; // 파일.rs
         assert!(score_of("ㅍㅇ", nfd).is_some());
+    }
+
+    #[test]
+    fn composes_conjoining_jamo() {
+        let nfd = chars("a/\u{1111}\u{1161}\u{110B}\u{1175}\u{11AF}.rs"); // a/파일.rs
+        let (composed, starts) = compose_jamo(&nfd).unwrap();
+        assert_eq!(composed, chars("a/파일.rs"));
+        assert_eq!(starts, [0, 1, 2, 4, 7, 8, 9, 10]);
+        // 완성형 음절 + 조합형 종성, 홀로 선 자모(합칠 짝이 없다)
+        assert_eq!(compose_jamo(&chars("파\u{11AF}")).unwrap().0, chars("팔"));
+        assert_eq!(
+            compose_jamo(&chars("\u{1100}x\u{1161}\u{11AF}")),
+            None,
+            "합친 것이 없다"
+        );
+        assert_eq!(
+            compose_jamo(&chars("팔\u{11AF}")),
+            None,
+            "받침 위에 받침은 없다"
+        );
+        assert_eq!(compose_jamo(&chars("src/파일.rs")), None);
+        // 붙여 넣은 NFD 검색어도 합친다
+        assert_eq!(
+            Query::parse("\u{1111}\u{1161}\u{110B}\u{1175}\u{11AF}"),
+            Query::parse("파일")
+        );
     }
 
     #[test]
@@ -1066,6 +1190,10 @@ mod tests {
         assert!(!q("g").narrows(&q("g v")));
         assert!(!q("파이").narrows(&q("팡")));
         assert!(q("x").narrows(&q("")));
+        // 지워서 같은 글자로 돌아와도 조합 중이면 더 넓다
+        assert!(!q("파").narrows(&q("파 ")));
+        assert!(!q("파:").narrows(&q("파:3")));
+        assert!(q("파일").narrows(&q("파")));
     }
 
     /// 좁혀도 되는 검색어 쌍이면 새 검색어에 맞는 경로는 모두 앞 검색어에도 맞는다(무작위 대조).
@@ -1091,12 +1219,20 @@ mod tests {
             let old: String = (0..next(4))
                 .map(|_| alphabet[next(alphabet.len())])
                 .collect();
-            let new = format!(
-                "{old}{}",
-                (0..1 + next(3))
-                    .map(|_| alphabet[next(alphabet.len())])
-                    .collect::<String>()
-            );
+            // 이어 치기, 지우기(앞부분만 남기기), 끝 공백 넣고 빼기
+            let new: String = match next(3) {
+                0 => format!(
+                    "{old}{}",
+                    (0..1 + next(3))
+                        .map(|_| alphabet[next(alphabet.len())])
+                        .collect::<String>()
+                ),
+                1 => old.chars().take(next(old.chars().count() + 1)).collect(),
+                _ => match old.strip_suffix(' ') {
+                    Some(trimmed) => trimmed.to_owned(),
+                    None => format!("{old} "),
+                },
+            };
             let (old_q, new_q) = (Query::parse(&old), Query::parse(&new));
             if !new_q.narrows(&old_q) {
                 continue;

@@ -12,8 +12,10 @@ const key = (k: string, mods: Partial<Record<"ctrlKey" | "metaKey" | "altKey" | 
 });
 
 describe("quickOpenNavigation", () => {
+  const pick = { repo: "/r", path: "src/a.rs", line: 12, history: false, missing: false };
+
   it("Enter는 작업트리 파일 blame(줄 포함)", () => {
-    expect(quickOpenNavigation({ repo: "/r", path: "src/a.rs", line: 12, history: false })).toEqual({
+    expect(quickOpenNavigation(pick)).toEqual({
       kind: "file",
       target: { repo: "/r", path: "src/a.rs", rev: null },
       line: 12,
@@ -21,7 +23,19 @@ describe("quickOpenNavigation", () => {
   });
 
   it("Shift+Enter는 파일 히스토리", () => {
-    expect(quickOpenNavigation({ repo: "/r", path: "src/a.rs", line: null, history: true })).toEqual({
+    expect(quickOpenNavigation({ ...pick, line: null, history: true })).toEqual({
+      kind: "history",
+      target: { repo: "/r", path: "src/a.rs", rev: null },
+    });
+  });
+
+  it("작업트리에서 지운 파일은 HEAD 버전 blame, 히스토리는 그대로", () => {
+    expect(quickOpenNavigation({ ...pick, missing: true })).toEqual({
+      kind: "file",
+      target: { repo: "/r", path: "src/a.rs", rev: "HEAD" },
+      line: 12,
+    });
+    expect(quickOpenNavigation({ ...pick, line: null, history: true, missing: true })).toEqual({
       kind: "history",
       target: { repo: "/r", path: "src/a.rs", rev: null },
     });

@@ -8,7 +8,7 @@ import type { Navigation } from "../nav";
 import { afterPaint, nowMs, phasesBetween, record } from "../perf";
 import { splitPath, type Run } from "./highlight";
 import { quickOpenNavigation, type QuickOpenPick } from "./pick";
-import type { FileSearch } from "./types";
+import type { FileMatch, FileSearch } from "./types";
 
 export { isQuickOpenKey } from "./pick";
 
@@ -103,7 +103,7 @@ export function QuickOpen({
           const history = pendingPick.current;
           pendingPick.current = null;
           const item = search.items[first];
-          if (item) latest.current.onPick(pickOf(search, item.path, history));
+          if (item) latest.current.onPick(pickOf(search, item, history));
         }
       },
       (e: unknown) => {
@@ -155,7 +155,7 @@ export function QuickOpen({
       return;
     }
     const item = shown.search.items[index];
-    if (item) onPick(pickOf(shown.search, item.path, history));
+    if (item) onPick(pickOf(shown.search, item, history));
   };
   const move = (delta: number) => setSelected((i) => Math.max(0, Math.min(items.length - 1, i + delta)));
 
@@ -208,14 +208,15 @@ export function QuickOpen({
                 id={`quick-open-${i}`}
                 role="option"
                 aria-selected={i === selected}
-                className={`quick-open-item${i === selected ? " selected" : ""}`}
+                className={`quick-open-item${i === selected ? " selected" : ""}${item.missing ? " missing" : ""}`}
                 onMouseMove={() => i !== selected && setSelected(i)}
                 onClick={(e) => pick(i, e.shiftKey)}
-                title={item.path}
+                title={item.missing ? `${item.path} (작업트리에 없다: Enter는 HEAD 버전 blame)` : item.path}
               >
                 <span className="quick-open-name">
                   <Runs runs={name} />
                 </span>
+                {item.missing && <span className="badge warn">지움</span>}
                 <span className="quick-open-dir mono">
                   <Runs runs={dir} />
                 </span>
@@ -232,8 +233,8 @@ export function QuickOpen({
   );
 }
 
-function pickOf(search: FileSearch, path: string, history: boolean): QuickOpenPick {
-  return { repo: search.repo, path, line: history ? null : search.line, history };
+function pickOf(search: FileSearch, item: FileMatch, history: boolean): QuickOpenPick {
+  return { repo: search.repo, path: item.path, line: history ? null : search.line, history, missing: item.missing };
 }
 
 function Runs({ runs }: { runs: Run[] }) {

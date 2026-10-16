@@ -76,7 +76,8 @@ baseline 표가 `bench/results.md`에 있다.
       다른 워크트리가 체크아웃한 브랜치·HEAD에 그 워크트리 이름을 붙인다 — Windows·macOS 실기 확인 필요
 - [x] Quick Open: gix 인덱스의 추적 파일 + 퍼지 매칭. 어느 화면에서든 `f`·Ctrl+P(⌘P)로 열고 `Enter` blame,
       `Shift+Enter` 파일 히스토리, `파일:줄`이면 그 줄로. 파일 이름 일치를 앞세우고(VS Code처럼) 한글 초성·조합 중인
-      음절도 맞춘다(`plx_core::fuzzy`, CLAUDE.md 결정 기록). 빈 검색어는 최근 연 파일부터 — Windows·macOS 실기 확인 필요
+      음절도 맞춘다(`plx_core::fuzzy`, CLAUDE.md 결정 기록). 빈 검색어는 최근 연 파일부터, 작업트리에서 지운 파일은
+      표시하고 HEAD 버전 blame으로 — Windows·macOS 실기 확인 필요
 - [x] 커맨드 팔레트, 에디터로 열기 (VS Code·Zed, `file:line`): 어느 화면에서든 `:`·Ctrl+Shift+P(⌘⇧P)로 그 화면의
       할 일을 이름·초성으로 찾아 실행한다(키가 없던 그래프 범위·가속 설정 포함). `o`는 작업트리 파일의 그 줄을
       에디터로 연다(`PLX_EDITOR`, 리비전의 줄은 작업트리 줄로, 그 뒤 rename은 새 이름으로). blame의 커밋 카드는 `i`

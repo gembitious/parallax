@@ -6,6 +6,8 @@ export type FileMatch = {
   path: string;
   /** 맞은 글자 위치(코드 포인트 단위, 오름차순) */
   positions: number[];
+  /** 인덱스에는 있지만 작업트리에 없다(지우고 아직 커밋하지 않았다) */
+  missing: boolean;
 };
 
 /** plx-core files::FileSearch */
