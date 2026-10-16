@@ -33,6 +33,8 @@
   --heat-6: #ec8a3a;
   --heat-7: #e0640a;
   --uncommitted: #1a7f37;
+  /* AI가 쓴 줄(git-ai 노트) */
+  --ai: #8250df;
 
   /* 그래프 레인 색(plx-core graph::COLORS = 8) */
   --lane-0: #0969da;
@@ -89,6 +91,7 @@
     --heat-6: #cc7424;
     --heat-7: #f0883e;
     --uncommitted: #3fb950;
+    --ai: #a371f7;
 
     --lane-0: #4493f8;
     --lane-1: #3fb950;
@@ -1228,4 +1231,23 @@ mark.quick-open-hit {
   flex-shrink: 0;
   margin-left: auto;
   font-size: 11px;
+}
+
+/* AI가 쓴 줄(git-ai 노트): 나이 막대 옆에 보라 줄, 작성자 자리에 도구 이름 */
+.cm-blame-line.ai {
+  box-shadow: inset 3px 0 0 var(--ai);
+}
+
+.cm-blame-line.ai .cm-blame-author {
+  color: var(--ai);
+}
+
+.badge.ai {
+  border-color: var(--ai);
+  color: var(--ai);
+}
+
+.card-ai .ai-tool {
+  color: var(--ai);
+  font-weight: 600;
 }

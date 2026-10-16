@@ -54,6 +54,7 @@ pub fn run() {
             git::files_search,
             git::files_touch,
             git::open_in_editor,
+            git::ai_attribution,
             git::unwatch_repo,
             git::repo_acceleration,
             git::accelerate,

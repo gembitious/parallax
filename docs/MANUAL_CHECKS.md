@@ -223,6 +223,17 @@ VS Code(`code`)나 Zed(`zed`)가 PATH에 있는 상태에서 한다. 없으면 �
 | 10 | Windows: 에디터를 띄울 때 | 검은 콘솔 창이 깜빡이지 않는다 |
 | 11 | macOS: 앱을 Finder(또는 Dock)에서 띄운 뒤 터미널에서 `plx <파일>` → `o` | 터미널의 PATH에 있는 `code`·`zed`로 열린다 |
 
+## 13. AI 출처 (M5, git-ai를 쓰는 저장소)
+
+[git-ai](https://github.com/git-ai-project/git-ai)로 에이전트 작업을 커밋한 저장소에서 한다(`git notes --ref=ai list`에 무언가 나와야 한다).
+
+| # | 할 일 | 기대 |
+|---|---|---|
+| 1 | AI가 고친 파일을 `plx <파일>` | 머리줄에 `✦ AI n줄`, AI가 쓴 줄 거터에 보라 줄과 `✦ claude` 같은 도구 이름 |
+| 2 | 같은 파일을 `git-ai blame <파일>` | 1에서 보라 줄인 줄과 git-ai가 AI 도구 이름을 붙인 줄이 같다 |
+| 3 | 보라 줄에서 `i` | 카드에 `AI ✦ 도구 · 모델`, 시킨 사람 |
+| 4 | git-ai 노트가 없는 저장소 | 아무 표시가 없고 blame이 그대로 빠르다 |
+
 - 플랫폼(Windows/macOS 버전), 위 표의 번호, 실제로 본 것
 - 가능하면 `PLX_PERF=1`로 실행한 성능 HUD 캡처
 - 콘솔 출력이 필요하면 트레이에서 종료한 뒤 `PLX_DETACH=0 plx <파일>`로 실행한다(상주 인스턴스가 터미널에 붙어 로그가 남는다)

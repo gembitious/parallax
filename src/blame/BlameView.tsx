@@ -1,6 +1,6 @@
 // blame 뷰: 파일 내용을 먼저 그리고, 거터를 blame 결과로 점진적으로 채운다.
 // 에디터(CodeMirror)는 React 밖에서 직접 다룬다. 이벤트 처리기는 한 번 만들어지므로 최신 상태는 ref로 읽는다.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Help } from "../Help";
 import { copyText } from "../clipboard";
 import { call } from "../ipc";
@@ -10,6 +10,7 @@ import { createEditor, type Editor } from "./editor";
 import { formatCount, isUncommitted, shortSha } from "./format";
 import { blameChanged } from "./gutter";
 import { BlameModel } from "./model";
+import { aiSummary, type AiAttribution, type AiItem } from "./ai";
 import type { Navigation } from "../nav";
 import { watchFile, watchRepo } from "../watch";
 import { WorktreePicker } from "../worktree/WorktreePicker";
@@ -21,7 +22,7 @@ import { toggleHud } from "../Hud";
 import { openSearchPanel } from "@codemirror/search";
 import { blameSwitch } from "../worktree/switch";
 import { openBlame, type BlameTarget } from "./session";
-import type { BlameMeta, BlameStats, CommitInfo, Neighbor, Version } from "./types";
+import type { BlameBlock, BlameMeta, BlameStats, CommitInfo, Neighbor, Version } from "./types";
 
 
 type Props = {
@@ -118,6 +119,8 @@ export function BlameView({
   const [help, setHelp] = useState(false);
   const [worktrees, setWorktrees] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  /** AI 출처 응답을 받을 때마다 오른다(머리줄 요약을 다시 센다). */
+  const [aiVersion, setAiVersion] = useState(0);
   // 저장소를 아직 모르면(meta 전) 연 파일 경로로 찾는다(저장소 안의 아무 경로면 된다).
   const quickOpen = useQuickOpen({
     repo: meta?.repo ?? target.repo ?? path,
@@ -424,6 +427,50 @@ export function BlameView({
     let contentPainted: Promise<number | null> = Promise.resolve(null);
     let gutterPainted: Promise<number | null> = Promise.resolve(null);
     let gotMeta = false;
+    // AI 출처(git-ai 노트): 블록이 오는 대로 새 (커밋, 원래 경로)를 묻는다. 한 번에 하나만 보내고 그동안 온 것은 모아
+    // 다음에 보낸다. 저장소에 노트가 없으면 더 묻지 않는다.
+    let aiRepo: string | null = null;
+    let aiPending: AiItem[] = [];
+    let aiBusy = false;
+    let aiOff = false;
+    const askAi = () => {
+      const blame = model.current;
+      if (aiBusy || aiOff || !aiRepo || !blame || aiPending.length === 0) return;
+      const items = aiPending;
+      aiPending = [];
+      aiBusy = true;
+      call<AiAttribution>("ai_attribution", { repo: aiRepo, items }).then(
+        (result) => {
+          aiBusy = false;
+          if (model.current !== blame) return;
+          if (!result.notes) {
+            aiOff = true;
+            return;
+          }
+          if (result.files.length > 0) {
+            blame.ai.merge(result);
+            editor.current?.view.dispatch({ effects: blameChanged.of(null) });
+            setAiVersion((v) => v + 1);
+          }
+          askAi();
+        },
+        (e: unknown) => {
+          aiBusy = false;
+          aiOff = true;
+          console.error("AI 출처를 읽지 못했다", e);
+        },
+      );
+    };
+    const queueAi = (blocks: BlameBlock[]) => {
+      const blame = model.current;
+      if (!blame || aiOff) return;
+      for (const block of blocks) {
+        if (!isUncommitted(block.sha) && blame.ai.ask(block.sha, block.path)) {
+          aiPending.push({ sha: block.sha, path: block.path });
+        }
+      }
+      askAi();
+    };
     let relPath = path;
 
     const report = async (stats: BlameStats, doneMs: number) => {
@@ -461,6 +508,7 @@ export function BlameView({
           metaMs = nowMs();
           const { kind: _kind, ...m } = event;
           relPath = m.path;
+          aiRepo = m.repo;
           setMeta(m);
           // 빈 검색어 Quick Open의 최근 연 파일
           call("files_touch", { repo: m.repo, path: m.path }).catch(() => {});
@@ -513,6 +561,7 @@ export function BlameView({
           if (!blame) break;
           blame.add(event);
           editor.current?.view.dispatch({ effects: blameChanged.of(null) });
+          queueAi(event.blocks);
           if (Number.isNaN(chunkMs)) {
             chunkMs = nowMs();
             gutterPainted = afterPaint();
@@ -587,6 +636,16 @@ export function BlameView({
 
   const blame = model.current;
   const lineCount = meta?.content?.lineCount ?? 0;
+  // AI가 쓴 줄 수(git-ai 노트). 응답이 오거나 blame이 끝나면 다시 센다.
+  const ai = useMemo(() => {
+    const m = model.current;
+    if (!m || m.ai.empty) return null;
+    const authors = [];
+    for (let line = 1; line <= m.lineCount; line++) authors.push(m.aiAt(line));
+    return aiSummary(authors);
+    // model은 ref라 aiVersion·진행 상태로 다시 센다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiVersion, progress.kind]);
   const cardBlock = hover && blame ? blame.block(hover.line) : undefined;
 
   return (
@@ -602,6 +661,14 @@ export function BlameView({
           </span>
         )}
         {crlf && <span className="badge">CRLF</span>}
+        {ai && ai.lines > 0 && (
+          <span
+            className="badge ai"
+            title={`git-ai 노트: AI가 쓴 줄\n${ai.tools.map(([tool, n]) => `${tool} ${formatCount(n)}줄`).join("\n")}`}
+          >
+            ✦ AI {formatCount(ai.lines)}줄
+          </span>
+        )}
         {depth > 1 && (
           <span className="badge" title="q로 앞 화면으로 돌아간다">
             뒤로 q · {depth - 1}
@@ -636,6 +703,7 @@ export function BlameView({
           path={meta.path}
           anchor={hover.anchor}
           pinned={hover.pinned}
+          ai={blame?.aiAt(hover.line) ?? null}
           nowMs={nowAtOpen.current}
           onCopy={(sha) =>
             copyText(sha).then(

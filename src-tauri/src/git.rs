@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use plx_core::ai_notes::{AiAttribution, AiItem, AiNotes};
 use plx_core::blame_session::{SessionEvent, Sessions};
 use plx_core::cache::DiskCache;
 use plx_core::commit::{self, CommitDetail, FileVersions};
@@ -28,6 +29,7 @@ pub struct GitState {
     graphs: GraphSessions,
     watchers: Watchers,
     files: FileLists,
+    ai: AiNotes,
     cache: Option<Arc<DiskCache>>,
 }
 
@@ -59,6 +61,7 @@ impl GitState {
             graphs,
             watchers: Watchers::new(on_change),
             files: FileLists::new(),
+            ai: AiNotes::new(),
             cache,
         }
     }
@@ -380,6 +383,21 @@ pub async fn open_in_editor(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// blame 줄의 AI 출처(git-ai의 `refs/notes/ai`): (커밋, 그 커밋에서의 경로)마다 에이전트·사람이 쓴 줄 구간
+/// (그 커밋 버전의 줄). 저장소에 노트가 없으면 `notes: false`.
+#[tauri::command]
+pub async fn ai_attribution(
+    git: State<'_, Arc<GitState>>,
+    repo: String,
+    items: Vec<AiItem>,
+) -> Result<AiAttribution, String> {
+    blocking(git, move |git| {
+        let repo = git.repos.for_path(Path::new(&repo))?;
+        git.ai.attribution(&repo, &items)
+    })
+    .await
 }
 
 /// 감시 구독(저장소·파일)을 끝낸다. 이미 끝났으면 `false`. OS 감시를 버리는 일(macOS는 스레드를 기다린다)이
