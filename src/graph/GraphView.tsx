@@ -16,6 +16,7 @@ import { nextRow, parseQuery, rowMatches, type Query } from "./search";
 import { CANCELLED, openGraph, type GraphHandle } from "./session";
 import { watchRepo } from "../watch";
 import { WorktreePicker } from "../worktree/WorktreePicker";
+import { isQuickOpenKey, useQuickOpen } from "../quickopen/QuickOpen";
 import type { GraphMeta, GraphRow, GraphScope, GraphStats, Label } from "./types";
 
 type Props = {
@@ -159,6 +160,12 @@ function GraphPane({
   const pending = useRef<GraphHandle | null>(null);
   const sessionSeq = useRef(0);
   const listRef = useRef<HTMLDivElement>(null);
+  const quickOpen = useQuickOpen({
+    repo: meta?.repo ?? repo,
+    current: null,
+    onNavigate,
+    onClosed: () => listRef.current?.focus({ preventScroll: true }),
+  });
   const canvasRef = useRef<HTMLCanvasElement>(null);
   /** 숨겼다 다시 보일 때 되돌릴 스크롤 위치 */
   const savedTop = useRef(0);
@@ -172,8 +179,8 @@ function GraphPane({
     painted: null as Promise<number | null> | null,
     reported: false,
   });
-  const latest = useRef({ active, meta, selected, help, total, found });
-  latest.current = { active, meta, selected, help, total, found };
+  const latest = useRef({ active, meta, selected, help, total, found, openFiles: quickOpen.open });
+  latest.current = { active, meta, selected, help, total, found, openFiles: quickOpen.open };
 
   const showToast = (message: string) => {
     setToast(message);
@@ -550,7 +557,13 @@ function GraphPane({
   // 키: 화면이 맨 위일 때만.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!latest.current.active || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (!latest.current.active || e.defaultPrevented) return;
+      if (isQuickOpenKey(e)) {
+        latest.current.openFiles();
+        e.preventDefault();
+        return;
+      }
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       const target = e.target as HTMLElement | null;
       if (target?.closest("input, textarea")) return;
       // 머리줄 버튼에 초점이 있으면 Enter·Space는 버튼이 받는다.
@@ -834,6 +847,7 @@ function GraphPane({
           }}
         />
       )}
+      {quickOpen.overlay}
       {toast && (
         <div className="toast" role="status">
           {toast}

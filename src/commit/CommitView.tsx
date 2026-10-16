@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Help } from "../Help";
 import { WorktreePicker } from "../worktree/WorktreePicker";
+import { isQuickOpenKey, useQuickOpen } from "../quickopen/QuickOpen";
 import { commitSwitch } from "../worktree/switch";
 import { copyText } from "../clipboard";
 import { displayText } from "../blame/BlameView";
@@ -67,12 +68,13 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
   const diffParent = useRef<HTMLDivElement>(null);
   const diff = useRef<DiffView | null>(null);
   const listRef = useRef<HTMLUListElement>(null);
+  const quickOpen = useQuickOpen({ repo, current: null, onNavigate });
   const toastTimer = useRef(0);
   /** 첫 diff까지의 측정: 상세 도착 → 목록 표시 → diff 도착 → diff 표시 */
   const timing = useRef({ t0: nowMs(), detailMs: NaN, listPainted: null as Promise<number | null> | null, reported: false });
   const detail = useMemo(() => narrowed(full, narrow ? path : null), [full, narrow, path]);
-  const latest = useRef({ active, detail, selected, help, mode, narrow });
-  latest.current = { active, detail, selected, help, mode, narrow };
+  const latest = useRef({ active, detail, selected, help, mode, narrow, openFiles: quickOpen.open });
+  latest.current = { active, detail, selected, help, mode, narrow, openFiles: quickOpen.open };
 
   const showToast = (message: string) => {
     setToast(message);
@@ -223,7 +225,13 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
   // 키: 화면이 맨 위일 때만. 검색 입력 중이면 넘긴다.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!latest.current.active || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (!latest.current.active || e.defaultPrevented) return;
+      if (isQuickOpenKey(e)) {
+        latest.current.openFiles();
+        e.preventDefault();
+        return;
+      }
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       if ((e.target as HTMLElement | null)?.closest("input, textarea")) return;
       const { selected: at, help: helpOpen } = latest.current;
       let handled = true;
@@ -288,6 +296,7 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
         <div className="blame-message error">
           <p>{fatal}</p>
         </div>
+        {quickOpen.overlay}
       </section>
     );
   }
@@ -407,6 +416,7 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
           }}
         />
       )}
+      {quickOpen.overlay}
       {toast && (
         <div className="toast" role="status">
           {toast}

@@ -1142,3 +1142,83 @@ kbd {
   opacity: 0.75;
   font-weight: 400;
 }
+
+/* Quick Open(파일 찾기): 위쪽에 띄워 결과 수가 바뀌어도 입력 칸이 제자리에 있게 한다. */
+.overlay.top {
+  align-items: flex-start;
+  padding-top: 12vh;
+}
+
+.quick-open {
+  display: flex;
+  flex-direction: column;
+  max-height: min(70vh, 640px);
+  overflow: hidden;
+}
+
+.quick-open-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.quick-open-bar input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 14px;
+}
+
+.quick-open-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.quick-open-item {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.quick-open-item.selected {
+  background: var(--selection);
+}
+
+/* 이름이 줄보다 길면 이름도 줄인다(디렉터리가 먼저 사라진다). */
+.quick-open-name {
+  flex-shrink: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 작업트리에서 지운 파일 */
+.quick-open-item.missing .quick-open-name {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.quick-open-dir {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+
+mark.quick-open-hit {
+  background: none;
+  color: var(--accent);
+  font-weight: 700;
+}

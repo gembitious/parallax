@@ -10,6 +10,8 @@ pub mod cli;
 pub mod commit;
 pub mod commit_graph;
 pub mod commit_table;
+pub mod files;
+pub mod fuzzy;
 pub mod git;
 pub mod graph;
 pub mod history;

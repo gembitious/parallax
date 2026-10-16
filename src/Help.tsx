@@ -2,6 +2,7 @@
 type Key = { keys: string; what: string; note?: string; planned?: boolean };
 
 const COMMON: Key[] = [
+  { keys: "f / Ctrl+P", what: "파일 찾기 (Quick Open)", note: "macOS ⌘P · 초성 ㅍㅇ · 파일:줄 · Shift+Enter 히스토리" },
   { keys: "W", what: "워크트리 고르기", note: "그 워크트리의 같은 화면으로" },
   { keys: "q", what: "뒤로", note: "맨 앞 화면이면 창 숨기기" },
   { keys: "?", what: "이 도움말" },
