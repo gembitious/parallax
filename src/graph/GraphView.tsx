@@ -114,13 +114,15 @@ const RETRY_MS = 1000;
 /** 한 행에 보이는 이름표 수(나머지는 +N) */
 const MAX_LABELS = 3;
 /**
- * 레인 캔버스에 CPU 캔버스를 청할지(willReadFrequently, 픽셀을 읽지는 않는다). WebKit(macOS·Linux)은 GPU 캔버스를
- * 처음 쓸 때 준비하느라 앱이 뜬 뒤 첫 그래프가 늦었다(macOS CI 0.9~3.1초 → CPU 캔버스로 0.27~0.44초). Chromium(Windows
- * WebView2)은 그 준비가 가볍고 CPU 캔버스로는 첫 페인트가 늦어(CI 그린 뒤 화면까지 GPU 36~40ms, 한 번 97ms, CPU 77·111ms)
- * 그대로 둔다.
- * 레인은 선과 점뿐이고 그리는 범위가 바뀔 때만 다시 그려 CPU로 충분하다(bench/results.md).
+ * 레인 캔버스의 문맥 설정. WebKit(macOS·Linux)에는 CPU 캔버스(willReadFrequently, 픽셀을 읽지는 않는다)를 청한다.
+ * GPU 캔버스를 처음 쓸 때 준비하느라 앱이 뜬 뒤 첫 그래프가 늦었다(macOS CI 0.9~3.1초 → CPU 캔버스로 0.27~0.56초).
+ * 레인은 선과 점뿐이고 그리는 범위가 바뀔 때만 다시 그려 CPU로 충분하다. Chromium(Windows WebView2)에는 설정을 주지
+ * 않는다(기본 GPU 캔버스): `willReadFrequently`를 주면 true든 false든 첫 그래프의 그린 뒤 화면까지가 CI에서 77~111ms였다
+ * (주지 않으면 36~41ms, bench/results.md).
  */
-const CPU_CANVAS = !/\bChrome\//.test(navigator.userAgent);
+const CANVAS_SETTINGS: CanvasRenderingContext2DSettings | undefined = /\bChrome\//.test(navigator.userAgent)
+  ? undefined
+  : { willReadFrequently: true };
 
 /** 마지막으로 한 검색(n/N이 되풀이한다). 경로 검색은 일치 행들을 한 번 구해 둔다. */
 type Found = { kind: "text"; text: string } | { kind: "path"; path: string; rows: number[]; set: ReadonlySet<number> };
@@ -775,7 +777,7 @@ function GraphPane({
         canvas.style.width = `${width}px`;
         canvas.style.height = `${height}px`;
       }
-      const ctx = canvas.getContext("2d", { willReadFrequently: CPU_CANVAS });
+      const ctx = canvas.getContext("2d", CANVAS_SETTINGS);
       if (ctx) {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, width, height);
