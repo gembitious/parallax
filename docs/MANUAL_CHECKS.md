@@ -79,6 +79,7 @@ npm run tauri build -- --bundles app   # macOS: target/release/bundle/macos/para
 | 9 | `?` | 단축키 도움말 |
 | 10 | OS를 다크 모드로 바꾼다 | 배경·글자·거터 색이 읽힌다 |
 | 11 | 한글 경로·한글 내용 파일, EUC-KR 파일 | 글자가 깨지지 않는다. EUC-KR이면 머리줄에 `EUC-KR` 표시 |
+| 12 | 머리줄의 파일 경로를 마우스로 누른 뒤, 또 `?` 버튼으로 도움말을 열고 `Esc`로 닫은 뒤 `j`/`k`·`Enter` | 코드를 다시 누르지 않아도 키가 먹는다(커서가 움직이고 `Enter`는 커밋 상세) |
 
 ## 3. 이력 거슬러 오르기 (M1)
 
@@ -107,6 +108,7 @@ npm run tauri build -- --bundles app   # macOS: target/release/bundle/macos/para
 | 9 | (Windows) 줄 끝만 LF → CRLF로 바꾼 커밋의 그 파일 | diff 위에 "줄 끝: LF → CRLF". 바뀐 줄은 없다 |
 | 10 | 파일이 수백 개 넘게 바뀐 커밋(git/git이라면 `plx show 1f010d6bdf`, 919개 rename) | 목록이 바로 보이고 줄 수가 `…`에서 숫자로 채워진다. 머리줄 합계 끝의 `…`이 사라지면 다 셌다. 목록 스크롤이 매끄럽고 `j`를 누르고 있어도 diff가 따라온다 |
 | 11 | 4MB가 넘는 파일을 바꾼 커밋의 그 파일 | "파일이 커서(… MB) 내용을 비교하지 않았다. 그래도 보기" → 누르면 diff가 열린다 |
+| 12 | 커밋 상세에서 `f`, `Esc`, `:`, `Esc` 뒤 `↓`·`PageDown` | `f`는 파일 찾기, `:`는 명령 팔레트를 연다. 닫은 뒤 diff가 화살표·PageDown으로 움직인다 |
 
 ## 5. 파일 히스토리 (M2)
 
