@@ -197,8 +197,35 @@ phases_of() {
   grep -o '"label":"[^"]*","ms":[0-9.]*' | sed 's/"label":"\([^"]*\)","ms":\([0-9.]*\)/\1|\2/' |
     awk -F'|' 'NF == 2 { printf "%s%s %.1f", sep, $1, $2; sep = " · " } END { print "" }'
 }
+# 여러 기록의 구간별 중앙값(구간은 처음 나온 순서로). macOS awk에는 정렬이 없어 구간마다 삽입 정렬한다.
+phase_medians() {
+  grep -o '"label":"[^"]*","ms":[0-9.]*' | sed 's/"label":"\([^"]*\)","ms":\([0-9.]*\)/\1|\2/' |
+    awk -F'|' 'NF == 2 {
+        if (!($1 in count)) names[++n] = $1
+        v[$1, ++count[$1]] = $2 + 0
+      }
+      END {
+        for (i = 1; i <= n; i++) {
+          l = names[i]; k = count[l]
+          for (a = 2; a <= k; a++) {
+            x = v[l, a]
+            for (b = a - 1; b >= 1 && v[l, b] > x; b--) v[l, b + 1] = v[l, b]
+            v[l, b + 1] = x
+          }
+          printf "%s%s %.1f", sep, l, v[l, int((k + 1) / 2)]; sep = " · "
+        }
+        print ""
+      }'
+}
 cold_phases="$(grep '"kind":"cold"' "$log" | head -n 1 | phases_of)"
 cold_blame="$(LC_ALL=C grep -F '(콜드 스타트)' "$log" | LC_ALL=C grep -F '"kind":"blame"' | head -n 1 | phases_of)"
+warm_phases="$(LC_ALL=C grep -F '"kind":"plx"' "$log" | phase_medians)"
+# 가장 느린 그래프 첫 화면: 어느 구간이 늘었는지(참조 · 첫 화면 보냄 · 표시 · 레이아웃 끝)와 DAG를 읽은 곳
+slowest_graph="$(LC_ALL=C grep -F '"kind":"graph"' "$log" |
+  awk '{ if (match($0, /"totalMs":[0-9.]*/)) print substr($0, RSTART + 10, RLENGTH - 10) "\t" $0 }' |
+  LC_ALL=C sort -n | tail -n 1 | cut -f 2-)"
+slowest_graph_phases="$(printf '%s\n' "$slowest_graph" | phases_of)"
+slowest_graph_detail="$(printf '%s\n' "$slowest_graph" | sed -n 's/.*"detail":"\([^"]*\)".*/\1/p')"
 echo "- 환경: $(uname -srm), $(date '+%Y-%m-%d'), $("$bin" --version 2>/dev/null || echo plx)"
 if [ "$unpainted" -gt 0 ]; then
   echo "- 주의: 페인트를 측정하지 못한 기록 ${unpainted}건(창이 화면에 그려지지 않는 환경). 그 기록은 렌더까지만 잰 값이다."
@@ -218,3 +245,5 @@ echo "| 커밋 그래프 첫 화면 표시 (이 저장소 커밋 ${graph_rows:-?
 echo
 echo "- 콜드 스타트 구간(ms): $cold_phases"
 echo "- 콜드 스타트의 blame(ms): $cold_blame"
+echo "- 상주 인스턴스에 plx 호출, 구간별 중앙값(ms): $warm_phases"
+echo "- 가장 느린 그래프 첫 화면(ms): $slowest_graph_phases ($slowest_graph_detail)"

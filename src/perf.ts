@@ -41,6 +41,9 @@ function notify() {
 
 export const nowMs = (): number => performance.timeOrigin + performance.now();
 
+/** 콜드 스타트 구간을 나누는 JS 쪽 지점(epoch ms). modulesMs: 불러온 모듈을 모두 실행한 시각(main.tsx) */
+export const bootMarks = { modulesMs: 0 };
+
 export async function initPerf(): Promise<PerfInfo> {
   info = await invoke<PerfInfo>("perf_info");
   notify();
