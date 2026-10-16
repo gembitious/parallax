@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isComposing, routeKey } from "./keys";
+import { isComposing, isHudKey, routeKey } from "./keys";
 
 type Mods = Partial<Record<"ctrlKey" | "metaKey" | "altKey" | "shiftKey" | "defaultPrevented", boolean>>;
 
@@ -69,5 +69,30 @@ describe("isComposing", () => {
     expect(isComposing({ isComposing: true, keyCode: 229 })).toBe(true);
     expect(isComposing({ isComposing: false, keyCode: 229 })).toBe(true);
     expect(isComposing({ isComposing: false, keyCode: 13 })).toBe(false);
+  });
+});
+
+describe("isHudKey", () => {
+  const hud = (inside: string | null, extra: Partial<{ isComposing: boolean; keyCode: number }> = {}, mods: Mods = {}) => ({
+    ...key("`", mods, inside),
+    isComposing: false,
+    keyCode: 192,
+    ...extra,
+  });
+
+  it("화면에서 친 `만 HUD를 켜고 끈다", () => {
+    expect(isHudKey(hud(null))).toBe(true);
+    // blame 코드 뷰는 입력란이 아니다
+    expect(isHudKey(hud(".cm-editor"))).toBe(true);
+  });
+
+  it("검색 칸에서 친 글자, IME 조합, 수정 키, 먹힌 키는 아니다", () => {
+    expect(isHudKey(hud("input"))).toBe(false);
+    expect(isHudKey(hud("textarea"))).toBe(false);
+    expect(isHudKey(hud(null, { isComposing: true }))).toBe(false);
+    expect(isHudKey(hud(null, { keyCode: 229 }))).toBe(false);
+    expect(isHudKey(hud(null, {}, { ctrlKey: true }))).toBe(false);
+    expect(isHudKey(hud(null, {}, { defaultPrevented: true }))).toBe(false);
+    expect(isHudKey({ ...hud(null), key: "~" })).toBe(false);
   });
 });
