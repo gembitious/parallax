@@ -2,7 +2,7 @@
 // 행은 화면이 보는 범위만 묶음으로 백엔드에서 읽고(가상 스크롤), 레인은 캔버스 하나에 그린다.
 // 키: j/k 이동, Enter 커밋 상세, y sha 복사, R 원격 브랜치 모두 ↔ 브랜치만, / 검색(메시지·작성자·sha, path:경로),
 //     n/N 다음·이전 결과, q 뒤로, ? 도움말.
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Help } from "../Help";
 import { copyText } from "../clipboard";
 import { formatCount, formatDate, relativeTime, shortSha } from "../blame/format";
@@ -21,6 +21,7 @@ import { commonCommands, usePalette, type Command } from "../palette/Palette";
 import { routeKey } from "../keys";
 import { openInEditor } from "../editor";
 import { toggleHud } from "../Hud";
+import { ScrollMeter } from "../scrollMeter";
 import type { GraphMeta, GraphRow, GraphScope, GraphStats, Label } from "./types";
 
 type Props = {
@@ -104,10 +105,21 @@ type Progress =
 const TOAST_MS = 1800;
 /** 성능 예산(docs/MILESTONES.md): 참조 저장소 전체 이력에서 첫 화면 ≤ 150ms */
 const FIRST_SCREEN_BUDGET_MS = 150;
-/** 보이는 행 앞뒤로 미리 읽는 행 수 */
+/** 그리는 범위 앞뒤로 미리 읽는 행 수 */
 const OVERSCAN = 60;
+/**
+ * 화면 위아래로 미리 그려 두는 높이(px, 화면 높이까지). 이 안에서 스크롤하면 다시 그리지 않고 브라우저가 옮기기만
+ * 한다(행과 레인 캔버스가 스크롤 내용 안에 있다). 범위를 벗어날 때만 그 자리를 가운데로 다시 그린다.
+ */
+const WINDOW_PAD_PX = 1000;
 /** 한 행에 보이는 이름표 수(나머지는 +N) */
 const MAX_LABELS = 3;
+
+/** 기준 스크롤 위치에서 그릴 행 범위: 화면과 그 위아래 WINDOW_PAD_PX(화면 높이까지) */
+function drawWindow(top: number, height: number, count: number): { start: number; end: number } {
+  const pad = Math.min(height, WINDOW_PAD_PX);
+  return visibleRange(top - pad, height + 2 * pad, ROW_HEIGHT, count, 0);
+}
 
 /** 세션을 열고 고를 행: 그 리비전, HEAD, 또는 맨 위(다시 읽을 때 맨 위를 보고 있었다) */
 type Focus = { kind: "rev"; rev: string; offset?: number } | { kind: "head" } | { kind: "top" };
@@ -142,9 +154,12 @@ function GraphPane({
     commits: 0,
   });
   const [selected, setSelected] = useState(0);
+  /** 그리는 범위의 기준 스크롤 위치. 스크롤마다가 아니라 미리 그린 범위를 벗어날 때 바뀐다. */
   const [viewport, setViewport] = useState({ top: 0, height: 0 });
+  /** 지금 그린 행 범위(스크롤 이벤트가 다시 그릴지 판단한다) */
+  const drawnRange = useRef({ start: 0, end: 0, height: 0 });
   /** 행 묶음이 도착할 때마다 올려 다시 그린다. */
-  const [, setVersion] = useState(0);
+  const [version, setVersion] = useState(0);
   /** 보이는 세션이 바뀔 때마다 올린다(행을 다시 읽는다). */
   const [generation, setGeneration] = useState(0);
   const [palette, setPalette] = useState<Palette | null>(null);
@@ -213,6 +228,13 @@ function GraphPane({
   ];
   const commandPalette = usePalette(commands, () => listRef.current?.focus({ preventScroll: true }));
   const latest = useRef({ active, meta, selected, help, total, found, openFiles: quickOpen.open, palette: commandPalette.open });
+  // 스크롤 프레임 측정(성능 HUD가 켜져 있을 때만)
+  const scrollMeter = useRef<ScrollMeter | null>(null);
+  scrollMeter.current ??= new ScrollMeter(
+    () => `그래프 ${lastName(latest.current.meta?.repo ?? repo)}`,
+    ROW_HEIGHT,
+  );
+  useEffect(() => () => scrollMeter.current?.dispose(), []);
   latest.current = { active, meta, selected, help, total, found, openFiles: quickOpen.open, palette: commandPalette.open };
 
   const showToast = (message: string) => {
@@ -405,11 +427,12 @@ function GraphPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [progress]);
 
-  // 보이는 범위(와 앞뒤 여유)의 행을 읽는다.
+  // 그리는 범위(와 앞뒤 여유)의 행을 읽는다.
   useEffect(() => {
     if (total === null) return;
-    const { start, end } = visibleRange(viewport.top, viewport.height, ROW_HEIGHT, total, OVERSCAN);
-    for (const index of cache.current.take(start, end, available)) {
+    const { start, end } = drawWindow(viewport.top, viewport.height, total);
+    const from = Math.max(0, start - OVERSCAN);
+    for (const index of cache.current.take(from, Math.min(total, end + OVERSCAN), available)) {
       handle.current?.rows(index * CHUNK, (index + 1) * CHUNK).then(
         (window) => {
           cache.current.put(window);
@@ -632,7 +655,7 @@ function GraphPane({
   }, []);
 
   const count = total ?? 0;
-  const { start, end } = visibleRange(viewport.top, viewport.height, ROW_HEIGHT, count);
+  const { start, end } = drawWindow(viewport.top, viewport.height, count);
   const visible: Visible[] = [];
   let visibleLanes = 1;
   for (let i = start; i < end; i++) {
@@ -647,25 +670,43 @@ function GraphPane({
     if (visibleLanes > lanes) setLanes(visibleLanes);
   });
 
-  // 레인은 보이는 행만 캔버스에 그린다(스크롤·행 도착·테마 변경마다).
+  // 레인은 그리는 범위의 행만 캔버스에 그린다. 캔버스는 스크롤 내용 안(범위의 첫 행 자리)에 있어 범위 안의 스크롤은
+  // 다시 그리지 않는다. 범위·행 도착·너비·HEAD·테마가 바뀔 때만 다시 그린다.
+  const drawnLanes = useRef<{ key: string; palette: Palette | null }>({ key: "", palette: null });
   useLayoutEffect(() => {
+    drawnRange.current = { start, end, height: viewport.height };
     const canvas = canvasRef.current;
-    if (!canvas || !palette) return;
-    const dpr = window.devicePixelRatio || 1;
-    const height = viewport.height;
-    const w = Math.round(width * dpr);
-    const h = Math.round(height * dpr);
-    if (canvas.width !== w || canvas.height !== h) {
-      canvas.width = w;
-      canvas.height = h;
-      canvas.style.width = `${width}px`;
-      canvas.style.height = `${height}px`;
+    const key = `${start}:${end}:${width}:${meta?.head ?? ""}:${version}:${generation}`;
+    let canvasMs: number | null = null;
+    if (canvas && palette && (drawnLanes.current.key !== key || drawnLanes.current.palette !== palette)) {
+      const t0 = nowMs();
+      drawnLanes.current = { key, palette };
+      const dpr = window.devicePixelRatio || 1;
+      const height = (end - start) * ROW_HEIGHT;
+      const w = Math.round(width * dpr);
+      const h = Math.round(height * dpr);
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+        canvas.style.width = `${width}px`;
+        canvas.style.height = `${height}px`;
+      }
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, width, height);
+        drawRows(ctx, visible, start * ROW_HEIGHT, width, palette, meta?.head ?? null);
+      }
+      canvasMs = nowMs() - t0;
     }
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, width, height);
-    drawRows(ctx, visible, viewport.top, width, palette, meta?.head ?? null);
+    // 스크롤 측정: 지금 보이는 행 가운데 아직 오지 않은 것이 있었나
+    const list = listRef.current;
+    if (list) {
+      const shown = visibleRange(list.scrollTop, list.clientHeight, ROW_HEIGHT, count, 0);
+      let blank = false;
+      for (let i = shown.start; i < shown.end && !blank; i++) blank = cache.current.get(i) === undefined;
+      scrollMeter.current?.drawn(blank, canvasMs);
+    }
   });
 
   const chosen = current();
@@ -773,6 +814,15 @@ function GraphPane({
           onScroll={(e) => {
             const list = e.currentTarget;
             if (latest.current.active) savedTop.current = list.scrollTop;
+            const meter = scrollMeter.current;
+            meter?.scrolled(list.scrollTop);
+            // 미리 그린 범위 안이면 브라우저가 옮기기만 한다(다시 그리지 않는다).
+            const shown = visibleRange(list.scrollTop, list.clientHeight, ROW_HEIGHT, latest.current.total ?? 0, 0);
+            const drawn = drawnRange.current;
+            if (shown.start >= drawn.start && shown.end <= drawn.end && list.clientHeight === drawn.height) {
+              meter?.drawn(false);
+              return;
+            }
             setViewport({ top: list.scrollTop, height: list.clientHeight });
           }}
         >
@@ -802,6 +852,7 @@ function GraphPane({
                 </div>
               );
             })}
+            <canvas className="graph-lanes" ref={canvasRef} aria-hidden="true" style={{ top: start * ROW_HEIGHT }} />
           </div>
           {progress.kind !== "failed" && total === 0 && (
             <div className="blame-message">
@@ -814,7 +865,6 @@ function GraphPane({
             </div>
           )}
         </div>
-        <canvas className="graph-lanes" ref={canvasRef} aria-hidden="true" />
       </div>
       {chosen && (
         <footer className="history-detail">
@@ -854,7 +904,8 @@ function GraphPane({
   );
 }
 
-function Row({ row, nowMs }: { row: GraphRow; nowMs: number }) {
+/** 행 글(이름표·요약·작성자·시각·sha). 범위를 다시 그릴 때 이미 그린 행은 건너뛴다. */
+const Row = memo(function Row({ row, nowMs }: { row: GraphRow; nowMs: number }) {
   return (
     <>
       <Labels labels={row.labels} />
@@ -868,7 +919,7 @@ function Row({ row, nowMs }: { row: GraphRow; nowMs: number }) {
       <span className="history-sha mono">{shortSha(row.sha)}</span>
     </>
   );
-}
+});
 
 const LABEL_TITLE: Record<Label["kind"], string> = {
   head: "HEAD (브랜치가 아니다)",
