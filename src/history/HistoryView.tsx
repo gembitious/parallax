@@ -4,12 +4,14 @@
 //     / 검색, n/N 다음·이전 결과, G 그래프, q 뒤로, ? 도움말.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Help } from "../Help";
+import { WorktreePicker } from "../worktree/WorktreePicker";
+import { historySwitch } from "../worktree/switch";
+import { call } from "../ipc";
 import { copyText } from "../clipboard";
 import { formatCount, formatDate, parseTz, relativeTime, shortSha } from "../blame/format";
 import { STATUS_LETTER, STATUS_NAME } from "../commit/types";
 import type { Navigation } from "../nav";
 import { watchRepo } from "../watch";
-import { call } from "../ipc";
 import { afterPaint, nowMs, record } from "../perf";
 import { Acceleration } from "./Acceleration";
 import { findMatch, formerPaths, matches, scrollToRow, visibleRange } from "./list";
@@ -76,6 +78,7 @@ export function HistoryView({
   const [viewport, setViewport] = useState({ top: 0, height: 0 });
   const [search, setSearch] = useState({ open: false, query: "" });
   const [help, setHelp] = useState(false);
+  const [worktrees, setWorktrees] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   /** 숨겼다 다시 보일 때 되돌릴 스크롤 위치(숨긴 요소의 스크롤은 브라우저마다 남지 않을 수 있다) */
@@ -366,6 +369,9 @@ export function HistoryView({
         case "q":
           onBack();
           break;
+        case "W":
+          setWorktrees(true);
+          break;
         case "?":
           setHelp(true);
           break;
@@ -512,6 +518,23 @@ export function HistoryView({
         </footer>
       )}
       {help && <Help view="history" onClose={() => setHelp(false)} />}
+      {worktrees && meta && (
+        <WorktreePicker
+          repo={meta.repo}
+          onClose={() => setWorktrees(false)}
+          onPick={(worktree) => {
+            setWorktrees(false);
+            // 리비전에서 시작한 히스토리는 그대로, HEAD에서 시작한 것은 그 워크트리의 HEAD에서(라인 히스토리면 줄 범위를
+            // 그 워크트리의 작업트리 줄로 옮긴다: src/worktree/switch.ts).
+            const mapLine = (from: { rev: string; path: string }, line: number) =>
+              call<number>("blame_map_line", { repo: worktree.path, from, to: { rev: null, path: from.path }, line });
+            void historySwitch(worktree, meta, async (from, range) => {
+              const [start, end] = await Promise.all([mapLine(from, range.start), mapLine(from, range.end)]);
+              return { start, end: Math.max(start, end) };
+            }).then((next) => next && onNavigate(next));
+          }}
+        />
+      )}
       {toast && (
         <div className="toast" role="status">
           {toast}

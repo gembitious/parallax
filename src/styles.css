@@ -1077,3 +1077,68 @@ kbd {
   flex-shrink: 0;
   gap: 2px;
 }
+
+/* ---------------------------------------------------------------- 워크트리 고르기 */
+
+.picker {
+  width: min(760px, calc(100vw - 32px));
+  outline: none;
+}
+
+.picker-list {
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.picker-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  align-items: baseline;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: default;
+}
+
+.picker-item.selected {
+  background: var(--selection);
+}
+
+.picker-item.missing {
+  opacity: 0.55;
+}
+
+.picker-name {
+  font-weight: 600;
+}
+
+.picker-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-path {
+  flex-basis: 100%;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 다른 워크트리가 체크아웃한 브랜치·HEAD */
+.label-worktree {
+  border-style: dashed;
+}
+
+.label-wt {
+  margin-left: 4px;
+  opacity: 0.75;
+  font-weight: 400;
+}

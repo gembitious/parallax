@@ -4,6 +4,8 @@
 //     y sha 복사, G 그래프, q 뒤로, ? 도움말.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Help } from "../Help";
+import { WorktreePicker } from "../worktree/WorktreePicker";
+import { commitSwitch } from "../worktree/switch";
 import { copyText } from "../clipboard";
 import { displayText } from "../blame/BlameView";
 import { formatDate, relativeTime, shortSha } from "../blame/format";
@@ -60,6 +62,7 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
   const [mode, setMode] = useState<DiffMode>(readMode);
   const [versions, setVersions] = useState<ReadonlyMap<string, VersionsState>>(() => new Map());
   const [help, setHelp] = useState(false);
+  const [worktrees, setWorktrees] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const diffParent = useRef<HTMLDivElement>(null);
   const diff = useRef<DiffView | null>(null);
@@ -259,6 +262,9 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
         case "q":
           onBack();
           break;
+        case "W":
+          setWorktrees(true);
+          break;
         case "?":
           setHelp(true);
           break;
@@ -389,6 +395,18 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
         </div>
       </div>
       {help && <Help view="commit" onClose={() => setHelp(false)} />}
+      {worktrees && (
+        <WorktreePicker
+          repo={repo}
+          onClose={() => setWorktrees(false)}
+          onPick={(worktree) => {
+            setWorktrees(false);
+            // 그 워크트리의 그래프에서 이 커밋을 고른다(객체는 워크트리끼리 같다).
+            const next = commitSwitch(worktree, latest.current.detail?.info.sha ?? rev);
+            if (next) onNavigate(next);
+          }}
+        />
+      )}
       {toast && (
         <div className="toast" role="status">
           {toast}

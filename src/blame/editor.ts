@@ -30,6 +30,8 @@ export type EditorKeys = {
   lineHistory(): boolean;
   /** `G` 커밋 그래프(커서 줄의 커밋을 골라서) */
   graph(): boolean;
+  /** `W` 워크트리 고르기 */
+  worktrees(): boolean;
   back(): boolean;
   help(): boolean;
   escape(): boolean;
@@ -84,6 +86,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
           { key: "H", run: run(keys.history) },
           { key: "L", run: run(keys.lineHistory) },
           { key: "G", run: run(keys.graph) },
+          { key: "W", run: run(keys.worktrees) },
           { key: "q", run: run(keys.back) },
           { key: "?", run: run(keys.help) },
           { key: "Escape", run: run(keys.escape) },

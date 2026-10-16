@@ -15,6 +15,7 @@ import { CHUNK, RowCache, rowWidth } from "./rows";
 import { nextRow, parseQuery, rowMatches, type Query } from "./search";
 import { CANCELLED, openGraph, type GraphHandle } from "./session";
 import { watchRepo } from "../watch";
+import { WorktreePicker } from "../worktree/WorktreePicker";
 import type { GraphMeta, GraphRow, GraphScope, GraphStats, Label } from "./types";
 
 type Props = {
@@ -143,6 +144,7 @@ function GraphPane({
   const [generation, setGeneration] = useState(0);
   const [palette, setPalette] = useState<Palette | null>(null);
   const [help, setHelp] = useState(false);
+  const [worktrees, setWorktrees] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [search, setSearch] = useState({ open: false, input: "" });
   const [found, setFound] = useState<Found | null>(null);
@@ -598,6 +600,9 @@ function GraphPane({
         case "q":
           onBack();
           break;
+        case "W":
+          setWorktrees(true);
+          break;
         case "?":
           setHelp(true);
           break;
@@ -819,6 +824,16 @@ function GraphPane({
         </footer>
       )}
       {help && <Help view="graph" onClose={() => setHelp(false)} />}
+      {worktrees && (
+        <WorktreePicker
+          repo={meta?.repo ?? repo}
+          onClose={() => setWorktrees(false)}
+          onPick={(worktree) => {
+            setWorktrees(false);
+            if (!worktree.current) onNavigate({ kind: "graph", repo: worktree.path, rev: null });
+          }}
+        />
+      )}
       {toast && (
         <div className="toast" role="status">
           {toast}
@@ -859,11 +874,14 @@ function Labels({ labels }: { labels: Label[] }) {
     <>
       {shown.map((label) => (
         <span
-          key={`${label.kind}:${label.name}`}
-          className={`label label-${label.kind}${label.current ? " current" : ""}`}
-          title={`${LABEL_TITLE[label.kind]}${label.current ? " · HEAD" : ""}: ${label.name}`}
+          key={`${label.kind}:${label.name}:${label.worktree ?? ""}`}
+          className={`label label-${label.kind}${label.current ? " current" : ""}${label.worktree ? " label-worktree" : ""}`}
+          title={`${LABEL_TITLE[label.kind]}${label.current ? " · HEAD" : ""}: ${label.name}${
+            label.worktree ? ` (워크트리 ${label.worktree}에서 체크아웃)` : ""
+          }`}
         >
           {label.name}
+          {label.worktree && <span className="label-wt">{label.worktree}</span>}
         </span>
       ))}
       {rest.length > 0 && (

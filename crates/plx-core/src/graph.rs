@@ -652,6 +652,9 @@ pub struct Label {
     pub kind: LabelKind,
     /// HEAD가 가리키는 브랜치(detached면 `HEAD` 이름표)
     pub current: bool,
+    /// 다른 워크트리가 체크아웃한 브랜치·HEAD면 그 워크트리 이름
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -798,6 +801,13 @@ fn read_refs(repo: &Repo, options: GraphOptions) -> Result<Refs, String> {
             hidden_remotes += 1;
         }
     }
+    // 다른 워크트리의 detached HEAD도 시작점이다(`git log --all`처럼). 그 워크트리에서 브랜치 없이 한 일이 보인다.
+    let elsewhere = crate::worktree::checked_out_elsewhere(repo);
+    if scope != GraphScope::Head {
+        for (id, _) in &elsewhere.detached {
+            add_tip(*id);
+        }
+    }
     let mut revs: Vec<String> = Vec::new();
     if head.is_some() {
         revs.push("HEAD".to_owned());
@@ -815,15 +825,22 @@ fn read_refs(repo: &Repo, options: GraphOptions) -> Result<Refs, String> {
         }
         GraphScope::All => revs.extend(["--branches".to_owned(), "--remotes".to_owned()]),
     }
+    if scope != GraphScope::Head {
+        revs.extend(elsewhere.detached.iter().map(|(id, _)| id.to_string()));
+    }
 
     let mut labels: HashMap<ObjectId, Vec<Label>> = HashMap::new();
     let mut label = |id: ObjectId, name: &BString, kind: LabelKind| {
         let name = name.to_str_lossy().into_owned();
         let current = kind == LabelKind::Branch && branch.as_deref() == Some(name.as_str());
+        let worktree = (kind == LabelKind::Branch)
+            .then(|| elsewhere.branches.get(&name).map(|names| names.join(", ")))
+            .flatten();
         labels.entry(id).or_default().push(Label {
             name,
             kind,
             current,
+            worktree,
         });
     };
     for (name, id) in &branches {
@@ -843,6 +860,16 @@ fn read_refs(repo: &Repo, options: GraphOptions) -> Result<Refs, String> {
             name: "HEAD".to_owned(),
             kind: LabelKind::Head,
             current: true,
+            worktree: None,
+        });
+    }
+    // 다른 워크트리의 detached HEAD
+    for (id, worktree) in &elsewhere.detached {
+        labels.entry(*id).or_default().push(Label {
+            name: "HEAD".to_owned(),
+            kind: LabelKind::Head,
+            current: false,
+            worktree: Some(worktree.clone()),
         });
     }
     // 현재 브랜치(또는 HEAD)를 맨 앞에, 그다음 브랜치·원격·태그 순으로

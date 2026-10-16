@@ -24,6 +24,7 @@ pub mod similarity;
 pub mod text;
 pub mod time;
 pub mod watch;
+pub mod worktree;
 
 /// 코어 크레이트 버전. 앱 정보 표시와 캐시 키 버전에 쓴다.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

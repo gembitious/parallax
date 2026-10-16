@@ -12,6 +12,8 @@ import { blameChanged } from "./gutter";
 import { BlameModel } from "./model";
 import type { Navigation } from "../nav";
 import { watchFile, watchRepo } from "../watch";
+import { WorktreePicker } from "../worktree/WorktreePicker";
+import { blameSwitch } from "../worktree/switch";
 import { openBlame, type BlameTarget } from "./session";
 import type { BlameMeta, BlameStats, CommitInfo, Neighbor, Version } from "./types";
 
@@ -58,6 +60,7 @@ type Actions = {
   history(): boolean;
   lineHistory(): boolean;
   graph(): boolean;
+  worktrees(): boolean;
   back(): boolean;
   help(): boolean;
   escape(): boolean;
@@ -102,6 +105,7 @@ export function BlameView({
   const [hover, setHover] = useState<Hover | null>(null);
   const [infos, setInfos] = useState<ReadonlyMap<string, InfoState>>(() => new Map());
   const [help, setHelp] = useState(false);
+  const [worktrees, setWorktrees] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
   const timers = useRef({ show: 0, hide: 0, toast: 0 });
@@ -318,6 +322,10 @@ export function BlameView({
       onNavigate({ kind: "graph", repo: m.repo, rev });
       return true;
     },
+    worktrees() {
+      setWorktrees(true);
+      return true;
+    },
     back() {
       onBack();
       return true;
@@ -409,6 +417,7 @@ export function BlameView({
                 history: () => actions.current.history(),
                 lineHistory: () => actions.current.lineHistory(),
                 graph: () => actions.current.graph(),
+                worktrees: () => actions.current.worktrees(),
                 back: () => actions.current.back(),
                 help: () => actions.current.help(),
                 escape: () => actions.current.escape(),
@@ -483,6 +492,7 @@ export function BlameView({
       if (!latest.current.active || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
       const target = e.target as HTMLElement | null;
       if (target?.closest(".cm-editor") || target?.closest("input, textarea")) return;
+      // W는 코드 뷰가 없는 화면(바이너리, 오류)에서도 먹는다.
       const handled =
         e.key === "q"
           ? actions.current.back()
@@ -490,7 +500,9 @@ export function BlameView({
             ? actions.current.help()
             : e.key === "H"
               ? actions.current.history()
-              : e.key === "Escape" && actions.current.escape();
+              : e.key === "W"
+                ? actions.current.worktrees()
+                : e.key === "Escape" && actions.current.escape();
       if (handled) e.preventDefault();
     };
     window.addEventListener("keydown", onKey);
@@ -570,6 +582,22 @@ export function BlameView({
           onClose={() => {
             setHelp(false);
             editor.current?.view.focus();
+          }}
+        />
+      )}
+      {worktrees && (
+        <WorktreePicker
+          repo={meta?.repo ?? target.repo ?? target.path}
+          onClose={() => {
+            setWorktrees(false);
+            editor.current?.view.focus();
+          }}
+          onPick={(worktree) => {
+            setWorktrees(false);
+            // 작업트리 blame은 그 워크트리의 같은 파일·줄, 리비전 blame은 같은 리비전(src/worktree/switch.ts)
+            const next = blameSwitch(worktree, meta, editor.current ? cursorLine() : null);
+            if (next) onNavigate(next);
+            else editor.current?.view.focus();
           }}
         />
       )}
