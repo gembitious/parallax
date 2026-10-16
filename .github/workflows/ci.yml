@@ -144,6 +144,15 @@ jobs:
       - name: 릴리스 빌드
         run: npm run tauri build -- ${{ runner.os == 'macOS' && '--bundles app' || '--no-bundle' }}
 
+      # 릴리스 빌드가 모은 오픈 소스 라이선스 고지(scripts/third-party-notices.mjs)가 실행 파일에 묻힐 dist에 있다.
+      - name: 오픈 소스 라이선스 고지
+        run: |
+          f=dist/third-party-notices.txt
+          test -s "$f"
+          grep -q '^Rust tauri 2\.' "$f"
+          grep -q '^npm react ' "$f"
+          head -4 "$f"
+
       - name: 앱 확인 (Linux, 가상 화면)
         if: runner.os == 'Linux'
         timeout-minutes: 10
