@@ -6,14 +6,18 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Help } from "../Help";
 import { WorktreePicker } from "../worktree/WorktreePicker";
 import { call } from "../ipc";
-import { isQuickOpenKey, useQuickOpen } from "../quickopen/QuickOpen";
+import { useQuickOpen } from "../quickopen/QuickOpen";
+import { commonCommands, usePalette, type Command } from "../palette/Palette";
+import { routeKey } from "../keys";
+import { openInEditor } from "../editor";
+import { toggleHud } from "../Hud";
 import { historySwitch } from "../worktree/switch";
 import { copyText } from "../clipboard";
 import { formatCount, formatDate, parseTz, relativeTime, shortSha } from "../blame/format";
 import { STATUS_LETTER, STATUS_NAME } from "../commit/types";
 import type { Navigation } from "../nav";
 import { watchRepo } from "../watch";
-import { afterPaint, nowMs, record } from "../perf";
+import { afterPaint, getPerfInfo, nowMs, record } from "../perf";
 import { Acceleration } from "./Acceleration";
 import { findMatch, formerPaths, matches, scrollToRow, visibleRange } from "./list";
 import { openHistory } from "./session";
@@ -100,8 +104,32 @@ export function HistoryView({
     page: null as Promise<number | null> | null,
     reported: false,
   });
-  const latest = useRef({ active, meta, selected, help, search, count, openFiles: quickOpen.open });
-  latest.current = { active, meta, selected, help, search, count, openFiles: quickOpen.open };
+  const [accelRequest, setAccelRequest] = useState(0);
+  // 명령 팔레트: 키로 하는 일 모두와 머리줄의 가속 설정 버튼. 함수들은 아래에 있다(누를 때 부른다).
+  const commands: Command[] = [
+    { label: "커밋 상세 (이 파일 diff)", keys: "Enter", run: () => openCommit() },
+    { label: "이 리비전의 파일 blame", keys: "b", run: () => openBlame(false) },
+    { label: "바꾸기 전 리비전의 파일 blame", keys: ",", run: () => openBlame(true) },
+    { label: "커밋 그래프 (고른 커밋)", keys: "G", run: () => openGraph() },
+    { label: "커밋 sha 복사", keys: "y", run: () => copySha() },
+    { label: "검색 (요약·작성자·sha·경로)", keys: "/", run: () => setSearch((s) => ({ ...s, open: true })) },
+    { label: "다음 검색 결과", keys: "n", run: () => findNext(1) },
+    { label: "이전 검색 결과", keys: "N", run: () => findNext(-1) },
+    { label: "처음 커밋으로", keys: "Home", run: () => select(0) },
+    { label: "마지막 커밋으로", keys: "End", run: () => select(latest.current.count - 1) },
+    { label: "에디터로 열기", keys: "o", detail: "작업트리 파일", run: () => openEditor() },
+    { label: "가속 설정 (commit-graph·Bloom 필터)", detail: "히스토리를 빠르게", run: () => setAccelRequest((n) => n + 1) },
+    ...commonCommands({
+      files: quickOpen.open,
+      worktrees: () => setWorktrees(true),
+      help: () => setHelp(true),
+      back: onBack,
+      hud: getPerfInfo().enabled ? toggleHud : undefined,
+    }),
+  ];
+  const palette = usePalette(commands, () => listRef.current?.focus({ preventScroll: true }));
+  const latest = useRef({ active, meta, selected, help, search, count, openFiles: quickOpen.open, palette: palette.open });
+  latest.current = { active, meta, selected, help, search, count, openFiles: quickOpen.open, palette: palette.open };
 
   const showToast = (message: string) => {
     setToast(message);
@@ -302,6 +330,22 @@ export function HistoryView({
     }
   };
 
+  const openGraph = () => {
+    const at = current();
+    if (at) onNavigate({ kind: "graph", repo: at.m.repo, rev: at.e.sha });
+  };
+
+  /** 작업트리 파일을 에디터로(라인 히스토리면 그 범위의 첫 줄). 저장소 전체 히스토리면 작업트리 폴더. */
+  const openEditor = () => {
+    const m = latest.current.meta;
+    if (!m) {
+      showToast("아직 히스토리를 여는 중이다");
+      return;
+    }
+    const path = m.path === "." ? null : m.path;
+    openInEditor({ repo: m.repo, path, rev: m.rev, line: lines?.start ?? null }).then(showToast);
+  };
+
   const copySha = () => {
     const at = current();
     if (!at) return;
@@ -322,14 +366,8 @@ export function HistoryView({
   // 키: 화면이 맨 위일 때만. 검색 입력 중이면 넘긴다(입력 칸이 Enter·Esc를 따로 다룬다).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!latest.current.active || e.defaultPrevented) return;
-      if (isQuickOpenKey(e)) {
-        latest.current.openFiles();
-        e.preventDefault();
-        return;
-      }
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
-      if ((e.target as HTMLElement | null)?.closest("input, textarea")) return;
+      const { active: on, openFiles, palette: openPalette } = latest.current;
+      if (!on || routeKey(e, { files: openFiles, palette: openPalette }) !== "view") return;
       const { selected: at, help: helpOpen } = latest.current;
       let handled = true;
       switch (e.key) {
@@ -375,11 +413,12 @@ export function HistoryView({
         case "N":
           findNext(-1);
           break;
-        case "G": {
-          const at = current();
-          if (at) onNavigate({ kind: "graph", repo: at.m.repo, rev: at.e.sha });
+        case "G":
+          openGraph();
           break;
-        }
+        case "o":
+          openEditor();
+          break;
         case "q":
           onBack();
           break;
@@ -436,7 +475,7 @@ export function HistoryView({
             뒤로 q · {depth - 1}
           </span>
         )}
-        {meta && <Acceleration repo={meta.repo} onDone={showToast} />}
+        {meta && <Acceleration repo={meta.repo} request={accelRequest} onDone={showToast} />}
         <span className="blame-status">
           {progress.kind === "loading" && "여는 중…"}
           {progress.kind === "streaming" && `읽는 중… 커밋 ${formatCount(count)}개`}
@@ -550,6 +589,7 @@ export function HistoryView({
         />
       )}
       {quickOpen.overlay}
+      {palette.overlay}
       {toast && (
         <div className="toast" role="status">
           {toast}

@@ -9,14 +9,18 @@ import { formatCount, formatDate, relativeTime, shortSha } from "../blame/format
 import { Acceleration } from "../history/Acceleration";
 import { scrollToRow, visibleRange } from "../history/list";
 import { lastName, type Navigation } from "../nav";
-import { afterPaint, nowMs, record } from "../perf";
+import { afterPaint, getPerfInfo, nowMs, record } from "../perf";
 import { drawRows, graphWidth, readPalette, ROW_HEIGHT, type Palette, type Visible } from "./draw";
 import { CHUNK, RowCache, rowWidth } from "./rows";
 import { nextRow, parseQuery, rowMatches, type Query } from "./search";
 import { CANCELLED, openGraph, type GraphHandle } from "./session";
 import { watchRepo } from "../watch";
 import { WorktreePicker } from "../worktree/WorktreePicker";
-import { isQuickOpenKey, useQuickOpen } from "../quickopen/QuickOpen";
+import { useQuickOpen } from "../quickopen/QuickOpen";
+import { commonCommands, usePalette, type Command } from "../palette/Palette";
+import { routeKey } from "../keys";
+import { openInEditor } from "../editor";
+import { toggleHud } from "../Hud";
 import type { GraphMeta, GraphRow, GraphScope, GraphStats, Label } from "./types";
 
 type Props = {
@@ -179,8 +183,37 @@ function GraphPane({
     painted: null as Promise<number | null> | null,
     reported: false,
   });
-  const latest = useRef({ active, meta, selected, help, total, found, openFiles: quickOpen.open });
-  latest.current = { active, meta, selected, help, total, found, openFiles: quickOpen.open };
+  const [accelRequest, setAccelRequest] = useState(0);
+  // 명령 팔레트: 키로 하는 일 모두와 머리줄 버튼(범위, 가속 설정). 함수들은 아래에 있다(누를 때 부른다).
+  const commands: Command[] = [
+    { label: "커밋 상세", keys: "Enter", run: () => openCommit() },
+    { label: "커밋 sha 복사", keys: "y", run: () => copySha() },
+    ...SCOPES.map(
+      (s): Command => ({
+        label: `범위: ${s.name}`,
+        keys: s.scope === "all" ? "R" : undefined,
+        detail: s.title,
+        run: () => changeScope(s.scope),
+      }),
+    ),
+    { label: "검색 (메시지·작성자·sha, path:경로)", keys: "/", run: () => setSearch((s) => ({ ...s, open: true })) },
+    { label: "다음 검색 결과", keys: "n", run: () => runSearch(true) },
+    { label: "이전 검색 결과", keys: "N", run: () => runSearch(false) },
+    { label: "맨 위(최근) 커밋으로", keys: "Home", run: () => select(0) },
+    { label: "맨 아래 커밋으로", keys: "End", run: () => select((latest.current.total ?? 1) - 1) },
+    { label: "에디터로 열기", keys: "o", detail: "작업트리 폴더", run: () => openEditor() },
+    { label: "가속 설정 (commit-graph·Bloom 필터)", detail: "그래프·히스토리를 빠르게", run: () => setAccelRequest((n) => n + 1) },
+    ...commonCommands({
+      files: quickOpen.open,
+      worktrees: () => setWorktrees(true),
+      help: () => setHelp(true),
+      back: onBack,
+      hud: getPerfInfo().enabled ? toggleHud : undefined,
+    }),
+  ];
+  const commandPalette = usePalette(commands, () => listRef.current?.focus({ preventScroll: true }));
+  const latest = useRef({ active, meta, selected, help, total, found, openFiles: quickOpen.open, palette: commandPalette.open });
+  latest.current = { active, meta, selected, help, total, found, openFiles: quickOpen.open, palette: commandPalette.open };
 
   const showToast = (message: string) => {
     setToast(message);
@@ -474,6 +507,8 @@ function GraphPane({
 
   const changeScope = (next: GraphScope) => onScope(next, current()?.sha ?? null);
 
+  const openEditor = () => openInEditor({ repo: meta?.repo ?? repo, path: null, rev: null, line: null }).then(showToast);
+
   /**
    * 세션을 바꿔 끼웠다: 하던 검색은 버리고(앞 세션의 행 번호다), 경로 일치는 새 세션에서 다시 구한다(위에 커밋이
    * 생기면 행 번호가 밀린다). 메시지 검색은 행마다 다시 맞춰 보므로 그대로 둔다.
@@ -557,17 +592,10 @@ function GraphPane({
   // 키: 화면이 맨 위일 때만.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!latest.current.active || e.defaultPrevented) return;
-      if (isQuickOpenKey(e)) {
-        latest.current.openFiles();
-        e.preventDefault();
-        return;
-      }
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
-      const target = e.target as HTMLElement | null;
-      if (target?.closest("input, textarea")) return;
+      const { active: on, openFiles, palette: openPalette } = latest.current;
+      if (!on || routeKey(e, { files: openFiles, palette: openPalette }) !== "view") return;
       // 머리줄 버튼에 초점이 있으면 Enter·Space는 버튼이 받는다.
-      if (target?.closest("button") && (e.key === "Enter" || e.key === " ")) return;
+      if ((e.target as HTMLElement | null)?.closest("button") && (e.key === "Enter" || e.key === " ")) return;
       const { selected: at, help: helpOpen } = latest.current;
       let handled = true;
       switch (e.key) {
@@ -615,6 +643,9 @@ function GraphPane({
           break;
         case "W":
           setWorktrees(true);
+          break;
+        case "o":
+          openEditor();
           break;
         case "?":
           setHelp(true);
@@ -731,7 +762,7 @@ function GraphPane({
             뒤로 q · {depth - 1}
           </span>
         )}
-        {meta && <Acceleration repo={meta.repo} onDone={showToast} />}
+        {meta && <Acceleration repo={meta.repo} request={accelRequest} onDone={showToast} />}
         <span className="blame-status">
           {progress.kind === "loading" &&
             (progress.commits > 0 ? `커밋 ${formatCount(progress.commits)}개 읽는 중…` : "여는 중…")}
@@ -848,6 +879,7 @@ function GraphPane({
         />
       )}
       {quickOpen.overlay}
+      {commandPalette.overlay}
       {toast && (
         <div className="toast" role="status">
           {toast}

@@ -1,6 +1,6 @@
 # parallax 마일스톤
 
-**진행 중: M4** (M0~M3은 Windows·macOS 화면 확인 대기, M3의 orrery 렌더링 비교는 남음) — 마일스톤을 끝낼 때마다 이 줄과 체크박스를 갱신한다.
+**진행 중: M5(선택)** (M0~M4는 Windows·macOS 화면 확인 대기, M3의 orrery 렌더링 비교는 남음) — 마일스톤을 끝낼 때마다 이 줄과 체크박스를 갱신한다.
 
 ## 성능 예산
 baseline은 M0에서 같은 머신·같은 저장소로 git CLI를 직접 잰 값이다. 이력 질의 목표는 "baseline + 우리 오버헤드"로 정의한다.
@@ -81,9 +81,14 @@ baseline 표가 `bench/results.md`에 있다.
       `Shift+Enter` 파일 히스토리, `파일:줄`이면 그 줄로. 파일 이름 일치를 앞세우고(VS Code처럼) 한글 초성·조합 중인
       음절도 맞춘다(`plx_core::fuzzy`, CLAUDE.md 결정 기록). 빈 검색어는 최근 연 파일부터, 작업트리에서 지운 파일은
       표시하고 HEAD 버전 blame으로 — Windows·macOS 실기 확인 필요
-- [ ] 커맨드 팔레트, 에디터로 열기 (VS Code·Zed, `file:line`)
+- [x] 커맨드 팔레트, 에디터로 열기 (VS Code·Zed, `file:line`): 어느 화면에서든 `:`·Ctrl+Shift+P(⌘⇧P)로 그 화면의
+      할 일을 이름·초성으로 찾아 실행한다(키가 없던 그래프 범위·가속 설정 포함). `o`는 작업트리 파일의 그 줄을
+      에디터로 연다(`PLX_EDITOR`, 리비전의 줄은 작업트리 줄로, 그 뒤 rename은 새 이름으로). blame의 커밋 카드는 `i`
+      — Windows·macOS 실기 확인 필요
 
 **완료 기준:** 외부 커밋 후 1초 안에 반영. 키보드만으로 M1~M3 기능 전부 사용 가능.
+→ Linux 충족: 외부 커밋 반영 약 0.2초(CI는 2초 안에 확인), 마우스로만 되던 커밋 카드 고정·그래프 HEAD 범위·가속 설정을
+키(`i`)와 명령 팔레트로 옮겼다. Windows·macOS 확인 대기.
 
 ## M5 — (선택) AI 출처 오버레이
 - [ ] `refs/notes/ai` 읽기 (git-ai 노트 포맷 스펙 확인 후 구현)

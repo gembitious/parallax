@@ -5,14 +5,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Help } from "../Help";
 import { WorktreePicker } from "../worktree/WorktreePicker";
-import { isQuickOpenKey, useQuickOpen } from "../quickopen/QuickOpen";
+import { useQuickOpen } from "../quickopen/QuickOpen";
+import { commonCommands, usePalette, type Command } from "../palette/Palette";
+import { routeKey } from "../keys";
+import { openInEditor } from "../editor";
+import { toggleHud } from "../Hud";
 import { commitSwitch } from "../worktree/switch";
 import { copyText } from "../clipboard";
 import { displayText } from "../blame/BlameView";
 import { formatDate, relativeTime, shortSha } from "../blame/format";
 import { call } from "../ipc";
 import type { Navigation } from "../nav";
-import { afterPaint, nowMs, record } from "../perf";
+import { afterPaint, getPerfInfo, nowMs, record } from "../perf";
 import { createDiffView, type DiffMode, type DiffView } from "./diff";
 import { STATUS_LETTER, STATUS_NAME, type CommitDetail, type FileChange, type FileVersions } from "./types";
 
@@ -73,8 +77,29 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
   /** 첫 diff까지의 측정: 상세 도착 → 목록 표시 → diff 도착 → diff 표시 */
   const timing = useRef({ t0: nowMs(), detailMs: NaN, listPainted: null as Promise<number | null> | null, reported: false });
   const detail = useMemo(() => narrowed(full, narrow ? path : null), [full, narrow, path]);
-  const latest = useRef({ active, detail, selected, help, mode, narrow, openFiles: quickOpen.open });
-  latest.current = { active, detail, selected, help, mode, narrow, openFiles: quickOpen.open };
+  // 명령 팔레트: 키로 하는 일 모두. 함수들은 아래에 있다(누를 때 부른다).
+  const commands: Command[] = [
+    { label: "다음 파일", keys: "j", run: () => select(latest.current.selected + 1) },
+    { label: "이전 파일", keys: "k", run: () => select(latest.current.selected - 1) },
+    { label: "다음 바뀐 부분", keys: "n", run: () => diff.current?.next() },
+    { label: "이전 바뀐 부분", keys: "N", run: () => diff.current?.previous() },
+    { label: "분할 ↔ 통합 보기", keys: "u", run: () => toggleMode() },
+    { label: "이 리비전의 파일 blame", keys: "Enter", run: () => openBlame() },
+    ...(path !== null ? [{ label: "이 파일만 ↔ 모든 파일", keys: "a", run: () => toggleNarrow() }] : []),
+    { label: "커밋 sha 복사", keys: "y", run: () => copySha() },
+    { label: "커밋 그래프 (이 커밋)", keys: "G", run: () => openGraph() },
+    { label: "에디터로 열기", keys: "o", detail: "고른 파일의 첫 바뀐 줄(작업트리)", run: () => openEditor() },
+    ...commonCommands({
+      files: quickOpen.open,
+      worktrees: () => setWorktrees(true),
+      help: () => setHelp(true),
+      back: onBack,
+      hud: getPerfInfo().enabled ? toggleHud : undefined,
+    }),
+  ];
+  const palette = usePalette(commands);
+  const latest = useRef({ active, detail, selected, help, mode, narrow, openFiles: quickOpen.open, palette: palette.open });
+  latest.current = { active, detail, selected, help, mode, narrow, openFiles: quickOpen.open, palette: palette.open };
 
   const showToast = (message: string) => {
     setToast(message);
@@ -200,6 +225,29 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
     onNavigate({ kind: "file", target: { repo, path: f.path, rev: d.info.sha }, line: diff.current?.firstChangedLine() ?? null });
   };
 
+  /** 고른 파일을 에디터로: 작업트리 파일의 줄(이 커밋 버전의 첫 바뀐 줄을 옮긴 것). 지운 파일은 옛 경로로 본다. */
+  const openEditor = () => {
+    const d = latest.current.detail;
+    const f = d?.files[latest.current.selected];
+    if (!d || !f) return;
+    const deleted = f.status === "deleted";
+    openInEditor({
+      repo,
+      path: f.path,
+      rev: deleted ? null : d.info.sha,
+      line: deleted ? null : (diff.current?.firstChangedLine() ?? null),
+    }).then(showToast);
+  };
+
+  const openGraph = () => onNavigate({ kind: "graph", repo, rev: latest.current.detail?.info.sha ?? rev });
+
+  const toggleMode = () =>
+    setMode((m) => {
+      const next = m === "split" ? "unified" : "split";
+      writeMode(next);
+      return next;
+    });
+
   /** 이 파일만 ↔ 모든 파일. 고른 파일은 그대로 둔다. */
   const toggleNarrow = () => {
     const { detail: shown, selected: at, narrow: isNarrow } = latest.current;
@@ -225,14 +273,8 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
   // 키: 화면이 맨 위일 때만. 검색 입력 중이면 넘긴다.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!latest.current.active || e.defaultPrevented) return;
-      if (isQuickOpenKey(e)) {
-        latest.current.openFiles();
-        e.preventDefault();
-        return;
-      }
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
-      if ((e.target as HTMLElement | null)?.closest("input, textarea")) return;
+      const { active: on, openFiles, palette: openPalette } = latest.current;
+      if (!on || routeKey(e, { files: openFiles, palette: openPalette }) !== "view") return;
       const { selected: at, help: helpOpen } = latest.current;
       let handled = true;
       switch (e.key) {
@@ -249,11 +291,10 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
           diff.current?.previous();
           break;
         case "u":
-          setMode((m) => {
-            const next = m === "split" ? "unified" : "split";
-            writeMode(next);
-            return next;
-          });
+          toggleMode();
+          break;
+        case "o":
+          openEditor();
           break;
         case "Enter":
           openBlame();
@@ -265,7 +306,7 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
           copySha();
           break;
         case "G":
-          onNavigate({ kind: "graph", repo, rev: latest.current.detail?.info.sha ?? rev });
+          openGraph();
           break;
         case "q":
           onBack();
@@ -297,6 +338,7 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
           <p>{fatal}</p>
         </div>
         {quickOpen.overlay}
+        {palette.overlay}
       </section>
     );
   }
@@ -417,6 +459,7 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
         />
       )}
       {quickOpen.overlay}
+      {palette.overlay}
       {toast && (
         <div className="toast" role="status">
           {toast}

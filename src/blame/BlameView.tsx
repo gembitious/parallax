@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Help } from "../Help";
 import { copyText } from "../clipboard";
 import { call } from "../ipc";
-import { afterPaint, nowMs, record } from "../perf";
+import { afterPaint, getPerfInfo, nowMs, record } from "../perf";
 import { CommitCard, type InfoState } from "./CommitCard";
 import { createEditor, type Editor } from "./editor";
 import { formatCount, isUncommitted, shortSha } from "./format";
@@ -13,7 +13,12 @@ import { BlameModel } from "./model";
 import type { Navigation } from "../nav";
 import { watchFile, watchRepo } from "../watch";
 import { WorktreePicker } from "../worktree/WorktreePicker";
-import { isQuickOpenKey, useQuickOpen } from "../quickopen/QuickOpen";
+import { useQuickOpen } from "../quickopen/QuickOpen";
+import { commonCommands, usePalette, type Command } from "../palette/Palette";
+import { routeKey } from "../keys";
+import { openInEditor } from "../editor";
+import { toggleHud } from "../Hud";
+import { openSearchPanel } from "@codemirror/search";
 import { blameSwitch } from "../worktree/switch";
 import { openBlame, type BlameTarget } from "./session";
 import type { BlameMeta, BlameStats, CommitInfo, Neighbor, Version } from "./types";
@@ -63,6 +68,10 @@ type Actions = {
   graph(): boolean;
   worktrees(): boolean;
   files(): boolean;
+  card(): boolean;
+  openEditor(): boolean;
+  palette(): boolean;
+  search(): boolean;
   back(): boolean;
   help(): boolean;
   escape(): boolean;
@@ -116,6 +125,30 @@ export function BlameView({
     onNavigate,
     onClosed: () => editor.current?.view.focus(),
   });
+
+  // 명령 팔레트: 키로 하는 일 모두와 마우스로만 되던 카드 고정. 동작은 actions(아래)를 부른다.
+  const run = (name: keyof Actions) => () => void (actions.current[name] as () => boolean)();
+  const commands: Command[] = [
+    { label: "이 줄 커밋의 상세", keys: "Enter", run: run("enter") },
+    { label: "커밋 카드 보이기·닫기", keys: "i", detail: "전체 메시지, 날짜, 바뀐 파일 수", run: run("card") },
+    { label: "부모 리비전 blame (이 줄을 바꾸기 전)", keys: ",", run: run("parent") },
+    { label: "이전 리비전", keys: "<", run: run("older") },
+    { label: "다음 리비전", keys: ">", run: run("newer") },
+    { label: "파일 히스토리", keys: "H", run: run("history") },
+    { label: "라인 히스토리 (선택한 줄)", keys: "L", run: run("lineHistory") },
+    { label: "커밋 그래프 (이 줄의 커밋)", keys: "G", run: run("graph") },
+    { label: "커밋 sha 복사", keys: "y", run: run("copySha") },
+    { label: "파일 안에서 찾기", keys: "/", run: run("search") },
+    { label: "에디터로 열기", keys: "o", detail: "작업트리 파일의 이 줄", run: run("openEditor") },
+    ...commonCommands({
+      files: run("files"),
+      worktrees: run("worktrees"),
+      help: run("help"),
+      back: run("back"),
+      hud: getPerfInfo().enabled ? toggleHud : undefined,
+    }),
+  ];
+  const palette = usePalette(commands, () => editor.current?.view.focus());
 
   const timers = useRef({ show: 0, hide: 0, toast: 0 });
   const pointerInCard = useRef(false);
@@ -339,6 +372,30 @@ export function BlameView({
       quickOpen.open();
       return true;
     },
+    card() {
+      // 커서 줄의 커밋 카드를 고정해 연다(이미 그 줄이 고정돼 있으면 닫는다). 마우스의 거터 클릭과 같다.
+      const n = cursorLine();
+      const current = latest.current.hover;
+      if (current?.pinned && current.line === n) closeCard();
+      else if (model.current?.sha(n) === undefined) showToast("이 줄은 아직 blame 정보가 없다");
+      else actions.current.pin(n);
+      return true;
+    },
+    openEditor() {
+      const m = latest.current.meta;
+      if (!m) showToast("아직 파일을 여는 중이다");
+      else openInEditor({ repo: m.repo, path: m.path, rev: m.rev, line: cursorLine() }).then(showToast);
+      return true;
+    },
+    palette() {
+      palette.open();
+      return true;
+    },
+    search() {
+      const view = editor.current?.view;
+      if (view) openSearchPanel(view);
+      return true;
+    },
     back() {
       onBack();
       return true;
@@ -434,6 +491,9 @@ export function BlameView({
                 graph: () => actions.current.graph(),
                 worktrees: () => actions.current.worktrees(),
                 files: () => actions.current.files(),
+                card: () => actions.current.card(),
+                openEditor: () => actions.current.openEditor(),
+                palette: () => actions.current.palette(),
                 back: () => actions.current.back(),
                 help: () => actions.current.help(),
                 escape: () => actions.current.escape(),
@@ -505,15 +565,9 @@ export function BlameView({
   // 에디터 밖(카드, 머리줄)에 포커스가 있어도 q·?·Esc는 먹게 한다.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!latest.current.active || e.defaultPrevented) return;
-      if (isQuickOpenKey(e)) {
-        actions.current.files();
-        e.preventDefault();
-        return;
-      }
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
-      const target = e.target as HTMLElement | null;
-      if (target?.closest(".cm-editor") || target?.closest("input, textarea")) return;
+      if (!latest.current.active || routeKey(e, actions.current) !== "view") return;
+      // 코드 뷰 안의 키는 코드 뷰의 키맵이 받는다.
+      if ((e.target as HTMLElement | null)?.closest(".cm-editor")) return;
       // W는 코드 뷰가 없는 화면(바이너리, 오류)에서도 먹는다.
       const handled =
         e.key === "q"
@@ -624,6 +678,7 @@ export function BlameView({
         />
       )}
       {quickOpen.overlay}
+      {palette.overlay}
       {toast && (
         <div className="toast" role="status">
           {toast}

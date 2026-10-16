@@ -2,7 +2,9 @@
 type Key = { keys: string; what: string; note?: string; planned?: boolean };
 
 const COMMON: Key[] = [
+  { keys: ": / Ctrl+Shift+P", what: "명령 팔레트", note: "macOS ⌘⇧P · 할 일을 이름·초성으로 찾는다" },
   { keys: "f / Ctrl+P", what: "파일 찾기 (Quick Open)", note: "macOS ⌘P · 초성 ㅍㅇ · 파일:줄 · Shift+Enter 히스토리" },
+  { keys: "o", what: "에디터로 열기", note: "VS Code·Zed 등 작업트리 파일의 그 줄, PLX_EDITOR로 고른다" },
   { keys: "W", what: "워크트리 고르기", note: "그 워크트리의 같은 화면으로" },
   { keys: "q", what: "뒤로", note: "맨 앞 화면이면 창 숨기기" },
   { keys: "?", what: "이 도움말" },
@@ -29,7 +31,7 @@ const KEYS: Record<HelpView, Key[]> = {
     { keys: "y", what: "커밋 sha 복사" },
     { keys: "/", what: "검색" },
     { keys: "n / N", what: "다음·이전 검색 결과" },
-    { keys: "거터 클릭", what: "커밋 카드 고정" },
+    { keys: "i", what: "커밋 카드 보이기·닫기", note: "거터 클릭으로도 고정" },
     { keys: "H", what: "파일 히스토리 (이 리비전부터)" },
     { keys: "L", what: "라인 히스토리 (선택한 줄, 없으면 커서 줄)" },
     { keys: "G", what: "커밋 그래프 (이 줄의 커밋을 골라서)" },

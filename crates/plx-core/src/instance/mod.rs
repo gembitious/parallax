@@ -9,6 +9,7 @@
 //! 락을 잡은 쪽만 지우고 다시 bind하므로 경쟁이 없다.
 //! 프레임은 `u32`(LE) 길이 + JSON이고, 연결 하나에 요청 하나·응답 하나다.
 
+use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -28,7 +29,8 @@ mod windows;
 #[cfg(windows)]
 use windows as sys;
 
-/// [`Invocation`] 형식이 바뀌면 올린다. 다른 버전끼리는 요청을 거절한다.
+/// [`Invocation`] 형식이 바뀌면 올린다. 다른 버전끼리는 요청을 거절한다. 기본값이 있는 필드를 더하는 것은
+/// 올리지 않는다(앱을 새로 깔았는데 예전 인스턴스가 떠 있어도 서로 받는다. 모르는 필드는 버린다).
 pub const PROTOCOL_VERSION: u32 = 1;
 const MAX_FRAME_LEN: u32 = 1 << 20;
 
@@ -44,6 +46,10 @@ pub struct Invocation {
     /// 호출 시작 시각(Unix epoch ms). 지연 측정의 기준점이다.
     pub t0_ms: f64,
     pub pid: u32,
+    /// 호출한 셸의 환경 변수 가운데 상주 인스턴스가 쓸 것(에디터 고르기: `editor::FORWARDED_ENV`).
+    /// 상주 앱은 다른 환경(Finder에서 뜬 앱의 짧은 PATH 등)에서 떴을 수 있다.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
 }
 
 /// 상주 인스턴스의 응답.
@@ -289,6 +295,7 @@ mod tests {
             cwd: "/tmp/한글 경로".to_owned(),
             t0_ms: 1.5,
             pid: 42,
+            env: BTreeMap::from([("PATH".to_owned(), "/opt/한글/bin".to_owned())]),
         }
     }
 
@@ -341,6 +348,20 @@ mod tests {
     fn invocation_json_uses_camel_case() {
         let json = serde_json::to_string(&invocation(&["a"])).unwrap();
         assert!(json.contains("\"t0Ms\":1.5"), "{json}");
+        assert_eq!(
+            parse_invocation(json.as_bytes()).unwrap(),
+            invocation(&["a"])
+        );
+    }
+
+    #[test]
+    fn accepts_invocations_without_env() {
+        // 환경 변수를 넘기기 전의 plx(같은 프로토콜 버전)
+        let frame = br#"{"version":1,"args":["a"],"cwd":"/","t0Ms":0,"pid":1}"#;
+        let parsed = parse_invocation(frame).unwrap();
+        assert!(parsed.env.is_empty());
+        let json = serde_json::to_string(&parsed).unwrap();
+        assert!(!json.contains("env"), "빈 환경은 보내지 않는다: {json}");
     }
 
     #[test]
