@@ -73,6 +73,10 @@ export default function App() {
   const readySent = useRef(false);
   const [notices, setNotices] = useState(false);
   useNoticesRequest(useCallback(() => setNotices(true), []));
+  // 라이선스 창은 모든 화면 위에 떠서 키를 다 먹는다. 떠 있는 동안 늦게 온 이동(`<`의 답 등)은 버린다: 새 화면이
+  // 포커스를 가져가 창은 떠 있는데 키는 아래 화면으로 간다. 새 plx 호출은 그 화면을 보이려는 것이라 창을 닫는다.
+  const noticesRef = useRef(notices);
+  noticesRef.current = notices;
 
   // 콜드 스타트에서 창은 첫 화면을 그린 뒤에 보인다(빈 화면 깜빡임 방지).
   const markReady = () => {
@@ -84,7 +88,10 @@ export default function App() {
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    const accept = (request: PlxRequest) => dispatch({ type: "request", request, receivedMs: nowMs() });
+    const accept = (request: PlxRequest) => {
+      setNotices(false);
+      dispatch({ type: "request", request, receivedMs: nowMs() });
+    };
     (async () => {
       await initPerf();
       // 먼저 듣기 시작한 뒤 놓친 요청을 가져온다. 순서를 바꾸면 그 사이에 온 요청을 잃는다.
@@ -162,7 +169,9 @@ export default function App() {
               depth: i + 1,
               onShown: entry.via === "request" ? (ms: number) => onShown(request.id, ms) : undefined,
               onBack: back,
-              onNavigate: (navigation: Navigation) => dispatch({ type: "navigate", navigation }),
+              onNavigate: (navigation: Navigation) => {
+                if (!noticesRef.current) dispatch({ type: "navigate", navigation });
+              },
               onReload: (line?: number | null) => dispatch({ type: "reload", key: entry.key, line }),
             };
             const cold = entry.via === "request" && request.cold;

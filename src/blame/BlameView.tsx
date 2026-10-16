@@ -175,8 +175,10 @@ export function BlameView({
   /** 이동 요청을 보내 놓고 답을 기다리는 중(키를 여러 번 눌러도 한 번만 간다) */
   const navigating = useRef(false);
   const mounted = useMounted();
-  const latest = useRef({ hover, help, meta, infos, active, fatal });
-  latest.current = { hover, help, meta, infos, active, fatal };
+  /** 키를 가져가는 창(도움말·워크트리·Quick Open·팔레트)이 열려 있다 */
+  const overlay = help || worktrees || quickOpen.isOpen || palette.isOpen;
+  const latest = useRef({ hover, help, meta, infos, active, fatal, overlay });
+  latest.current = { hover, help, meta, infos, active, fatal, overlay };
 
   const showToast = (message: string) => {
     setToast(message);
@@ -247,14 +249,15 @@ export function BlameView({
 
   /**
    * 이동할 곳을 받아 App에 넘긴다. 없으면(null) 알린다. 답을 기다리는 동안(큰 저장소의 `<`는 몇 초 걸린다) 이 화면을
-   * 닫았거나(`q`, 새 `plx` 호출) 다른 화면을 위에 열었으면 이동하지 않는다.
+   * 닫았거나(`q`, 새 `plx` 호출) 다른 화면을 위에 열었거나, Quick Open·팔레트 같은 창을 열었으면(그 창에 치던 글자가
+   * 새 화면의 키가 된다) 이동하지 않는다.
    */
   const navigate = (request: Promise<Navigation | null>, none = "") => {
     if (navigating.current) return;
     navigating.current = true;
     request
       .then((navigation) => {
-        if (!mounted.current || !latest.current.active) return;
+        if (!mounted.current || !latest.current.active || latest.current.overlay) return;
         if (navigation) onNavigate(navigation);
         else if (none) showToast(none);
       })
@@ -626,7 +629,8 @@ export function BlameView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 다시 맨 위 화면이 되면(뒤로 와서) 키 입력을 받게 에디터에 포커스를 준다. 숨길 때는 떠 있는 것을 닫는다.
+  // 다시 맨 위 화면이 되면(뒤로 와서) 키 입력을 받게 에디터에 포커스를 준다. 숨길 때는 떠 있는 것을 닫는다(숨은
+  // 화면에 남은 창은 돌아왔을 때 포커스 없이 떠 있어 Esc로도 닫히지 않았다).
   useEffect(() => {
     if (active) {
       editor.current?.view.focus();
@@ -634,7 +638,12 @@ export function BlameView({
       window.clearTimeout(timers.current.show);
       setHover(null);
       setHelp(false);
+      setWorktrees(false);
+      quickOpen.close();
+      palette.close();
     }
+    // close는 상태만 바꾼다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
   // 코드 뷰 밖(머리줄·카드·버튼을 누른 뒤, 클립보드 대신 쓰기 뒤)에 포커스가 있어도 화면 키가 먹게 한다.

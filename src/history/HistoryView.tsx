@@ -132,8 +132,11 @@ export function HistoryView({
   ];
   const palette = usePalette(commands, () => listRef.current?.focus({ preventScroll: true }));
   const mounted = useMounted();
-  const latest = useRef({ active, meta, selected, help, search, count, openFiles: quickOpen.open, palette: palette.open });
-  latest.current = { active, meta, selected, help, search, count, openFiles: quickOpen.open, palette: palette.open };
+  /** 키를 가져가는 창(도움말·워크트리·Quick Open·팔레트)이 열려 있다 */
+  const overlay = help || worktrees || quickOpen.isOpen || palette.isOpen;
+  const snapshot = { active, meta, selected, help, search, count, overlay, openFiles: quickOpen.open, palette: palette.open };
+  const latest = useRef(snapshot);
+  latest.current = snapshot;
   // 스크롤 프레임 측정(성능 HUD가 켜져 있을 때만)
   const scrollMeter = useRef<ScrollMeter | null>(null);
   scrollMeter.current ??= new ScrollMeter(
@@ -274,9 +277,15 @@ export function HistoryView({
       setViewport({ top: list.scrollTop, height: list.clientHeight });
       list.focus({ preventScroll: true });
     } else {
+      // 숨을 때 떠 있는 창은 닫는다(돌아왔을 때 포커스 없이 남지 않게).
       setHelp(false);
       setSearch((s) => ({ ...s, open: false }));
+      setWorktrees(false);
+      quickOpen.close();
+      palette.close();
     }
+    // close는 상태만 바꾼다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
   useEffect(() => {
@@ -617,8 +626,8 @@ export function HistoryView({
               const [start, end] = await Promise.all([mapLine(from, range.start), mapLine(from, range.end)]);
               return { start, end: Math.max(start, end) };
             }).then((next) => {
-              // 줄을 옮기는 동안 이 화면을 닫았거나 다른 화면을 열었으면 가지 않는다.
-              if (next && mounted.current && latest.current.active) onNavigate(next);
+              // 줄을 옮기는 동안 이 화면을 닫았거나 다른 화면·창을 열었으면 가지 않는다.
+              if (next && mounted.current && latest.current.active && !latest.current.overlay) onNavigate(next);
             });
           }}
         />

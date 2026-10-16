@@ -509,9 +509,13 @@ function GraphPane({
         reload();
       }
     } else {
+      // 숨을 때 떠 있는 창은 닫는다(돌아왔을 때 포커스 없이 남지 않게).
       setHelp(false);
+      setWorktrees(false);
+      quickOpen.close();
+      commandPalette.close();
     }
-    // reload는 ref만 읽는다.
+    // reload는 ref만 읽는다. close는 상태만 바꾼다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 

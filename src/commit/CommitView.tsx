@@ -344,7 +344,11 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
   // 다시 보이면 목록 스크롤을 되돌리고(그리기 전에) diff에 포커스를 준다.
   useLayoutEffect(() => {
     if (!active) {
+      // 숨을 때 떠 있는 창은 닫는다(돌아왔을 때 포커스 없이 남지 않게).
       setHelp(false);
+      setWorktrees(false);
+      quickOpen.close();
+      palette.close();
       return;
     }
     const list = listRef.current;
@@ -353,6 +357,8 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
       setViewport({ top: list.scrollTop, height: list.clientHeight });
     }
     diff.current?.focus();
+    // close는 상태만 바꾼다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
   const files = detail?.files ?? [];
