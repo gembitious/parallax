@@ -43,6 +43,10 @@ describe("routeKey", () => {
     expect(route(key("p", { ctrlKey: true }, "input")).result).toBe("done");
     expect(route(key("f", {}, "input")).result).toBe("skip");
     expect(route(key(":", {}, "textarea")).result).toBe("skip");
+    // 코드 뷰(커밋 상세의 diff) 안에서도 연다. blame 코드 뷰는 자기 키맵이 먼저 먹어 defaultPrevented로 온다.
+    expect(route(key("f", {}, ".cm-editor"))).toEqual({ result: "done", opened: ["files"], prevented: true });
+    expect(route(key(":", { shiftKey: true }, ".cm-editor"))).toEqual({ result: "done", opened: ["palette"], prevented: true });
+    expect(route(key("f", { defaultPrevented: true }, ".cm-editor"))).toEqual({ result: "skip", opened: [], prevented: false });
   });
 
   it("화면 키", () => {
