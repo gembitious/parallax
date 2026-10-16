@@ -20,8 +20,9 @@ baseline은 M0에서 같은 머신·같은 저장소로 git CLI를 직접 잰 �
 
 ## M0 — 뼈대와 측정
 - [x] Tauri 2 + React + Vite 스캐폴딩, `crates/plx-core` 분리 — Windows·macOS 실기 확인 필요
-- [x] 단일 인스턴스 + argv/cwd 전달, 창 닫기 = 숨기기, 트레이(종료) — Windows·macOS 실기 확인 필요
-- [x] `plx` 인자 파싱 (CLAUDE.md의 CLI 인터페이스), macOS shim — Windows·macOS 실기 확인 필요
+- [x] 단일 인스턴스 + argv/cwd 전달, 창 닫기 = 숨기기, 트레이(종료). 파이프로 불러도 분리 실행하고 뜨지 못하면 알린다,
+      인스턴스 자리는 사용자로 정한다(환경 변수와 무관), Windows pipe는 이 사용자 전용 — Windows·macOS 실기 확인 필요
+- [x] `plx` 인자 파싱 (CLAUDE.md의 CLI 인터페이스), macOS shim. 넘기기 전에 대상 저장소·리비전 확인 — Windows·macOS 실기 확인 필요
 - [x] 개발 빌드 성능 HUD: 요청별 소요 ms — Windows·macOS 실기 확인 필요
 - [x] `bench/`: 참조 저장소 클론 스크립트, git baseline 측정 → `bench/results.md` — Windows·macOS 실기 확인 필요
 - [x] `fixtures/`: rename·이동·merge·CRLF·한글 경로/내용을 포함한 테스트 저장소 생성 스크립트 — Windows·macOS 실기 확인 필요
