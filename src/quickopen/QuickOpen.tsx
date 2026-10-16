@@ -83,6 +83,11 @@ export function QuickOpen({
 
   useEffect(() => {
     inputRef.current?.focus();
+    return () => {
+      // 닫은 뒤(Esc·바깥 클릭) 온 결과로는 고르지 않는다: 결과 전에 친 Enter가 남아 있으면 닫은 화면이 이동한다.
+      seq.current += 1;
+      pendingPick.current = null;
+    };
   }, []);
 
   useEffect(() => {
