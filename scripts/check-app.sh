@@ -10,7 +10,8 @@
 #   1. plx --version, 잘못된 인자(종료 코드 2, 상주 인스턴스를 띄우지 않음)
 #   2. 콜드 스타트 → 첫 화면, 두 번째 호출이 상주 인스턴스로 전달되어 그려짐(한글·공백 경로 포함),
 #      blame이 끝까지 와서 거터가 그려짐(한글 경로의 저장소 파일 포함), 커밋 상세,
-#      파일·라인 히스토리(이름을 바꾼 한글 경로 파일의 옛 이름 구간까지), 커밋 그래프(인자 없는 plx)
+#      파일·라인 히스토리(이름을 바꾼 한글 경로 파일의 옛 이름 구간까지), 커밋 그래프(인자 없는 plx),
+#      다른 터미널의 커밋이 열린 그래프에 반영됨(.git 감시), 고친 파일이 열린 blame에 반영됨
 #   3. 동시에 여러 번 실행해도 상주 인스턴스는 하나
 #   4. 강제 종료 뒤 다시 시작(남은 소켓·락 정리)
 #   5. 터미널에서 처음 실행하면 스스로 분리하고 셸을 바로 돌려줌(릴리스 빌드)
@@ -107,6 +108,18 @@ wait_for_all() { # wait_for_all <문자열...>
   done
 }
 
+# 기록에 문자열이 든 줄이 그만큼 쌓일 때까지 기다린다(최대 약 15초).
+wait_records() { # wait_records <문자열> <개수>
+  local i=0 n
+  while :; do
+    n="$(LC_ALL=C grep -cF "$1" "$log" 2>/dev/null || true)"
+    if [ "${n:-0}" -ge "$2" ]; then return 0; fi
+    i=$((i + 1))
+    if [ "$i" -gt 300 ]; then return 1; fi
+    sleep 0.05
+  done
+}
+
 wait_count() { # wait_count <기대 개수> — 프로세스 수가 그 값이 될 때까지(최대 약 10초)
   local i=0
   while [ "$(plx_count)" -ne "$1" ]; do
@@ -178,6 +191,10 @@ status=0
 check "한글 경로 저장소 파일 blame → 종료 코드 0" test "$status" -eq 0
 check "한글 경로 저장소 파일 blame → 거터를 그림 (블록 2: 커밋 1, 미커밋 1)" \
   wait_for_all '"kind":"blame"' '"label":"blame 소스/파일 이름.rs"' '"ok":true' '블록 2'
+# 작업트리 blame은 파일을 고치면(에이전트·편집기, 커밋 전) 다시 그린다.
+sleep 0.5
+printf '넷(커밋 안 함)\n' >>"$repo/소스/파일 이름.rs"
+check "파일을 고치면 열린 작업트리 blame을 다시 그림" wait_records '"label":"blame 소스/파일 이름.rs"' 2
 
 status=0
 (cd "$repo" && "$bin" show HEAD) || status=$?
@@ -224,6 +241,17 @@ status=0
 check "plx (인자 없음) → 종료 코드 0" test "$status" -eq 0
 check "커밋 그래프가 첫 화면을 그림 (커밋 4, 레인 2)" \
   wait_for_all '"kind":"graph"' '"label":"그래프 한글 저장소"' '"ok":true' '커밋 4 · 레인 2'
+
+# 다른 터미널(에이전트)의 커밋이 열린 그래프에 반영된다(.git 감시 → 다시 읽기). 예산은 1초, CI 러너는 느려 2초까지 본다.
+sleep 0.5
+start="$(now_ms)"
+git -C "$repo" -c user.name=검사 -c user.email=check@example.com -c commit.gpgsign=false \
+  commit -q --no-verify --allow-empty -m "외부 커밋"
+reloaded=0
+wait_for_all '"label":"그래프 다시 읽음 한글 저장소"' '커밋 5' || reloaded=$?
+elapsed=$(($(now_ms) - start))
+reflected() { [ "$reloaded" -eq 0 ] && [ "$elapsed" -le 2000 ]; }
+check "외부 커밋 → 열린 그래프가 다시 그림 (커밋 5, ${elapsed}ms, 2초 이내)" reflected
 
 status=0
 (cd "$work" && "$bin" "한글 폴더/파일 이름.txt:1") || status=$?

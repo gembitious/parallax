@@ -8,6 +8,8 @@ import { copyText } from "../clipboard";
 import { formatCount, formatDate, parseTz, relativeTime, shortSha } from "../blame/format";
 import { STATUS_LETTER, STATUS_NAME } from "../commit/types";
 import type { Navigation } from "../nav";
+import { watchRepo } from "../watch";
+import { call } from "../ipc";
 import { afterPaint, nowMs, record } from "../perf";
 import { Acceleration } from "./Acceleration";
 import { findMatch, formerPaths, matches, scrollToRow, visibleRange } from "./list";
@@ -35,6 +37,11 @@ type Props = {
   onShown?(committedMs: number): void;
   onBack(): void;
   onNavigate(navigation: Navigation): void;
+  /**
+   * 저장소가 바뀌었다(HEAD부터 거슬러 오르는 히스토리의 HEAD 이동): 이 화면을 새로 연다. 라인 히스토리는 줄 범위를
+   * 새 작업트리의 줄로 옮겨 넘긴다(못 옮기면 없다).
+   */
+  onReload?(lines?: LineRange): void;
 };
 
 type Progress =
@@ -49,7 +56,17 @@ const TOAST_MS = 1800;
 const PAGE_SLACK_MS = 30;
 const CACHE_HIT_BUDGET_MS = 16;
 
-export function HistoryView({ target, lines = null, active, depth, cold = false, onShown, onBack, onNavigate }: Props) {
+export function HistoryView({
+  target,
+  lines = null,
+  active,
+  depth,
+  cold = false,
+  onShown,
+  onBack,
+  onNavigate,
+  onReload,
+}: Props) {
   const [meta, setMeta] = useState<HistoryMeta | null>(null);
   /** 받은 커밋. 수천 개가 쌓이므로 배열은 고치고 길이만 상태로 둔다. */
   const entries = useRef<LogEntry[]>([]);
@@ -110,6 +127,30 @@ export function HistoryView({ target, lines = null, active, depth, cold = false,
       handle.cancel();
       window.clearTimeout(toastTimer.current);
     };
+    // 요청마다 새 컴포넌트다(App이 key를 준다).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // HEAD부터 거슬러 오르는 히스토리: HEAD가 바뀌면(새 커밋 등) 다시 연다. 고정 리비전은 바뀌지 않는다.
+  // 열기를 시작할 때 요청 대상으로 구독한다(meta를 기다리면 다시 열다 실패한 화면은 더는 바뀌지 않는다).
+  // 라인 히스토리의 줄 범위는 시작 커밋 버전의 줄이라, 새 작업트리의 줄로 옮겨 다시 연다(위에 줄이 늘어도 같은 코드).
+  useEffect(() => {
+    if (target.rev !== null || !onReload) return;
+    return watchRepo(target.repo ?? target.path, (change) => {
+      if (!change.headChanged) return;
+      const m = latest.current.meta;
+      if (!lines || !m?.lines || !m.start) {
+        onReload();
+        return;
+      }
+      const from = { rev: m.start, path: m.path };
+      const to = { rev: null, path: m.path };
+      const map = (line: number) => call<number>("blame_map_line", { repo: m.repo, from, to, line });
+      Promise.all([map(m.lines.start), map(m.lines.end)]).then(
+        ([start, end]) => onReload({ start, end: Math.max(start, end) }),
+        () => onReload(),
+      );
+    });
     // 요청마다 새 컴포넌트다(App이 key를 준다).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

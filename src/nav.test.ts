@@ -165,3 +165,41 @@ describe("lastName", () => {
     expect(lastName("/")).toBe("/");
   });
 });
+
+describe("reload", () => {
+  it("replaces the entry in place with a new key (blame keeps the given line)", () => {
+    let state = viewReducer(empty, { type: "request", request: blame(1), receivedMs: 0 });
+    state = viewReducer(state, {
+      type: "navigate",
+      navigation: { kind: "history", target: { repo: "/repo", path: "a.rs", rev: null } },
+    });
+    const [root, history] = state.stack;
+    const reloaded = viewReducer(state, { type: "reload", key: root.key, line: 42 });
+    expect(reloaded.stack[0]).toMatchObject({ view: "blame", line: 42, via: "request" });
+    expect(reloaded.stack[0].key).not.toBe(root.key);
+    expect(reloaded.stack[1]).toBe(history);
+    const again = viewReducer(reloaded, { type: "reload", key: history.key });
+    expect(again.stack[1]).toMatchObject({ view: "history", via: "history" });
+    expect(again.stack[1].key).not.toBe(history.key);
+    expect(viewReducer(again, { type: "reload", key: 9999 })).toBe(again);
+  });
+
+  it("라인 히스토리는 옮긴 줄 범위로 다시 연다(파일 히스토리는 범위가 생기지 않는다)", () => {
+    let state = viewReducer(empty, { type: "request", request: blame(1), receivedMs: 0 });
+    state = viewReducer(state, {
+      type: "navigate",
+      navigation: { kind: "history", target: { repo: "/repo", path: "a.rs", rev: null }, lines: { start: 40, end: 50 } },
+    });
+    const line = state.stack[1];
+    const moved = viewReducer(state, { type: "reload", key: line.key, lines: { start: 50, end: 60 } });
+    expect(moved.stack[1]).toMatchObject({ view: "history", lines: { start: 50, end: 60 } });
+    state = viewReducer(moved, { type: "back" });
+    state = viewReducer(state, {
+      type: "navigate",
+      navigation: { kind: "history", target: { repo: "/repo", path: "a.rs", rev: null } },
+    });
+    const file = state.stack[1];
+    const same = viewReducer(state, { type: "reload", key: file.key, lines: { start: 1, end: 2 } });
+    expect(same.stack[1]).toMatchObject({ view: "history", lines: null });
+  });
+});

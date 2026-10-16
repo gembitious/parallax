@@ -112,8 +112,12 @@ export default function App() {
 
   // 뷰가 첫 화면을 DOM에 넣은 직후(페인트 전) 시각을 받아, 다음 페인트까지 기다려 기록한다.
   // 창이 숨겨져 있으면 페인트가 없으므로 먼저 창을 보인다.
+  // 요청마다 한 번만 잰다(저장소가 바뀌어 다시 연 맨 아래 화면은 재지 않는다).
+  const measured = useRef(new Set<number>());
   const onShown = useCallback((requestId: number, committedMs: number) => {
     markReady();
+    if (measured.current.has(requestId)) return;
+    measured.current.add(requestId);
     afterPaint().then((paintedMs) => {
       const current = shownRef.current;
       if (current?.request.id === requestId) recordShown(current, committedMs, paintedMs);
@@ -152,6 +156,7 @@ export default function App() {
               onShown: entry.via === "request" ? (ms: number) => onShown(request.id, ms) : undefined,
               onBack: back,
               onNavigate: (navigation: Navigation) => dispatch({ type: "navigate", navigation }),
+              onReload: (line?: number | null) => dispatch({ type: "reload", key: entry.key, line }),
             };
             const cold = entry.via === "request" && request.cold;
             return (
@@ -165,7 +170,13 @@ export default function App() {
                     cold={cold}
                   />
                 ) : entry.view === "history" ? (
-                  <HistoryView {...common} target={entry.target} lines={entry.lines} cold={cold} />
+                  <HistoryView
+                    {...common}
+                    onReload={(lines) => dispatch({ type: "reload", key: entry.key, lines })}
+                    target={entry.target}
+                    lines={entry.lines}
+                    cold={cold}
+                  />
                 ) : entry.view === "graph" ? (
                   <GraphView {...common} repo={entry.repo} focus={entry.focus} cold={cold} />
                 ) : (

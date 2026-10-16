@@ -7,7 +7,7 @@ mod window;
 use std::sync::Arc;
 
 use serde::Serialize;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -48,6 +48,9 @@ pub fn run() {
             git::graph_search,
             git::graph_search_path,
             git::graph_close,
+            git::watch_repo,
+            git::watch_file,
+            git::unwatch_repo,
             git::repo_acceleration,
             git::accelerate,
             git::commit_info,
@@ -74,7 +77,14 @@ pub fn run() {
             let cache_dir = std::env::var_os("PLX_CACHE_DIR")
                 .map(std::path::PathBuf::from)
                 .or_else(|| app.path().app_cache_dir().ok());
-            let git = Arc::new(git::GitState::new(cache_dir));
+            // 지켜보는 저장소·파일이 바뀌면(외부 커밋, 에이전트가 고친 파일) 화면에 알린다.
+            let handle = app.handle().clone();
+            let git = Arc::new(git::GitState::new(cache_dir, move |change| {
+                let _ = match change {
+                    plx_core::watch::Change::Repo(change) => handle.emit("repo-changed", change),
+                    plx_core::watch::Change::File(change) => handle.emit("file-changed", change),
+                };
+            }));
             app.manage(git.clone());
             std::thread::spawn(move || git.prune_cache());
             tray::create(app)?;
