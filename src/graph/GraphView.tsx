@@ -115,8 +115,9 @@ const RETRY_MS = 1000;
 const MAX_LABELS = 3;
 /**
  * 레인 캔버스에 CPU 캔버스를 청할지(willReadFrequently, 픽셀을 읽지는 않는다). WebKit(macOS·Linux)은 GPU 캔버스를
- * 처음 쓸 때 준비하느라 앱이 뜬 뒤 첫 그래프가 늦었다(macOS CI 0.9~3.1초 → CPU 캔버스로 0.27초). Chromium(Windows
- * WebView2)은 그 준비가 가볍고 CPU 캔버스로는 첫 페인트가 늦어(CI 그린 뒤 화면까지 GPU 36~40ms, CPU 77·111ms) 그대로 둔다.
+ * 처음 쓸 때 준비하느라 앱이 뜬 뒤 첫 그래프가 늦었다(macOS CI 0.9~3.1초 → CPU 캔버스로 0.27~0.44초). Chromium(Windows
+ * WebView2)은 그 준비가 가볍고 CPU 캔버스로는 첫 페인트가 늦어(CI 그린 뒤 화면까지 GPU 36~40ms, 한 번 97ms, CPU 77·111ms)
+ * 그대로 둔다.
  * 레인은 선과 점뿐이고 그리는 범위가 바뀔 때만 다시 그려 CPU로 충분하다(bench/results.md).
  */
 const CPU_CANVAS = !/\bChrome\//.test(navigator.userAgent);
