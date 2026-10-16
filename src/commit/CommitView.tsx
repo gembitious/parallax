@@ -119,7 +119,9 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
   const drawnRange = useRef<DrawnRange>({ start: 0, end: 0, height: 0 });
   /** 두 버전을 받는 중이다. 한 번에 하나만 받는다. */
   const fetching = useRef(false);
-  const quickOpen = useQuickOpen({ repo, current: null, onNavigate });
+  // 닫으면 diff에 포커스를 돌려준다(입력 칸이 사라져 body로 가면 화살표·PageDown이 diff를 움직이지 않는다).
+  const focusDiff = () => diff.current?.focus();
+  const quickOpen = useQuickOpen({ repo, current: null, onNavigate, onClosed: focusDiff });
   const toastTimer = useRef(0);
   /** 첫 파일까지의 측정: 상세 도착 → 목록 표시 → 첫 파일(diff나 알림) 표시 */
   const timing = useRef({ t0: nowMs(), detailMs: NaN, listPainted: null as Promise<number | null> | null, reported: false });
@@ -157,7 +159,7 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
       hud: getPerfInfo().enabled ? toggleHud : undefined,
     }),
   ];
-  const palette = usePalette(commands);
+  const palette = usePalette(commands, focusDiff);
   const snapshot = () => ({
     active,
     full,
@@ -342,7 +344,11 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
   // 다시 보이면 목록 스크롤을 되돌리고(그리기 전에) diff에 포커스를 준다.
   useLayoutEffect(() => {
     if (!active) {
+      // 숨을 때 떠 있는 창은 닫는다(돌아왔을 때 포커스 없이 남지 않게).
       setHelp(false);
+      setWorktrees(false);
+      quickOpen.close();
+      palette.close();
       return;
     }
     const list = listRef.current;
@@ -351,6 +357,8 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
       setViewport({ top: list.scrollTop, height: list.clientHeight });
     }
     diff.current?.focus();
+    // close는 상태만 바꾼다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
   const files = detail?.files ?? [];
@@ -493,14 +501,43 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 도움말·워크트리·Quick Open·팔레트·알림. 상세를 열지 못한 화면에서도 `?`·`W`가 먹게 같이 그린다.
+  const overlays = (
+    <>
+      {help && <Help view="commit" onClose={() => setHelp(false)} />}
+      {worktrees && (
+        <WorktreePicker
+          repo={repo}
+          onClose={() => {
+            setWorktrees(false);
+            focusDiff();
+          }}
+          onPick={(worktree) => {
+            setWorktrees(false);
+            // 그 워크트리의 그래프에서 이 커밋을 고른다(객체는 워크트리끼리 같다).
+            const next = commitSwitch(worktree, latest.current.detail?.info.sha ?? rev);
+            if (next) onNavigate(next);
+            else focusDiff();
+          }}
+        />
+      )}
+      {quickOpen.overlay}
+      {palette.overlay}
+      {toast && (
+        <div className="toast" role="status">
+          {toast}
+        </div>
+      )}
+    </>
+  );
+
   if (fatal) {
     return (
       <section className="commit">
         <div className="blame-message error">
           <p>{fatal}</p>
         </div>
-        {quickOpen.overlay}
-        {palette.overlay}
+        {overlays}
       </section>
     );
   }
@@ -675,26 +712,7 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
           </div>
         </div>
       </div>
-      {help && <Help view="commit" onClose={() => setHelp(false)} />}
-      {worktrees && (
-        <WorktreePicker
-          repo={repo}
-          onClose={() => setWorktrees(false)}
-          onPick={(worktree) => {
-            setWorktrees(false);
-            // 그 워크트리의 그래프에서 이 커밋을 고른다(객체는 워크트리끼리 같다).
-            const next = commitSwitch(worktree, latest.current.detail?.info.sha ?? rev);
-            if (next) onNavigate(next);
-          }}
-        />
-      )}
-      {quickOpen.overlay}
-      {palette.overlay}
-      {toast && (
-        <div className="toast" role="status">
-          {toast}
-        </div>
-      )}
+      {overlays}
     </section>
   );
 }

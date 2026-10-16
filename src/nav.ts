@@ -1,5 +1,6 @@
 // 화면 상태: 받은 plx 요청과 탐색 스택(blame·커밋 상세·파일 히스토리·그래프). 순수 함수라 단위 테스트한다(nav.test.ts).
 import { shortSha } from "./blame/format";
+import type { SearchState } from "./blame/editor";
 import type { BlameTarget } from "./blame/session";
 import type { HistoryTarget, LineRange } from "./history/types";
 
@@ -49,6 +50,8 @@ export type BlameEntry = {
   line: number | null;
   /** 이 화면으로 온 방법 */
   via: "request" | "parent" | "older" | "newer" | "file";
+  /** 다시 열기(reload) 전 화면의 검색 */
+  search?: SearchState;
 };
 
 export type CommitEntry = {
@@ -71,6 +74,8 @@ export type HistoryEntry = {
   /** 있으면 그 줄 범위의 라인 히스토리 */
   lines: LineRange | null;
   via: "request" | "history";
+  /** 다시 열기(reload) 전 화면의 검색어(`n`/`N`이 이어서 찾는다) */
+  query?: string;
 };
 
 export type GraphEntry = {
@@ -91,9 +96,9 @@ export type ViewAction =
   | { type: "back" }
   /**
    * 저장소가 바뀌어(HEAD 이동) `key` 화면을 새로 연다. blame은 `line` 줄로, 라인 히스토리는 `lines`(새 작업트리의 줄로
-   * 옮긴 범위)로. 스택 자리는 그대로다.
+   * 옮긴 범위)로. 스택 자리는 그대로다. 화면의 검색(blame `search`, 히스토리 `query`)은 새 화면으로 넘긴다.
    */
-  | { type: "reload"; key: number; line?: number | null; lines?: LineRange };
+  | { type: "reload"; key: number; line?: number | null; lines?: LineRange; search?: SearchState; query?: string };
 
 /** 탐색 스택이 이보다 깊어지면 가장 아래 화면부터 버린다. */
 export const MAX_STACK = 30;
@@ -153,10 +158,10 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
       const key = nextEntryKey++;
       const stack = state.stack.slice();
       stack[index] =
-        entry.view === "blame" && action.line !== undefined
-          ? { ...entry, key, line: action.line }
-          : entry.view === "history" && entry.lines && action.lines
-            ? { ...entry, key, lines: action.lines }
+        entry.view === "blame"
+          ? { ...entry, key, line: action.line !== undefined ? action.line : entry.line, search: action.search }
+          : entry.view === "history"
+            ? { ...entry, key, lines: entry.lines && action.lines ? action.lines : entry.lines, query: action.query }
             : { ...entry, key };
       return { ...state, stack };
     }
@@ -166,6 +171,13 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
 /** 탐색으로 온 화면에서 이 방향 키는 바로 아래 화면으로 돌아가는 것이다. */
 export const backDirectionOf = (via: StackEntry["via"]) =>
   via === "older" ? "newer" : via === "newer" ? "older" : undefined;
+
+/**
+ * 스택의 `index`번 화면에서 돌아가는 방향 키. 맨 아래 화면에는 돌아갈 곳이 없다: 스택이 MAX_STACK을 넘어 아래를
+ * 버리면 `<`로 온 화면이 맨 아래가 되는데, 그때 `>`는 새 화면(다음 리비전)을 연다.
+ */
+export const backDirectionAt = (stack: readonly StackEntry[], index: number) =>
+  index > 0 ? backDirectionOf(stack[index].via) : undefined;
 
 /** 탐색으로 연 화면의 창 제목. 경로는 저장소 기준이다. */
 export function titleOf(entry: StackEntry): string {

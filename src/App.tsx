@@ -9,15 +9,17 @@ import { Hud } from "./Hud";
 import { Notices, openNotices, useNoticesRequest } from "./notices/Notices";
 import { call } from "./ipc";
 import {
-  backDirectionOf,
+  backDirectionAt,
   titleOf,
   viewReducer,
   type Navigation,
   type PlxRequest,
   type Shown,
   type StackEntry,
+  type ViewAction,
 } from "./nav";
 import { afterPaint, getPerfInfo, initPerf, nowMs, phasesBetween, record } from "./perf";
+import type { SearchState } from "./blame/editor";
 
 type AppInfo = { version: string; coreVersion: string };
 
@@ -73,6 +75,23 @@ export default function App() {
   const readySent = useRef(false);
   const [notices, setNotices] = useState(false);
   useNoticesRequest(useCallback(() => setNotices(true), []));
+  // 라이선스 창은 모든 화면 위에 떠서 키를 다 먹는다. 떠 있는 동안 늦게 온 이동(`<`의 답 등)은 버리고 다시 열기
+  // (저장소 변화)는 닫을 때까지 미룬다: 새 화면이 포커스를 가져가 창은 떠 있는데 키는 아래 화면으로 간다.
+  // 새 plx 호출은 그 화면을 보이려는 것이라 창을 닫는다.
+  const noticesRef = useRef(notices);
+  noticesRef.current = notices;
+  const deferredReloads = useRef<ViewAction[]>([]);
+  const reload = (action: ViewAction) => {
+    if (noticesRef.current) deferredReloads.current.push(action);
+    else dispatch(action);
+  };
+  useEffect(() => {
+    if (notices) return;
+    const actions = deferredReloads.current;
+    deferredReloads.current = [];
+    // 그사이 닫혔거나 다시 연 화면(옛 key)의 것은 reducer가 버린다.
+    for (const action of actions) dispatch(action);
+  }, [notices]);
 
   // 콜드 스타트에서 창은 첫 화면을 그린 뒤에 보인다(빈 화면 깜빡임 방지).
   const markReady = () => {
@@ -84,7 +103,10 @@ export default function App() {
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    const accept = (request: PlxRequest) => dispatch({ type: "request", request, receivedMs: nowMs() });
+    const accept = (request: PlxRequest) => {
+      setNotices(false);
+      dispatch({ type: "request", request, receivedMs: nowMs() });
+    };
     (async () => {
       await initPerf();
       // 먼저 듣기 시작한 뒤 놓친 요청을 가져온다. 순서를 바꾸면 그 사이에 온 요청을 잃는다.
@@ -141,8 +163,12 @@ export default function App() {
     if (title) invoke("set_window_title", { title }).catch(() => {});
   }, [top, rootLabel]);
 
+  // 키 처리기를 한 번만 만드는 화면은 처음 받은 onBack을 계속 부른다. 그때의 스택이 아니라 지금 스택을 본다
+  // (스택이 MAX_STACK을 넘어 아래를 버리면 그 화면이 맨 아래가 될 수 있다).
+  const stackRef = useRef(stack);
+  stackRef.current = stack;
   const back = () => {
-    if (stack.length > 1) dispatch({ type: "back" });
+    if (stackRef.current.length > 1) dispatch({ type: "back" });
     else hideWindow();
   };
 
@@ -158,8 +184,11 @@ export default function App() {
               depth: i + 1,
               onShown: entry.via === "request" ? (ms: number) => onShown(request.id, ms) : undefined,
               onBack: back,
-              onNavigate: (navigation: Navigation) => dispatch({ type: "navigate", navigation }),
-              onReload: (line?: number | null) => dispatch({ type: "reload", key: entry.key, line }),
+              onNavigate: (navigation: Navigation) => {
+                if (!noticesRef.current) dispatch({ type: "navigate", navigation });
+              },
+              onReload: (line?: number | null, search?: SearchState) =>
+                reload({ type: "reload", key: entry.key, line, search }),
             };
             const cold = entry.via === "request" && request.cold;
             return (
@@ -169,15 +198,17 @@ export default function App() {
                     {...common}
                     target={entry.target}
                     line={entry.line}
-                    backDirection={backDirectionOf(entry.via)}
+                    backDirection={backDirectionAt(stack, i)}
+                    search={entry.search}
                     cold={cold}
                   />
                 ) : entry.view === "history" ? (
                   <HistoryView
                     {...common}
-                    onReload={(lines) => dispatch({ type: "reload", key: entry.key, lines })}
+                    onReload={(lines, query) => reload({ type: "reload", key: entry.key, lines, query })}
                     target={entry.target}
                     lines={entry.lines}
+                    query={entry.query}
                     cold={cold}
                   />
                 ) : entry.view === "graph" ? (
