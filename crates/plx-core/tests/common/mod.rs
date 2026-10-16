@@ -127,7 +127,8 @@ pub fn ten_lines(edited: &[usize]) -> String {
 
 /// [`git`]과 같고 작성·커밋 시각을 `t`(Unix 시각)로 정한다. 같은 초에 만든 커밋도 git log 순서가 정해진다.
 pub fn git_at(repo: &Path, args: &[&str], t: i64) -> Vec<u8> {
-    let date = format!("{t} +0000");
+    // `@`이 없으면 git은 작은 수(1000 등)를 Unix 시각으로 읽지 않는다.
+    let date = format!("@{t} +0000");
     let out = Command::new("git")
         .arg("-C")
         .arg(repo)

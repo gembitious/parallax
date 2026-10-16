@@ -233,3 +233,8 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
   `--literal-pathspecs`로 준다(`[slug]` 같은 글롭 글자, Bloom 필터). 얕은 클론과 rename 원본을 찾지 못한 결과(부분 클론)는
   캐시하지 않는다. git 2.54부터 `-L`은 보통 diff 출력기로 나와 공백이 든 경로 뒤에 TAB이 붙으므로 떼고,
   `diff.suppressBlankEmpty`를 끈다.
+- 2026-10-16: 커밋 그래프 리뷰 수정. git처럼(commit_graph_compatible) 얕은 클론이거나 `git replace`·`info/grafts`로
+  부모를 바꾼 커밋이 있으면 commit-graph와 커밋 표를 쓰지 않고 객체에서 바꾼 부모를 읽는다(다 받은 뒤 얕아진 클론은
+  commit-graph가 경계 너머까지 걸었다). gix 0.89는 `core.useReplaceRefs`를 거꾸로 읽어(설정이 없거나 true면 끈다)
+  객체를 바꾸지 않으므로 바꾸는 참조를 직접 읽는다. 객체를 읽지 못한 커밋이 있으면 커밋 표를 쓰지 않는다. 태그 객체를
+  가리키는 시작점(느슨한 `refs/remotes/origin/tags/*` 등)은 커밋까지 벗기고 이름표도 옮긴다.
