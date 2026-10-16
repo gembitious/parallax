@@ -220,6 +220,7 @@ fn attribution_follows_the_notes_ref() {
     );
     let found = ai.attribution(&repo, &items).unwrap();
     assert!(found.notes);
+    assert_eq!(found.parsed, 1);
     assert_eq!(found.files.len(), 1, "노트는 첫 커밋에만");
     assert_eq!(found.files[0].sha, first);
     assert_eq!(found.files[0].spans, [[2, 3, 0]]);
@@ -262,4 +263,92 @@ fn attribution_follows_the_notes_ref() {
         "같은 세션은 같은 작성자 번호"
     );
     assert_eq!(both.authors.len(), 1);
+    assert_eq!(
+        both.parsed, 1,
+        "참조가 움직여도 그대로인 노트는 다시 읽지 않는다"
+    );
+    assert_eq!(ai.attribution(&repo, &items).unwrap().parsed, 0);
+
+    // 이미 있는 노트를 고쳐 쓰면(blob이 바뀐다) 그 노트만 다시 읽는다.
+    std::fs::write(
+        &file,
+        note(
+            "소스/파일.rs",
+            &[("s_aaaaaaaaaaaaaa::t_ffffffffffffff", "1")],
+            CLAUDE,
+        ),
+    )
+    .unwrap();
+    git_as_user(
+        &root,
+        &[
+            "notes",
+            "--ref=ai",
+            "add",
+            "-f",
+            "-F",
+            file.to_str().unwrap(),
+            &first,
+        ],
+    );
+    let rewritten = ai.attribution(&repo, &items).unwrap();
+    assert_eq!(rewritten.parsed, 1);
+    assert_eq!(rewritten.files[0].spans, [[1, 1, 0]]);
+    assert_eq!(rewritten.files[1].spans, [[5, 5, 0]]);
+}
+
+/// 옛 형식 프롬프트는 다른 노트에서도 찾는다(cherry-pick). 노트가 더해지면 새 노트만 더 모으고, 프롬프트를 적은
+/// 노트가 고쳐지면 처음부터 다시 모은다.
+#[test]
+fn foreign_prompts_follow_note_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("repo");
+    let (first, second) = setup(&root);
+    let repo = Repo::discover(&root).unwrap();
+    let ai = AiNotes::new();
+    let file = dir.path().join("note.txt");
+    let add = |text: &str, commit: &str| {
+        std::fs::write(&file, text).unwrap();
+        git_as_user(
+            &root,
+            &[
+                "notes",
+                "--ref=ai",
+                "add",
+                "-f",
+                "-F",
+                file.to_str().unwrap(),
+                commit,
+            ],
+        );
+    };
+    const PROMPT: &str = r#""abcd1234abcd1234":{"agent_id":{"tool":"cursor","id":"old","model":"gpt-4"},"human_author":"dev@example.com","total_additions":2,"total_deletions":0,"accepted_lines":2,"overriden_lines":0}"#;
+    let with_prompt = format!(
+        "소스/파일.rs\n  abcd1234abcd1234 1-2\n---\n{{\"schema_version\":\"authorship/3.0.0\",\"base_commit_sha\":\"\",\"prompts\":{{{PROMPT}}}}}"
+    );
+    // 둘째 커밋의 노트는 프롬프트를 적지 않고 키만 쓴다(cherry-pick으로 옮겨진 줄).
+    let key_only = note("소스/파일.rs", &[("abcd1234abcd1234", "4")], "");
+    let items = [AiItem {
+        sha: second.clone(),
+        path: "소스/파일.rs".into(),
+    }];
+
+    add(&key_only, &second);
+    let alone = ai.attribution(&repo, &items).unwrap();
+    assert!(alone.files.is_empty(), "프롬프트를 아는 노트가 없다");
+
+    add(&with_prompt, &first);
+    let found = ai.attribution(&repo, &items).unwrap();
+    assert_eq!(found.files.len(), 1);
+    assert_eq!(found.files[0].spans, [[4, 4, 0]]);
+    match &found.authors[0] {
+        Author::Agent { tool, .. } => assert_eq!(tool, "cursor"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(found.parsed, 1, "새로 붙은 노트만 더 모은다");
+
+    // 프롬프트를 적은 노트를 고치면 그 프롬프트는 사라진다.
+    add(&note("소스/파일.rs", &[], ""), &first);
+    let gone = ai.attribution(&repo, &items).unwrap();
+    assert!(gone.files.is_empty(), "{gone:?}");
 }

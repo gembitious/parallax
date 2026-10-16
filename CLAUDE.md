@@ -196,6 +196,8 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
   원래 경로·원래 줄로 찾고, 뒤 항목이 이기며 메타데이터에 없는 키는 건너뛴다(`s_…::t_…` 세션, `h_` 사람, 16자 옛
   프롬프트는 다른 노트에서도 찾는다). 규칙은 git-ai 저장소의 표준 문서와 `get_line_attribution`을 읽어 맞췄다(git-ai를
   빌드·실행하지는 않았다). 노트 트리는 gix로 직접 읽고(fanout 무관, git 스폰 없음) notes 참조가 바뀌면 다시 읽는다.
+  해석한 노트는 blob id로 기억해(git-ai는 커밋마다 참조를 옮기지만 그대로인 노트는 blob도 같다) 바뀐 노트만 다시 읽고,
+  옛 프롬프트 표도 새 노트만 더한다(노트가 빠지거나 고쳐지면 처음부터 다시 모은다).
   아직 커밋하지 않은 줄의 AI 작업 상태(`.git/ai`)는 git-ai 내부 형식이라 보지 않는다.
 - 2026-10-15: 단일 인스턴스는 `tauri-plugin-single-instance` 대신 직접 구현한다(`plx_core::instance`).
   `main()` 맨 앞, Tauri 초기화 전에 로컬 소켓(Windows named pipe, Unix 소켓)으로 argv·cwd·t0를 넘기고 끝낸다.

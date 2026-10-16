@@ -23,6 +23,8 @@ export type AiAttribution = {
   notes: boolean;
   authors: AiAuthor[];
   files: { sha: string; path: string; spans: [number, number, number][] }[];
+  /** 백엔드가 이번에 읽어 해석한 노트 수(측정용) */
+  parsed: number;
 };
 
 /** 요청 하나 */

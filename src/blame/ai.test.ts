@@ -19,6 +19,7 @@ describe("AiOverlay", () => {
     const overlay = new AiOverlay();
     overlay.merge({
       notes: true,
+      parsed: 0,
       authors: [claude, human],
       files: [{ sha: "a", path: "x.rs", spans: [[10, 12, 1], [1, 3, 0]] }],
     });
@@ -31,9 +32,10 @@ describe("AiOverlay", () => {
 
   it("응답마다 다른 작성자 번호를 합친다", () => {
     const overlay = new AiOverlay();
-    const first: AiAttribution = { notes: true, authors: [claude], files: [{ sha: "a", path: "p", spans: [[1, 1, 0]] }] };
+    const first: AiAttribution = { notes: true, parsed: 0, authors: [claude], files: [{ sha: "a", path: "p", spans: [[1, 1, 0]] }] };
     const second: AiAttribution = {
       notes: true,
+      parsed: 0,
       authors: [cursor, claude],
       files: [{ sha: "b", path: "p", spans: [[1, 1, 0], [2, 2, 1]] }],
     };

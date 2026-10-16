@@ -9,9 +9,10 @@
 //! - 접두어 없음: 옛 형식 프롬프트(`metadata.prompts`)
 //!
 //! 노트는 notes 커밋의 트리에서 직접 읽는다(git을 띄우지 않는다). 트리 이름은 주석 단 커밋의 sha이고 노트가 많으면
-//! `ab/cdef…`처럼 나뉜다(fanout).
+//! `ab/cdef…`처럼 나뉜다(fanout). 해석한 노트는 blob id로 기억한다. git-ai는 커밋마다 노트를 붙여 notes 참조가
+//! 자주 움직이지만, 그대로인 노트는 blob도 그대로라 다시 읽지 않는다.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -366,16 +367,31 @@ impl NotesTree {
         self.notes.keys()
     }
 
+    /// `commit`의 노트 blob. 없으면 `None`.
+    pub fn blob(&self, commit: ObjectId) -> Option<ObjectId> {
+        self.notes.get(&commit).copied()
+    }
+
     /// `commit`의 노트 글. 없으면 `None`.
     pub fn read(&self, repo: &gix::Repository, commit: ObjectId) -> Result<Option<String>> {
-        let Some(blob) = self.notes.get(&commit) else {
-            return Ok(None);
-        };
-        let object = repo
-            .find_object(*blob)
-            .map_err(|e| Error(format!("노트 {commit}: {e}")))?;
-        Ok(Some(String::from_utf8_lossy(&object.data).into_owned()))
+        self.blob(commit)
+            .map(|blob| read_blob(repo, blob))
+            .transpose()
     }
+}
+
+fn read_blob(repo: &gix::Repository, blob: ObjectId) -> Result<String> {
+    let object = repo
+        .find_object(blob)
+        .map_err(|e| Error(format!("노트 {blob}: {e}")))?;
+    Ok(String::from_utf8_lossy(&object.data).into_owned())
+}
+
+/// 노트 blob을 읽어 해석한다. 못 읽거나 형식이 틀리면 `None`(그 노트는 없는 것으로 본다).
+fn parse_blob(repo: &gix::Repository, blob: ObjectId) -> Option<AuthorshipLog> {
+    read_blob(repo, blob)
+        .ok()
+        .and_then(|text| parse(&text).ok())
 }
 
 /// 트리를 내려가며 이름(16진수)을 이어 붙여 sha가 되는 blob을 모은다(fanout 깊이와 무관).
@@ -432,6 +448,8 @@ pub struct AiAttribution {
     pub authors: Vec<Author>,
     /// 구간이 하나라도 있는 것만
     pub files: Vec<AiFile>,
+    /// 이번에 읽어 해석한 노트 수(앞서 해석한 노트는 다시 읽지 않는다. 측정용)
+    pub parsed: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -442,7 +460,8 @@ pub struct AiFile {
     pub spans: Vec<[u32; 3]>,
 }
 
-/// 저장소마다 읽은 노트를 기억한다(notes 참조가 바뀌면 다시 읽는다). 앱 전체가 하나를 나눠 쓴다.
+/// 저장소마다 읽은 노트를 기억한다(notes 참조가 바뀌면 트리를 다시 읽고 바뀐 노트만 다시 해석한다).
+/// 앱 전체가 하나를 나눠 쓴다.
 #[derive(Default)]
 pub struct AiNotes {
     repos: Mutex<HashMap<PathBuf, Arc<Mutex<Option<Cached>>>>>,
@@ -450,10 +469,22 @@ pub struct AiNotes {
 
 struct Cached {
     tree: NotesTree,
-    /// 읽은 노트(못 읽은 노트는 None)
+    /// 해석한 노트(blob → 로그, 못 읽은 노트는 None). 지금 트리에 있는 blob만 남긴다.
     logs: HashMap<ObjectId, Option<Arc<AuthorshipLog>>>,
-    /// 옛 형식 키 → 프롬프트(모든 노트에서, 처음 필요할 때 만든다)
-    foreign: Option<HashMap<String, PromptRecord>>,
+    /// 옛 형식 키 → 프롬프트(처음 필요할 때 모든 노트에서 모은다)
+    foreign: Option<Foreign>,
+    /// 이번 요청에서 해석한 노트 수
+    parsed: usize,
+}
+
+/// 모든 노트의 옛 형식 프롬프트. 참조가 움직이면 새 노트만 더하고, 노트가 빠지거나 바뀌면(옛 blob이 트리에 없으면)
+/// 처음부터 다시 모은다.
+struct Foreign {
+    /// 이 트리까지 모았다
+    tip: ObjectId,
+    /// 모은 노트 blob
+    blobs: HashSet<ObjectId>,
+    prompts: HashMap<String, PromptRecord>,
 }
 
 impl AiNotes {
@@ -484,18 +515,24 @@ impl AiNotes {
                 notes: false,
                 authors: Vec::new(),
                 files: Vec::new(),
+                parsed: 0,
             });
         };
         if guard.as_ref().is_none_or(|c| c.tree.tip != tip) {
             let tree =
                 NotesTree::open(&local)?.ok_or_else(|| Error(format!("{NOTES_REF}가 없다")))?;
-            *guard = Some(Cached {
-                tree,
-                logs: HashMap::new(),
-                foreign: None,
+            *guard = Some(match guard.take() {
+                Some(old) => old.moved(tree),
+                None => Cached {
+                    tree,
+                    logs: HashMap::new(),
+                    foreign: None,
+                    parsed: 0,
+                },
             });
         }
         let cached = guard.as_mut().expect("방금 채웠다");
+        cached.parsed = 0;
 
         let mut authors: Vec<Author> = Vec::new();
         let mut index: HashMap<Author, u32> = HashMap::new();
@@ -507,8 +544,13 @@ impl AiNotes {
             let Some(log) = cached.log(&local, commit) else {
                 continue;
             };
-            let Cached { tree, foreign, .. } = &mut *cached;
-            let mut lookup = |key: &str| foreign_prompt(&local, tree, foreign, key);
+            let Cached {
+                tree,
+                foreign,
+                parsed,
+                ..
+            } = &mut *cached;
+            let mut lookup = |key: &str| foreign_prompt(&local, tree, foreign, parsed, key);
             let spans: Vec<[u32; 3]> = log
                 .spans(&item.path, &mut lookup)
                 .into_iter()
@@ -533,52 +575,71 @@ impl AiNotes {
             notes: true,
             authors,
             files,
+            parsed: cached.parsed,
         })
     }
 }
 
 impl Cached {
+    /// notes 참조가 `tree`로 움직였다. 그대로인 노트(같은 blob)의 해석과 모은 프롬프트는 그대로 쓴다.
+    fn moved(self, tree: NotesTree) -> Cached {
+        let live: HashSet<ObjectId> = tree.notes.values().copied().collect();
+        let mut logs = self.logs;
+        logs.retain(|blob, _| live.contains(blob));
+        // 빠진 노트가 있으면 그 노트의 프롬프트를 가려낼 수 없어 처음부터 다시 모은다(드물다).
+        let foreign = self
+            .foreign
+            .filter(|foreign| foreign.blobs.iter().all(|blob| live.contains(blob)));
+        Cached {
+            tree,
+            logs,
+            foreign,
+            parsed: 0,
+        }
+    }
+
     fn log(&mut self, repo: &gix::Repository, commit: ObjectId) -> Option<Arc<AuthorshipLog>> {
-        if let Some(log) = self.logs.get(&commit) {
+        let blob = self.tree.blob(commit)?;
+        if let Some(log) = self.logs.get(&blob) {
             return log.clone();
         }
-        let log = self
-            .tree
-            .read(repo, commit)
-            .ok()
-            .flatten()
-            .and_then(|text| parse(&text).ok())
-            .map(Arc::new);
-        self.logs.insert(commit, log.clone());
+        self.parsed += 1;
+        let log = parse_blob(repo, blob).map(Arc::new);
+        self.logs.insert(blob, log.clone());
         log
     }
 }
 
-/// 다른 노트에 적힌 옛 형식 프롬프트. 처음 부를 때 모든 노트의 프롬프트를 모은다(cherry-pick으로 옮겨진 줄).
+/// 다른 노트에 적힌 옛 형식 프롬프트(cherry-pick으로 옮겨진 줄). 처음 부를 때 모든 노트의 프롬프트를 모으고,
+/// 그 뒤 트리가 바뀌었으면 아직 안 본 노트만 더한다.
 fn foreign_prompt(
     repo: &gix::Repository,
     tree: &NotesTree,
-    foreign: &mut Option<HashMap<String, PromptRecord>>,
+    foreign: &mut Option<Foreign>,
+    parsed: &mut usize,
     key: &str,
 ) -> Option<PromptRecord> {
-    let all = foreign.get_or_insert_with(|| {
-        let mut all = HashMap::new();
-        for &commit in tree.commits() {
-            let Some(log) = tree
-                .read(repo, commit)
-                .ok()
-                .flatten()
-                .and_then(|t| parse(&t).ok())
-            else {
+    let all = foreign.get_or_insert_with(|| Foreign {
+        tip: ObjectId::null(repo.object_hash()),
+        blobs: HashSet::new(),
+        prompts: HashMap::new(),
+    });
+    if all.tip != tree.tip {
+        for &blob in tree.notes.values() {
+            if !all.blobs.insert(blob) {
+                continue;
+            }
+            *parsed += 1;
+            let Some(log) = parse_blob(repo, blob) else {
                 continue;
             };
             for (hash, prompt) in log.metadata.prompts {
-                all.entry(hash).or_insert(prompt);
+                all.prompts.entry(hash).or_insert(prompt);
             }
         }
-        all
-    });
-    all.get(key).cloned()
+        all.tip = tree.tip;
+    }
+    all.prompts.get(key).cloned()
 }
 
 #[cfg(test)]

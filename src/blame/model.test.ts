@@ -95,7 +95,7 @@ describe("BlameModel.aiAt", () => {
       attributes: [],
       stats: null,
     };
-    model.ai.merge({ notes: true, authors: [claude], files: [{ sha: "a", path: "옛이름.rs", spans: [[11, 12, 0]] }] });
+    model.ai.merge({ notes: true, parsed: 0, authors: [claude], files: [{ sha: "a", path: "옛이름.rs", spans: [[11, 12, 0]] }] });
     expect(model.aiAt(3)).toBeNull(); // 원래 10줄
     expect(model.aiAt(4)).toEqual(claude); // 원래 11줄
     expect(model.aiAt(5)).toEqual(claude); // 원래 12줄
