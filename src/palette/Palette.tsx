@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 import { highlightRuns } from "../quickopen/highlight";
 import { Runs } from "../quickopen/QuickOpen";
 import { filterByLabel } from "./match";
+import { openNotices } from "../notices/Notices";
 
 export type Command = {
   /** 팔레트에 보이는 이름(검색 대상) */
@@ -146,6 +147,7 @@ export function commonCommands(actions: {
     { label: "워크트리 고르기", keys: "W", run: actions.worktrees },
     { label: "단축키 도움말", keys: "?", run: actions.help },
     { label: "뒤로 (맨 앞 화면이면 창 숨기기)", keys: "q", run: actions.back },
+    { label: "오픈 소스 라이선스", detail: "앱에 든 다른 프로젝트의 저작권 고지", run: openNotices },
   ];
   if (actions.hud) list.push({ label: "성능 HUD 보이기·숨기기", keys: "`", run: actions.hud });
   return list;

@@ -6,6 +6,7 @@ import { CommitView } from "./commit/CommitView";
 import { GraphView } from "./graph/GraphView";
 import { HistoryView } from "./history/HistoryView";
 import { Hud } from "./Hud";
+import { Notices, openNotices, useNoticesRequest } from "./notices/Notices";
 import { call } from "./ipc";
 import {
   backDirectionOf,
@@ -70,6 +71,8 @@ export default function App() {
   const shownRef = useRef<Shown | null>(null);
   shownRef.current = shown;
   const readySent = useRef(false);
+  const [notices, setNotices] = useState(false);
+  useNoticesRequest(useCallback(() => setNotices(true), []));
 
   // 콜드 스타트에서 창은 첫 화면을 그린 뒤에 보인다(빈 화면 깜빡임 방지).
   const markReady = () => {
@@ -193,8 +196,14 @@ export default function App() {
             {info && <span className="muted"> v{info.version}</span>}
           </p>
           <p className="muted">터미널에서 plx를 실행하면 이 창에 대상 뷰가 열린다.</p>
+          <p>
+            <button type="button" className="link" onClick={openNotices}>
+              오픈 소스 라이선스
+            </button>
+          </p>
         </main>
       )}
+      {notices && <Notices onClose={() => setNotices(false)} />}
       <Hud />
     </div>
   );

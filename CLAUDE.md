@@ -54,7 +54,7 @@ GitLens의 핵심 흐름(줄 → 커밋 → 부모 리비전 blame → 파일·�
 crates/plx-core/   gix·git CLI 래퍼, 출력 파서, 캐시, 그래프 레인 레이아웃, plx 인자 파서, 인스턴스 간 전달(로컬 소켓)
                    (UI 무관, 단위 테스트 필수)
 src-tauri/         Tauri 명령·채널, 단일 인스턴스·CLI 호출을 창·트레이에 연결
-scripts/           설치·확인 스크립트 (macOS shim, 앱 자동 확인 check-app.sh)
+scripts/           설치·확인 스크립트 (macOS shim, 앱 자동 확인 check-app.sh), 오픈 소스 라이선스 고지 생성
 .github/workflows/ CI: Windows·macOS·Linux에서 검사(포맷·clippy·테스트)와 앱 확인(릴리스 빌드 + check-app.sh)
 src/               React UI
 bench/             참조 저장소 준비 스크립트, git 측정 하네스(plx-bench), 앱 지연 측정, 측정 결과(results.md)
@@ -84,6 +84,8 @@ docs/              MILESTONES.md
 - 코어 테스트: `cargo test -p plx-core` / 전체: `cargo test --workspace`
   (fixtures 결정성 테스트가 `fixtures/make-repos.sh`를 실행하므로 bash와 git이 필요하다. Windows는 Git for Windows의 bash, `PLX_BASH`로 지정 가능)
 - 테스트 저장소 만들기: `fixtures/make-repos.sh <출력 디렉터리>` → `history`, `encoding` 저장소 (어느 플랫폼에서든 같은 sha)
+- 오픈 소스 라이선스 고지: `npm run notices` → `public/third-party-notices.txt`(릴리스 빌드가 먼저 돌려 실행 파일에 넣는다.
+  앱에서는 명령 팔레트·도움말·첫 화면의 "오픈 소스 라이선스"로 본다. 개발 빌드에는 없다)
 - 앱 자동 확인(릴리스 빌드 후): `scripts/check-app.sh [실행 파일]` → 단일 인스턴스 전달·CLI 오류·동시 실행·분리 실행,
   blame이 끝까지 와서 거터를 그리는지(한글 경로 저장소 포함) 확인과 지연 측정.
   `PLX_CHECK_RECORD=<이름>`이면 지연 표를 `bench/results.md`에 넣는다. CI도 이 스크립트를 돌린다.
@@ -285,3 +287,11 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
   그만큼 붙은 짝만 다를 수 있다. 속도는 측정 잡음 안이다(bench/results.md). 옛 커밋과 PR 기록에는 옮긴 코드가 남는다
   (PR은 지울 수 없다). fzf(MIT)를 따른 퍼지 점수는 fzf의 고지를 `plx_core::fuzzy` 맨 위에 둔다. 바이너리를 배포하기 전에
   의존성의 저작권 고지를 앱에 묶고 Tauri 기본 아이콘을 바꾼다(docs/MILESTONES.md "리스크와 대응").
+- 2026-10-16: 바이너리에 넣는 제3자 저작권 고지는 `scripts/third-party-notices.mjs`가 릴리스 빌드마다 만든다(`tauri build`의
+  beforeBuildCommand. cargo-about 같은 도구를 더하지 않는다: Node와 `cargo metadata`로 충분하다). 실행 파일에 링크되는
+  크레이트(Windows·macOS·Linux × x86_64·aarch64의 합, 빌드·테스트 의존성 제외)와 dev가 아닌 npm 패키지마다 패키지에 든
+  라이선스·NOTICE 파일을 그대로 싣고, 같은 문구는 한 번만 싣는다. 파일이 없는 패키지는 같은 저장소·같은 라이선스 표기인
+  다른 패키지의 파일, 아니면 선언한 라이선스로 채운다(MIT는 작성자로 저작권 줄을 만들고, Apache-2.0·MPL-2.0처럼 저작권
+  줄이 없는 것은 표준 문구). 그래도 못 채우면 빌드를 실패시킨다. 결과(크레이트 402개·npm 57개, 문구 223개, 732KB)는
+  Vite가 dist로 옮겨 실행 파일에 묻히고, 앱의 "오픈 소스 라이선스" 창이 읽는다. 커밋하지 않는다(의존성을 바꿀 때 따로
+  갱신할 것이 없다). 창은 App이 그리고 열려 있는 동안 키를 모두 먹는다(화면들은 window에서 키를 받는다).

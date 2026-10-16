@@ -30,4 +30,5 @@ as defined in the Apache-2.0 license, shall be dual licensed as above, without a
 (따로 밝히지 않는 한 이 저장소에 보낸 기여도 위의 두 라이선스로 낸 것으로 본다.)
 
 퍼지 매칭의 점수 방식(`crates/plx-core/src/fuzzy.rs`)은 [fzf](https://github.com/junegunn/fzf)(MIT)를 따랐고,
-fzf의 저작권 고지는 그 파일 맨 위에 있다.
+fzf의 저작권 고지는 그 파일 맨 위에 있다. 앱에 들어 있는 다른 프로젝트의 저작권 고지는 릴리스 빌드가 모아
+(`npm run notices`) 앱의 명령 팔레트 → "오픈 소스 라이선스"에서 보인다.
