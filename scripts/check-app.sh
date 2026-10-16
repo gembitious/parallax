@@ -15,7 +15,7 @@
 #      다른 터미널의 커밋이 열린 그래프에 반영됨(.git 감시), 고친 파일이 열린 blame에 반영됨
 #   3. 동시에 여러 번 실행해도 상주 인스턴스는 하나(나머지는 넘기고 끝난다)
 #   4. 강제 종료 뒤 다시 시작(남은 소켓·락 정리), 앱으로 띄운 것처럼(인자·터미널 없이 저장소 밖에서) 띄워도 뜸
-#   5. 파이프로 처음 실행해도(명령 치환) 스스로 분리하고 바로 돌아옴(릴리스 빌드),
+#   5. 파이프로 처음 실행해도(명령 치환) 스스로 분리하고 창을 띄울 준비가 되면 돌아옴(릴리스 빌드),
 #      분리한 자식이 뜨지 못하면 부른 쪽에 알림(Linux: 화면 없이 실행)
 #   6. 앱 지연(bench/app-latency.sh)
 # 화면을 봐야 하는 것(창이 앞으로 오는지, 닫으면 숨는지, 트레이 메뉴)은 확인하지 못한다.
@@ -84,12 +84,12 @@ trap cleanup EXIT
 # 사용자의 blame 캐시와 섞이지 않게 캐시도 임시 디렉터리에 둔다.
 export PLX_PERF=1 PLX_PERF_LOG="$log" PLX_CACHE_DIR="$work/cache"
 
-# 기록에 문자열이 나타날 때까지 기다린다(최대 약 15초).
-wait_for() {
+# 기록에 문자열이 나타날 때까지 기다린다(최대 약 15초, 횟수를 주면 그만큼 0.05초씩).
+wait_for() { # wait_for <문자열> [횟수]
   local i=0
   while ! LC_ALL=C grep -qF "$1" "$log" 2>/dev/null; do
     i=$((i + 1))
-    if [ "$i" -gt 300 ]; then return 1; fi
+    if [ "$i" -gt "${2:-300}" ]; then return 1; fi
     sleep 0.05
   done
 }
@@ -183,8 +183,20 @@ check "저장소 밖의 파일 → 종료 코드 2, 터미널에 오류 (\`$stat
 check "잘못된 인자는 상주 인스턴스를 띄우지 않는다" test "$(plx_count)" -eq 0
 
 # 2. 콜드 스타트와 전달 ---------------------------------------------------
-PLX_DETACH=0 "$bin" package.json >/dev/null 2>&1 &
-check "콜드 스타트 → 첫 화면" wait_for '"kind":"cold"'
+# 이 잡에서 처음 띄우는 앱이라 WebView가 프로필부터 만든다(Windows CI는 몇 초). 넉넉히 기다리되 걸린 시간을 남겨
+# 느려지면 보이게 한다. 기록이 없으면 앱의 출력과 그때까지의 기록을 보인다.
+cold_start="$(now_ms)"
+PLX_DETACH=0 "$bin" package.json >"$work/primary.log" 2>&1 &
+if wait_for '"kind":"cold"' 1200; then
+  result PASS "콜드 스타트 → 첫 화면 ($(($(now_ms) - cold_start))ms)"
+else
+  result FAIL "콜드 스타트 → 첫 화면 ($(($(now_ms) - cold_start))ms 안에 기록이 없다)"
+  echo "--- 상주 인스턴스의 출력"
+  tail -n 20 "$work/primary.log" 2>/dev/null || true
+  echo "--- 그때까지의 기록(종류 이름)"
+  LC_ALL=C sed -n 's/.*"kind":"\([^"]*\)","label":"\([^"]*\)".*/\1 \2/p' "$log" 2>/dev/null | head -n 20 || true
+  echo "---"
+fi
 
 start="$(now_ms)"
 status=0
@@ -345,13 +357,15 @@ case "$bin" in
   *)
     # 명령 치환은 표준 출력 파이프가 닫힐 때까지 기다린다. 분리한 자식이 그 파이프(Windows는 셸이 넘긴 핸들)를
     # 물려받으면 앱이 끝날 때까지 돌아오지 않는다. 터미널 없이 파이프로 부르는 도구(에이전트의 셸 도구, lazygit)와 같다.
-    # 부모는 자식이 창을 띄울 준비를 마칠 때까지 기다린다(뜨지 못하면 알리려고).
+    # 부모는 자식이 창을 띄울 준비를 마칠 때까지 기다린다(뜨지 못하면 알리려고, 한도 10초: READY_TIMEOUT).
+    # 준비는 느린 러너에서 몇 초 걸리므로(Windows CI 3.6초) 그 한도 안이면 통과로 보고 걸린 시간을 남긴다. 한도에
+    # 걸리면 부모가 경고를 써서(출력) 실패한다. 자식이 파이프를 물려받는 버그면 여기서 돌아오지 않는다.
     start="$(now_ms)"
     status=0
     out="$("$bin" package.json:8 2>&1)" || status=$?
     elapsed=$(($(now_ms) - start))
-    returned() { [ "$status" -eq 0 ] && [ "$elapsed" -lt 3000 ] && [ -z "$out" ]; }
-    check "파이프로 처음 실행 → ${elapsed}ms에 돌아옴 (종료 코드 $status, 3초 이내${out:+, 출력: $out})" returned
+    returned() { [ "$status" -eq 0 ] && [ "$elapsed" -lt 11000 ] && [ -z "$out" ]; }
+    check "파이프로 처음 실행 → ${elapsed}ms에 돌아옴 (종료 코드 $status, 준비 한도 10초 안${out:+, 출력: $out})" returned
     check "분리된 프로세스가 상주 인스턴스가 됨" wait_for '"label":"콜드 스타트 · blame package.json:8"'
     check "분리 뒤 프로세스는 하나" wait_count 1
     if [ "$os" = linux ]; then
