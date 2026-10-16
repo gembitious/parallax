@@ -769,7 +769,10 @@ function GraphPane({
         canvas.style.width = `${width}px`;
         canvas.style.height = `${height}px`;
       }
-      const ctx = canvas.getContext("2d");
+      // CPU 캔버스를 청한다(willReadFrequently, 픽셀을 읽지는 않는다). macOS WebKit은 GPU 캔버스를 처음 쓸 때
+      // 준비하느라 앱이 뜬 뒤 첫 그래프가 0.9~1.7초 늦었다(CI: 그리기에 메인 스레드 259ms, 그 뒤 화면까지 1.2초,
+      // bench/results.md). 레인은 선과 점뿐이고 그리는 범위가 바뀔 때만 다시 그려 CPU로 충분하다.
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
       if (ctx) {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, width, height);
