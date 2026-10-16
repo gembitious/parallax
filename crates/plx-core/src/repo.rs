@@ -115,6 +115,33 @@ impl fmt::Debug for Repo {
 impl Repo {
     /// `path`(파일이나 디렉터리, 지금은 없는 경로도 된다)를 담은 저장소를 찾는다.
     pub fn discover(path: &Path) -> Result<Repo> {
+        Self::discover_with(path, Default::default())
+    }
+
+    /// [`discover`](Self::discover)와 같되 저장소 밖의 시스템·git 설치 설정은 읽지 않는다. `plx`가 상주 인스턴스에
+    /// 넘기기 전에 저장소를 열어 볼 때 쓴다: Windows에서는 시스템 설정의 자리를 gix가 git을 띄워 찾아(`EXEPATH`가
+    /// 없으면) 호출마다 30~50ms가 들었다(CI, PLX_TRACE). 그 확인(저장소인지, 리비전이 있는지)은 시스템 설정과
+    /// 상관없다. 상주 앱은 그 값을 프로세스마다 한 번 치르므로 [`discover`](Self::discover)로 모두 읽는다.
+    pub fn discover_for_check(path: &Path) -> Result<Repo> {
+        let mut permissions = gix::open::Permissions::all();
+        permissions.config.system = false;
+        permissions.config.git_binary = false;
+        permissions.attributes.system = false;
+        permissions.attributes.git_binary = false;
+        let defaults = gix::sec::trust::Mapping::<gix::open::Options>::default();
+        Self::discover_with(
+            path,
+            gix::sec::trust::Mapping {
+                full: defaults.full.permissions(permissions),
+                reduced: defaults.reduced.permissions(permissions),
+            },
+        )
+    }
+
+    fn discover_with(
+        path: &Path,
+        trust: gix::sec::trust::Mapping<gix::open::Options>,
+    ) -> Result<Repo> {
         let start = existing_ancestor(path)
             .ok_or_else(|| Error(format!("경로가 없다: {}", path.display())))?;
         let start = if start.is_dir() {
@@ -122,8 +149,10 @@ impl Repo {
         } else {
             start.parent().unwrap_or(start)
         };
-        let repo = gix::discover(start)
-            .map_err(|e| err(&format!("git 저장소가 아니다 ({})", start.display()), e))?;
+        let repo: gix::Repository =
+            gix::ThreadSafeRepository::discover_opts(start, Default::default(), trust)
+                .map_err(|e| err(&format!("git 저장소가 아니다 ({})", start.display()), e))?
+                .into();
         let workdir = repo
             .workdir()
             .ok_or_else(|| Error("작업트리가 없는(bare) 저장소는 지원하지 않는다".to_owned()))?;
