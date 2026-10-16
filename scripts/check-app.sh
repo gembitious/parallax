@@ -192,7 +192,7 @@ status=0
 check "두 번째 호출 → 종료 코드 0, 셸 $(($(now_ms) - start))ms" test "$status" -eq 0
 check "두 번째 호출 → 상주 인스턴스가 그림" wait_for '"label":"blame package.json:2"'
 # 상주 인스턴스는 처음 부른 셸의 작업 디렉터리(여기서는 이 저장소)를 쥐고 있지 않는다(실행 파일 디렉터리로 옮긴다).
-# 실행 파일은 프로세스에서 읽는다: macOS CI는 shim으로 부르므로 $bin의 디렉터리가 아니라 앱 번들 안이다.
+# 실행 파일은 프로세스에서 읽는다: macOS CI는 shim으로 부르므로 ${bin}의 디렉터리가 아니라 앱 번들 안이다.
 case "$os" in
   windows) result PASS "상주 인스턴스의 작업 디렉터리: Windows는 건너뜀(docs/MANUAL_CHECKS.md)" ;;
   *)
