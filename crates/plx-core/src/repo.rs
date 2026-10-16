@@ -455,13 +455,25 @@ impl Repo {
     /// 같은 것). 커밋 전체의 rename을 찾지 않으므로 파일 수백 개를 옮긴 커밋에서도 빠르다.
     /// 복사(copy)는 따라가지 않는다. 얕은 클론의 경계처럼 부모가 없으면 `None`.
     pub fn rename_source(&self, id: ObjectId, path: &str) -> Result<Option<String>> {
-        use crate::similarity::{self, MINIMUM_SCORE, Spans};
-
         let repo = self.local();
         let commit = repo.find_commit(id).map_err(|e| err("커밋 읽기", e))?;
         let Some(parent) = commit.parent_ids().next().map(|id| id.detach()) else {
             return Ok(None);
         };
+        self.rename_source_from(id, parent, path)
+    }
+
+    /// [`Repo::rename_source`]와 같고 첫 부모 대신 `parent`와 비교한다(merge의 다른 부모: 곁가지에서 옮긴 파일).
+    pub fn rename_source_from(
+        &self,
+        id: ObjectId,
+        parent: ObjectId,
+        path: &str,
+    ) -> Result<Option<String>> {
+        use crate::similarity::{self, MINIMUM_SCORE, Spans};
+
+        let repo = self.local();
+        let commit = repo.find_commit(id).map_err(|e| err("커밋 읽기", e))?;
         let Some(parent) = repo
             .try_find_object(parent)
             .map_err(|e| err("부모 커밋", e))?
@@ -508,6 +520,9 @@ impl Repo {
             .collect();
         let name = file_name(path);
         let same_name = |candidate: &str| file_name(candidate) == name;
+        // git(diffcore-rename의 find_basename_matches)은 지운 파일 가운데 이름이 같은 것이 하나뿐일 때만
+        // 이름으로 짝을 짓는다. 둘 이상이면 모두 내용으로 비교해 가장 비슷한 것을 고른다.
+        let unique_name = deleted.iter().filter(|(p, ..)| same_name(p)).count() == 1;
 
         // 1. 내용이 같은 파일(파일 이름이 같은 것을 먼저)
         let mut exact = deleted.iter().filter(|(_, id, _)| *id == dest_id);
@@ -566,11 +581,12 @@ impl Repo {
             if score < MINIMUM_SCORE {
                 continue;
             }
-            // 이름이 닮았고 아주 비슷하면(75% 이상) 다른 후보를 보지 않는다(git의 같은 파일 이름 지름길과 같은 기준).
-            if affinity > 0 && score >= (MINIMUM_SCORE + similarity::MAX_SCORE) / 2 {
+            let named = affinity == AFFINITY_SAME_NAME;
+            // 지운 파일 가운데 하나뿐인 같은 이름이고 아주 비슷하면(75% 이상) 다른 후보를 보지 않는다
+            // (git의 파일 이름 지름길과 같은 조건·기준).
+            if named && unique_name && score >= (MINIMUM_SCORE + similarity::MAX_SCORE) / 2 {
                 return Ok(Some(candidate.to_owned()));
             }
-            let named = affinity == AFFINITY_SAME_NAME;
             if best.is_none_or(|(s, n, _)| score > s || (score == s && named && !n)) {
                 best = Some((score, named, candidate));
             }

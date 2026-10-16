@@ -124,3 +124,32 @@ pub fn ten_lines(edited: &[usize]) -> String {
         })
         .collect()
 }
+
+/// [`git`]과 같고 작성·커밋 시각을 `t`(Unix 시각)로 정한다. 같은 초에 만든 커밋도 git log 순서가 정해진다.
+pub fn git_at(repo: &Path, args: &[&str], t: i64) -> Vec<u8> {
+    let date = format!("{t} +0000");
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["-c", "core.quotepath=false"])
+        .args(args)
+        .env("GIT_AUTHOR_DATE", &date)
+        .env("GIT_COMMITTER_DATE", &date)
+        .env("GIT_CONFIG_GLOBAL", NULL_DEVICE)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .expect("git 실행");
+    assert!(
+        out.status.success(),
+        "git {args:?} 실패: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    out.stdout
+}
+
+/// 작업트리를 모두 `t` 시각으로 커밋하고 sha를 돌려준다(바뀐 것이 없어도 커밋한다).
+pub fn commit_at(dir: &Path, message: &str, t: i64) -> String {
+    git(dir, &["add", "-A"]);
+    git_at(dir, &["commit", "-q", "--allow-empty", "-m", message], t);
+    git_text(dir, &["rev-parse", "HEAD"])
+}

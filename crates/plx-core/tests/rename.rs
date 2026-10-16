@@ -272,3 +272,58 @@ fn not_an_addition_or_root_commit() {
         .unwrap();
     assert_eq!(opened.rename_source(root, "src/lib.rs").unwrap(), None);
 }
+
+/// 지운 파일 가운데 이름이 같은 것이 둘이면 이름으로 짝짓지 않고 가장 비슷한 것을 고른다
+/// (git의 find_basename_matches는 이름이 하나뿐일 때만 쓴다). 80%인 것 대신 97%인 것.
+#[test]
+fn two_deleted_files_with_the_same_name_compare_by_content() {
+    let dir = common::scratch_repo("rename-same-basename");
+    let base: String = (1..=40)
+        .map(|i| {
+            format!(
+                "line {i:02}: the quick brown fox jumps over the lazy dog {}\n",
+                i * 7919
+            )
+        })
+        .collect();
+    let edit = |n: usize| -> String {
+        base.lines()
+            .enumerate()
+            .map(|(i, l)| {
+                if i < n {
+                    format!("changed {i} {l} xyz\n")
+                } else {
+                    format!("{l}\n")
+                }
+            })
+            .collect()
+    };
+    for d in ["a", "b", "c"] {
+        std::fs::create_dir_all(dir.join(d)).unwrap();
+    }
+    std::fs::write(dir.join("a/util.txt"), edit(8)).unwrap();
+    std::fs::write(dir.join("b/util.txt"), edit(1)).unwrap();
+    common::commit_all(&dir, "base");
+    git(&dir, &["rm", "-q", "a/util.txt", "b/util.txt"]);
+    std::fs::write(dir.join("c/util.txt"), &base).unwrap();
+    common::commit_all(&dir, "move");
+    let git_m = git_text(
+        &dir,
+        &[
+            "diff-tree",
+            "-r",
+            "-M",
+            "--name-status",
+            "--no-commit-id",
+            "HEAD",
+        ],
+    );
+    assert!(git_m.contains("b/util.txt\tc/util.txt"), "{git_m}");
+
+    let repo = Repo::discover(&dir).unwrap();
+    let head = repo.head().unwrap().unwrap();
+    assert_eq!(
+        repo.rename_source(head, "c/util.txt").unwrap().as_deref(),
+        Some("b/util.txt")
+    );
+}
