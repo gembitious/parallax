@@ -89,8 +89,11 @@ export type ViewAction =
   | { type: "request"; request: PlxRequest; receivedMs: number }
   | { type: "navigate"; navigation: Navigation }
   | { type: "back" }
-  /** 저장소가 바뀌어(HEAD 이동) `key` 화면을 새로 연다. blame은 `line` 줄로. 스택 자리는 그대로다. */
-  | { type: "reload"; key: number; line?: number | null };
+  /**
+   * 저장소가 바뀌어(HEAD 이동) `key` 화면을 새로 연다. blame은 `line` 줄로, 라인 히스토리는 `lines`(새 작업트리의 줄로
+   * 옮긴 범위)로. 스택 자리는 그대로다.
+   */
+  | { type: "reload"; key: number; line?: number | null; lines?: LineRange };
 
 /** 탐색 스택이 이보다 깊어지면 가장 아래 화면부터 버린다. */
 export const MAX_STACK = 30;
@@ -150,7 +153,11 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
       const key = nextEntryKey++;
       const stack = state.stack.slice();
       stack[index] =
-        entry.view === "blame" && action.line !== undefined ? { ...entry, key, line: action.line } : { ...entry, key };
+        entry.view === "blame" && action.line !== undefined
+          ? { ...entry, key, line: action.line }
+          : entry.view === "history" && entry.lines && action.lines
+            ? { ...entry, key, lines: action.lines }
+            : { ...entry, key };
       return { ...state, stack };
     }
   }
