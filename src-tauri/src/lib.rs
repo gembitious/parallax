@@ -61,6 +61,7 @@ pub fn run() {
             git::commit_info,
             git::commit_detail,
             git::file_versions,
+            git::file_stats,
             instance::current_request,
             window::app_ready,
             window::hide_window,

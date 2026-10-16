@@ -46,7 +46,9 @@ baseline 표가 `bench/results.md`에 있다.
 - [x] 파일 히스토리: `git log -- <path>`를 스트리밍하고, 파일이 rename으로 생긴 커밋에서 옛 이름의 `git log` 구간을 이어 붙인다
       (두 방식을 측정해 `--follow`는 쓰지 않기로 확정: CLAUDE.md 결정 기록, bench/results.md) — Windows·macOS 실기 확인 필요
 - [x] 라인/범위 히스토리 (`git log -L`), 코드 뷰 선택 영역에서 바로 진입(`L`, `J`/`K`로 선택) — Windows·macOS 실기 확인 필요
-- [x] 커밋 상세: gix 트리 diff + `@codemirror/merge` (분할/통합 전환), 히스토리에서 열면 해당 파일 diff만
+- [x] 커밋 상세: gix 트리 diff + `@codemirror/merge` (분할/통합 전환), 히스토리에서 열면 해당 파일 diff만.
+      rename은 git과 같은 단계로 찾고(`plx_core::renames`), 큰 커밋은 목록을 먼저 보이고 줄 수를 나눠 받는다.
+      큰 파일(4MB 넘음)은 "그래도 보기", 줄 diff에 보이지 않는 바뀜(모드·줄 끝·끝 개행·BOM·인코딩)은 알림
       — Windows·macOS 실기 확인 필요
 - [x] Bloom 필터 감지 → 없으면 "가속 설정" 버튼
       (사용자 확인 후 `git commit-graph write --reachable --changed-paths`, git 2.46 이상이면 필터 v2.
