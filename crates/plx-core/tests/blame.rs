@@ -435,6 +435,11 @@ fn session_working_tree_and_revision() {
     let (meta, lines) = session(&dir.join("src/lib.rs"), None);
     assert_eq!(meta.path, "src/lib.rs");
     assert_eq!(meta.rev, None);
+    // 작업트리 blame은 기준으로 삼은 HEAD를 알린다(화면이 열기 전의 HEAD 변화 알림을 거른다).
+    assert_eq!(
+        meta.head.as_deref(),
+        Some(git_text(&dir, &["rev-parse", "HEAD"]).as_str())
+    );
     let content = meta.content.unwrap();
     assert_eq!(
         content.line_count, lines,
@@ -451,6 +456,7 @@ fn session_working_tree_and_revision() {
         meta.rev.as_deref(),
         Some(git_text(&dir, &["rev-parse", "v0.1^{commit}"]).as_str())
     );
+    assert_eq!(meta.head, None, "고정 리비전은 HEAD와 상관없다");
     assert_eq!(meta.content.unwrap().line_count, lines);
 }
 
@@ -467,6 +473,7 @@ fn session_encodings_and_binary() {
 
     let (meta, lines) = session(&history().join("assets/logo.bin"), None);
     assert!(meta.binary && meta.content.is_none());
+    assert!(meta.head.is_some(), "바이너리 파일도 기준 HEAD를 알린다");
     assert_eq!(lines, 0);
 }
 
