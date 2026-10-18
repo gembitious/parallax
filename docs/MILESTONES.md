@@ -122,7 +122,7 @@ Windows·macOS의 성능 HUD(`그래프 … 스크롤`)로 확인한다(bench/re
 ## 리스크와 대응
 | 리스크 | 대응 |
 |---|---|
-| gix-blame 결과가 git과 다름 (diff slider 처리 차이) | 골든 테스트 통과 전 기본값 금지 |
+| gix-blame 결과가 git과 다름 (diff slider 처리 차이) | 골든 테스트 통과 전 기본값 금지. 2026-10-18 측정: 줄의 0.1~0.9%가 다르고 흘려보내지 않아 쓰지 않는다(CLAUDE.md 결정 기록) |
 | 윈도우 프로세스 생성 비용 | gix 인프로세스 우선, 스폰 횟수 측정 |
 | WebView 콜드 스타트 | 상주로 회피, 콜드 스타트는 1s 예산만 지킴 |
 | 한글 경로·내용 | `core.quotepath=false`, `-z`, 바이트 파싱, fixtures 회귀 테스트 |

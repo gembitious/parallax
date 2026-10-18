@@ -19,7 +19,8 @@ GitLens의 핵심 흐름(줄 → 커밋 → 부모 리비전 blame → 파일·�
    - refs·커밋·트리·blob 읽기, 리비전 워크, 트리 diff → `gix` (프로세스 생성 없음. 윈도우에서 특히 중요)
    - blame → `git blame --incremental`, 파일 히스토리 → `git log`, 라인 히스토리 → `git log -L`
      (git의 changed-path Bloom 필터 혜택을 그대로 받는다)
-   - `gix-blame`은 실험 플래그 뒤에만 둔다. git 결과와의 골든 테스트를 통과하기 전에는 기본값으로 바꾸지 않는다.
+   - `gix-blame`은 쓰지 않는다(2026-10-18 검토: 흘려보내지 않고 git과 다른 줄이 있다, 결정 기록).
+     git 결과와의 골든 테스트를 통과하기 전에는 앱에 넣지 않는다.
 3. **불변 결과는 영구 캐시.** 특정 커밋 기준 blame·이력은 바뀌지 않는다 → (저장소, 커밋 sha, 경로) 키로 디스크 캐시.
    작업트리 blame만 (HEAD sha, 파일 내용 해시) 키를 쓴다(읽은 내용을 `git blame --contents -`로 준다).
    blame 결과를 바꾸는 설정(`blame.ignoreRevsFile`, `.mailmap`, 줄 끝)도 키에 넣고, 얕은 클론은 캐시하지 않는다.
@@ -92,6 +93,8 @@ docs/              MILESTONES.md
   `PLX_CHECK_RECORD=<이름>`이면 지연 표를 `bench/results.md`에 넣는다. CI도 이 스크립트를 돌린다.
 - 앱 지연만 측정: `bench/app-latency.sh [실행 파일] [반복 횟수]` → 콜드 스타트, plx 호출 → 첫 페인트, blame 첫 줄 표시
 - git baseline: `bench/setup.sh`(참조 저장소 준비, 한 번) → `bench/run.sh [이름]`(측정 → `bench/results.md`)
+- gix-blame 다시 재기(gix를 올릴 때): `cargo run -p plx-bench --release --features gix-blame -- --repos bench/repos
+  --cases bench/cases-gix-blame.txt` → 결과는 `bench/results.md`의 "gix-blame 전환 검토"에 옮긴다
 
 ## 작업 방식
 - 적당한 작업 단위마다 PR을 만든다. 앞 PR이 아직 머지되지 않았으면 그 브랜치 위에 쌓고 PR 설명에 머지 순서를 적는다.
@@ -344,3 +347,10 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
   모듈을 실행하는 동안 오가게 하고, 첫 렌더는 답을 받은 뒤 요청한 화면으로 바로 한다. 듣기 전에 온 요청은 듣기 시작한 뒤
   current_request를 한 번 더 물어 받는다. 화면별로 나눠 불러오기는 blame 화면이 CodeMirror 대부분을 써서 덜 수 있는 것이
   첫 묶음의 12% 남짓이라 하지 않았다.
+- 2026-10-18: gix-blame 전환 검토. blame은 git CLI를 그대로 쓰고 gix-blame은 실험 플래그로도 앱에 넣지 않는다.
+  gix 0.89(gix-blame 0.19)를 참조 저장소의 blame 대상 네 파일에서 git과 나란히 쟀다(bench/results.md,
+  `bench/cases-gix-blame.txt`). 결과를 한꺼번에 내 첫 줄이 0.85~7.2초 뒤다(git `--incremental`은 첫 블록 10~20ms).
+  Bloom 필터를 읽지 않아 전체 시간도 git(Bloom 있음)의 1.9~4.2배다. 줄의 0.1~0.9%는 git과 다른 커밋을 가리킨다.
+  빈 줄·`}`·되풀이된 주석처럼 같은 내용의 줄을 어느 변경에 맞추느냐(slider)가 git의 xdiff와 달라서다.
+  fixtures 18개 파일은 모두 같았다. 첫 줄 예산(git 첫 출력 + 30ms)과 골든 테스트를 지킬 수 없다.
+  측정 항목은 plx-bench의 `gix-blame`(`--features gix-blame`, 앱·CI 빌드에는 들어가지 않는다)으로 남겨 gix를 올리면 다시 잰다.

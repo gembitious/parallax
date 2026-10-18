@@ -5,6 +5,7 @@
 //! 조건은 두 가지다: commit-graph 없음(`-c core.commitGraph=false`), commit-graph + changed-path Bloom 필터 있음.
 //! `plx-blame`·`plx-log`·`plx-graph`·`plx-files`는 git이 아니라 앱의 요청(`plx_core::blame_session`, `plx_core::history`,
 //! `plx_core::graph`, `plx_core::files`)을 그대로 돌려 우리 오버헤드를 잰다.
+//! `gix-blame`은 gix의 blame이다(실험, `--features gix-blame`). 표 아래에 줄마다 앱의 blame(git)과 같은지 적는다.
 //!
 //! 사용법: plx-bench --repos <디렉터리> --cases <파일> [--runs 5] [--warmup 1]
 //! 결과는 Markdown으로 표준 출력에 쓴다. bench/run.sh가 bench/results.md에 넣는다.
@@ -73,6 +74,10 @@ enum Kind {
     /// 첫 출력은 처음 검색(인덱스 읽기 포함), 첫 N은 목록이 있을 때 검색(좁히기 없이 전체), 전체는 검색어를
     /// 한 글자씩 칠 때(앞 결과 안에서 좁힌다) 가장 느린 글자다. 레코드는 맞은 파일 수.
     PlxFiles,
+    /// gix의 blame(`gix::Repository::blame_file`, HEAD, rename 추적): 앱의 `blame`을 대신할 수 있는지 본다
+    /// (CLAUDE.md 결정 기록). 흘려보내지 않으므로 첫 출력·첫 블록이 전체와 같다. 저장소는 매번 새로 연다.
+    /// `--features gix-blame`으로 빌드해야 잰다.
+    GixBlame,
 }
 
 impl Kind {
@@ -91,6 +96,7 @@ impl Kind {
             "plx-line-log" => Kind::PlxLineLog,
             "plx-graph" => Kind::PlxGraph,
             "plx-files" => Kind::PlxFiles,
+            "gix-blame" => Kind::GixBlame,
             _ => return None,
         })
     }
@@ -110,13 +116,14 @@ impl Kind {
             Kind::PlxLineLog => "plx 라인 히스토리",
             Kind::PlxGraph => "plx 커밋 그래프",
             Kind::PlxFiles => "plx 파일 찾기",
+            Kind::GixBlame => "gix-blame",
         }
     }
 
     /// "첫 N" 열에서 세는 레코드 수와 그 이름.
     fn first_n(self) -> Option<(usize, &'static str)> {
         match self {
-            Kind::Blame => Some((1, "첫 블록")),
+            Kind::Blame | Kind::GixBlame => Some((1, "첫 블록")),
             Kind::PlxBlame => Some((1, "첫 묶음")),
             Kind::Log | Kind::Follow | Kind::PlxLog => Some((50, "첫 50개")),
             Kind::PlxLineLog => Some((1, "첫 커밋")),
@@ -156,7 +163,8 @@ impl Kind {
             | Kind::PlxLog
             | Kind::PlxLineLog
             | Kind::PlxGraph
-            | Kind::PlxFiles => {
+            | Kind::PlxFiles
+            | Kind::GixBlame => {
                 unreachable!("git을 직접 띄우지 않는다")
             }
         };
@@ -186,7 +194,8 @@ fn count_records(kind: Kind, chunk: &[u8], carry: &mut Vec<u8>) -> usize {
         | Kind::PlxLog
         | Kind::PlxLineLog
         | Kind::PlxGraph
-        | Kind::PlxFiles => 0,
+        | Kind::PlxFiles
+        | Kind::GixBlame => 0,
     }
 }
 
@@ -544,6 +553,93 @@ fn run_show_once(repo: &Path, rev: &str) -> io::Result<Sample> {
     })
 }
 
+/// gix-blame 한 번. 레코드는 블록 수다.
+fn run_gix_blame_once(repo: &Path, target: &str, condition: Condition) -> io::Result<Sample> {
+    let start = Instant::now();
+    let blocks = gix_blame(repo, target, condition)?;
+    let total = start.elapsed().as_secs_f64() * 1000.0;
+    Ok(Sample {
+        first_byte: Some(total),
+        first_n: Some(total),
+        total,
+        records: blocks.len(),
+        bytes: 0,
+    })
+}
+
+/// blame 블록: (원인 커밋, 원래 시작 줄, 지금 시작 줄, 줄 수, 원래 경로). 줄 번호는 1부터다.
+type Block = (String, u32, u32, u32, String);
+
+/// HEAD의 `target`을 gix로 blame한다. git blame처럼 파일의 rename을 따라간다(gix 기본값, 유사도 50%).
+/// commit-graph는 조건대로 쓰고, gix-blame은 Bloom 필터를 읽지 않는다.
+#[cfg(feature = "gix-blame")]
+fn gix_blame(repo: &Path, target: &str, condition: Condition) -> io::Result<Vec<Block>> {
+    let [_, graph, _, paths] = condition.config();
+    let options = gix::open::Options::default().config_overrides([graph, paths]);
+    let repo = gix::open_opts(repo, options).map_err(io::Error::other)?;
+    let head = repo.head_id().map_err(io::Error::other)?.detach();
+    let options = gix::repository::blame_file::Options {
+        rewrites: Some(gix::diff::Rewrites::default()),
+        ..Default::default()
+    };
+    let outcome = repo
+        .blame_file(target.into(), head, options)
+        .map_err(io::Error::other)?;
+    Ok(outcome
+        .entries
+        .into_iter()
+        .map(|entry| {
+            let path = entry
+                .source_file_name
+                .map_or_else(|| target.to_owned(), |name| name.to_string());
+            (
+                entry.commit_id.to_string(),
+                entry.start_in_source_file + 1,
+                entry.start_in_blamed_file + 1,
+                entry.len.get(),
+                path,
+            )
+        })
+        .collect())
+}
+
+#[cfg(not(feature = "gix-blame"))]
+fn gix_blame(_: &Path, _: &str, _: Condition) -> io::Result<Vec<Block>> {
+    Err(io::Error::other(
+        "gix-blame 항목은 `--features gix-blame`으로 빌드해야 잰다",
+    ))
+}
+
+/// gix-blame과 앱의 blame(`git blame --incremental HEAD`)에서 (원인 커밋, 원래 줄, 원래 경로)가 같은 줄 수와 전체 줄 수
+fn gix_blame_agreement(repo: &Path, target: &str) -> io::Result<(usize, usize)> {
+    let ours = per_line(gix_blame(repo, target, Condition::Bloom)?);
+    let mut blocks = Vec::new();
+    plx_core::blame::Blame::spawn(repo, target, Some("HEAD"))?
+        .stream(|chunk| {
+            blocks.extend(
+                chunk
+                    .blocks
+                    .into_iter()
+                    .map(|b| (b.sha, b.orig_line, b.final_line, b.num_lines, b.path)),
+            )
+        })
+        .map_err(io::Error::other)?;
+    let theirs = per_line(blocks);
+    let same = ours.iter().zip(&theirs).filter(|(a, b)| a == b).count();
+    Ok((same, ours.len().max(theirs.len())))
+}
+
+/// 블록을 지금 줄 순서의 (원인 커밋, 원래 줄, 원래 경로)로 편다(`--incremental`은 블록 순서가 줄 순서가 아니다).
+fn per_line(mut blocks: Vec<Block>) -> Vec<(String, u32, String)> {
+    blocks.sort_by_key(|block| block.2);
+    blocks
+        .into_iter()
+        .flat_map(|(sha, orig, _, count, path)| {
+            (0..count).map(move |i| (sha.clone(), orig + i, path.clone()))
+        })
+        .collect()
+}
+
 fn median(mut values: Vec<f64>) -> Option<f64> {
     if values.is_empty() {
         return None;
@@ -593,6 +689,7 @@ fn measure_runs(
         Kind::PlxBlame => run_session_once(repo, &case.target, condition),
         Kind::PlxShow => run_show_once(repo, &case.target),
         Kind::PlxFiles => run_files_once(repo, &case.target),
+        Kind::GixBlame => run_gix_blame_once(repo, &case.target, condition),
         Kind::PlxLog => run_history_once(repo, &case.target, None, condition),
         Kind::PlxLineLog => {
             let (lines, path) = parse_line_target(&case.target)?;
@@ -765,6 +862,7 @@ fn report(opts: &Options, cases: &[Case]) -> io::Result<()> {
     println!();
     println!("| 저장소 | 항목 | 대상 | commit-graph 없음 | Bloom 있음 | 레코드 | 출력 |");
     println!("|---|---|---|---|---|---|---|");
+    let mut agreements = Vec::new();
     for case in cases {
         let repo = opts.repos.join(&case.repo);
         eprintln!("측정: {} {} {}", case.repo, case.kind.label(), case.target);
@@ -794,6 +892,15 @@ fn report(opts: &Options, cases: &[Case]) -> io::Result<()> {
             },
             bloom.bytes / 1024,
         );
+        if case.kind == Kind::GixBlame {
+            let (same, lines) = gix_blame_agreement(&repo, &case.target)?;
+            agreements.push(format!(
+                "- `{}` `{}`: {lines}줄 중 {same}줄({:.2}%)이 앱의 blame(git)과 원인 커밋·원래 줄·원래 경로까지 같다.",
+                case.repo,
+                case.target,
+                100.0 * same as f64 / lines.max(1) as f64
+            ));
+        }
     }
     println!();
     println!(
@@ -811,6 +918,15 @@ fn report(opts: &Options, cases: &[Case]) -> io::Result<()> {
     println!(
         "`plx 파일 찾기`의 첫 출력은 처음 검색(인덱스 읽기 포함), 첫 N은 목록이 있을 때 전체 검색, 전체는 한 글자씩 칠 때 가장 느린 글자다(commit-graph와 무관)."
     );
+    if !agreements.is_empty() {
+        println!(
+            "`gix-blame`은 흘려보내지 않아 첫 출력·첫 블록이 전체와 같고, 레코드는 블록 수다. Bloom 필터는 읽지 않는다(Bloom 있음 = commit-graph만)."
+        );
+        println!();
+        for line in agreements {
+            println!("{line}");
+        }
+    }
     Ok(())
 }
 
