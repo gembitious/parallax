@@ -77,3 +77,17 @@ export function watchRepo(repo: string, onChange: (change: RepoChange) => void):
 export function watchFile(path: string, onChange: (change: FileChange) => void): () => void {
   return subscribe(fileChannel, "watch_file", { path }, onChange);
 }
+
+/**
+ * HEAD가 움직였다는 알림으로 화면을 다시 열지. 감시는 구독이 끝나도 잠시 남아 그때의 지문을 이어받으므로
+ * (`UNWATCH_DELAY_MS`), 화면을 열기 바로 전에 만든 커밋의 알림이 화면이 열린 뒤에 올 수 있다(`git commit && plx log …`).
+ * 화면이 이미 그 HEAD로 읽었으면 다시 열지 않는다.
+ * - `movedTo`: 마지막 알림의 HEAD. 알림이 없었으면 undefined
+ * - `seen`: 화면이 읽은 기준 HEAD. 아직 모르면(읽는 중) undefined, 커밋이 없는 저장소면 null
+ * - `failed`: 열기에 실패했다. 기준이 없으니 HEAD가 움직이면 다시 연다(체크아웃으로 돌아온 파일 등).
+ */
+export function headMoved(movedTo: string | null | undefined, seen: string | null | undefined, failed: boolean): boolean {
+  if (movedTo === undefined) return false;
+  if (failed) return true;
+  return seen !== undefined && movedTo !== seen;
+}

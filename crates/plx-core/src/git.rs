@@ -40,6 +40,30 @@ pub fn command(repo_dir: &Path) -> Command {
     command
 }
 
+/// git(`git --version`)의 (주, 부) 버전. 앱이 떠 있는 동안 한 번만 묻는다(물을 때마다 git을 띄우지 않게).
+/// git을 찾지 못하면 `None`.
+pub fn version() -> Option<(u32, u32)> {
+    static VERSION: std::sync::OnceLock<Option<(u32, u32)>> = std::sync::OnceLock::new();
+    *VERSION.get_or_init(|| {
+        output(Path::new("."), ["--version"])
+            .ok()
+            .and_then(|out| parse_version(&String::from_utf8_lossy(&out)))
+    })
+}
+
+/// 상주 앱이 뜰 때 따로 스레드에서 부른다: git을 한 번 띄워(버전도 기억한다) 첫 요청의 git이 실행 파일을 처음 여는
+/// 값(CI의 macOS VM에서 0.9초, Windows 60ms)을 치르지 않게 한다. WebView를 만드는 동안(0.25~2초) 끝난다.
+pub fn warm_up() {
+    let _ = version();
+}
+
+/// `git version 2.43.0`, `git version 2.56.0.windows.2` → (2, 43)
+fn parse_version(text: &str) -> Option<(u32, u32)> {
+    let version = text.split_whitespace().nth(2)?;
+    let mut parts = version.split('.');
+    Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
+}
+
 /// 짧은 명령을 실행하고 표준 출력을 바이트로 받는다. 실패하면 표준 오류를 담은 오류를 돌려준다.
 pub fn output<I, S>(repo_dir: &Path, args: I) -> io::Result<Vec<u8>>
 where
@@ -307,6 +331,18 @@ pub fn unquote_path(raw: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn versions_of_git() {
+        assert_eq!(parse_version("git version 2.43.0\n"), Some((2, 43)));
+        assert_eq!(parse_version("git version 2.56.0.windows.2"), Some((2, 56)));
+        assert_eq!(
+            parse_version("git version 2.39.5 (Apple Git-154)"),
+            Some((2, 39))
+        );
+        assert_eq!(parse_version("nonsense"), None);
+        assert!(version().is_some(), "테스트를 돌리는 git");
+    }
 
     #[test]
     fn unquote_plain_and_escaped() {

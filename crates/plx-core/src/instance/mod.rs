@@ -50,6 +50,10 @@ pub struct Invocation {
     pub cwd: String,
     /// 호출 시작 시각(Unix epoch ms). 지연 측정의 기준점이다.
     pub t0_ms: f64,
+    /// 호출한 프로세스가 `main()`에 들어온 시각(Unix epoch ms). `t0_ms`부터 여기까지가 실행 파일을 띄우는 데 든
+    /// 시간이다(동적 라이브러리 싣기 포함). 넣기 전의 호출은 보내지 않는다(0).
+    #[serde(default)]
+    pub main_ms: f64,
     pub pid: u32,
     /// 호출한 셸의 환경 변수 가운데 상주 인스턴스가 쓸 것(에디터 고르기: `editor::FORWARDED_ENV`).
     /// 상주 앱은 다른 환경(Finder에서 뜬 앱의 짧은 PATH 등)에서 떴을 수 있다.
@@ -373,6 +377,7 @@ mod tests {
             args: args.iter().map(|s| s.to_string()).collect(),
             cwd: "/tmp/한글 경로".to_owned(),
             t0_ms: 1.5,
+            main_ms: 2.5,
             pid: 42,
             env: BTreeMap::from([("PATH".to_owned(), "/opt/한글/bin".to_owned())]),
         }

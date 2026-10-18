@@ -43,20 +43,25 @@ type State =
 /**
  * `repo`(작업트리 경로)의 가속 상태. 가속돼 있으면 `가속됨` 표만 그린다. `request`가 바뀌면(명령 팔레트) 버튼을 누른
  * 것처럼 확인 창을 연다. 상태를 아직 읽는 중이면 기억해 뒀다가 읽은 뒤 연다. 상태는 처음과, 쓰기를 시작·끝냈을 때,
- * 창으로 돌아왔을 때(밖에서 `git gc`를 했을 수 있다) 읽는다.
+ * 창으로 돌아왔을 때(밖에서 `git gc`를 했을 수 있다) 읽는다. 확인 창을 열고 닫으면 `onDialog`로 알리고(화면이 다시
+ * 열기를 미루고 늦게 온 이동을 버린다), 화면이 숨으면(`active`가 꺼지면) 닫는다.
  */
 export function Acceleration({
   repo,
   request = 0,
+  active = true,
   onDone,
+  onDialog,
 }: {
   repo: string;
   request?: number;
+  active?: boolean;
   onDone(message: string): void;
+  onDialog?(open: boolean): void;
 }) {
   const [state, setState] = useState<State>({ kind: "unknown" });
-  const latest = useRef({ state, onDone });
-  latest.current = { state, onDone };
+  const latest = useRef({ state, onDone, onDialog });
+  latest.current = { state, onDone, onDialog };
   /** 상태를 읽기 전에 온 요청 */
   const pending = useRef(false);
   /** 읽을 때마다 올린다. 늦게 온 옛 읽기는 버린다. */
@@ -107,6 +112,18 @@ export function Acceleration({
     if (now.kind === "unknown") pending.current = true;
     else answer(now);
   }, [request]);
+
+  const confirming = state.kind === "confirming";
+  useEffect(() => {
+    if (!confirming) return;
+    latest.current.onDialog?.(true);
+    return () => latest.current.onDialog?.(false);
+  }, [confirming]);
+
+  // 숨는 화면의 확인 창은 닫는다(돌아왔을 때 포커스 없이 떠 있지 않게).
+  useEffect(() => {
+    if (!active) setState((prev) => (prev.kind === "confirming" ? { kind: "known", status: prev.status } : prev));
+  }, [active]);
 
   useEffect(() => {
     refresh();
