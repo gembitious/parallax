@@ -1,24 +1,26 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { appInfo, onRequest, scriptStartMs, type AppInfo } from "./boot";
 import { BlameView } from "./blame/BlameView";
 import { CommitView } from "./commit/CommitView";
 import { GraphView } from "./graph/GraphView";
 import { HistoryView } from "./history/HistoryView";
 import { Hud } from "./Hud";
+import { Notices, openNotices, useNoticesRequest } from "./notices/Notices";
 import { call } from "./ipc";
 import {
-  backDirectionOf,
+  backDirectionAt,
   titleOf,
   viewReducer,
   type Navigation,
   type PlxRequest,
   type Shown,
   type StackEntry,
+  type ViewAction,
+  type ViewState,
 } from "./nav";
-import { afterPaint, getPerfInfo, initPerf, nowMs, phasesBetween, record } from "./perf";
-
-type AppInfo = { version: string; coreVersion: string };
+import { afterPaint, bootMarks, getPerfInfo, nowMs, phasesBetween, record } from "./perf";
+import type { SearchState } from "./blame/editor";
 
 // docs/MILESTONES.md 성능 예산
 const COLD_BUDGET_MS = 1000;
@@ -37,7 +39,9 @@ function recordShown({ request, receivedMs }: Shown, committedMs: number, painte
       phases: phasesBetween([
         ["프로세스", request.t0Ms],
         ["Tauri·WebView", getPerfInfo().mainStartMs],
-        ["JS·첫 렌더", performance.timeOrigin],
+        ["JS 읽기", performance.timeOrigin],
+        ["JS 실행", scriptStartMs],
+        ["시작 IPC", bootMarks.modulesMs],
         ["내용", receivedMs],
         [paint, committedMs],
         ["", end],
@@ -51,7 +55,13 @@ function recordShown({ request, receivedMs }: Shown, committedMs: number, painte
       budgetMs: PLX_BUDGET_MS,
       totalMs: end - request.t0Ms,
       phases: phasesBetween([
-        ["plx 실행·전달", request.t0Ms],
+        // plx 실행: 실행 파일을 띄우고 main까지(동적 라이브러리 싣기), 전달: 인자 검사·저장소 열어 보기·소켓으로 넘기기
+        ...(request.mainMs > request.t0Ms
+          ? ([
+              ["plx 실행", request.t0Ms],
+              ["전달", request.mainMs],
+            ] as [string, number][])
+          : ([["plx 실행·전달", request.t0Ms]] as [string, number][])),
         ["이벤트", request.recvMs],
         ["내용", receivedMs],
         [paint, committedMs],
@@ -64,12 +74,36 @@ function recordShown({ request, receivedMs }: Shown, committedMs: number, painte
 
 const hideWindow = () => invoke("hide_window").catch((e) => console.error("창 숨기기 실패", e));
 
-export default function App() {
+const NOTHING: ViewState = { shown: null, stack: [] };
+const firstState = (request: PlxRequest | null): ViewState =>
+  request ? viewReducer(NOTHING, { type: "request", request, receivedMs: nowMs() }) : NOTHING;
+
+/** initial: 첫 렌더에 띄울 요청(boot.ts가 물어 둔 것) */
+export default function App({ initial }: { initial: PlxRequest | null }) {
   const [info, setInfo] = useState<AppInfo | null>(null);
-  const [{ shown, stack }, dispatch] = useReducer(viewReducer, { shown: null, stack: [] });
+  const [{ shown, stack }, dispatch] = useReducer(viewReducer, initial, firstState);
   const shownRef = useRef<Shown | null>(null);
   shownRef.current = shown;
   const readySent = useRef(false);
+  const [notices, setNotices] = useState(false);
+  useNoticesRequest(useCallback(() => setNotices(true), []));
+  // 라이선스 창은 모든 화면 위에 떠서 키를 다 먹는다. 떠 있는 동안 늦게 온 이동(`<`의 답 등)은 버리고 다시 열기
+  // (저장소 변화)는 닫을 때까지 미룬다: 새 화면이 포커스를 가져가 창은 떠 있는데 키는 아래 화면으로 간다.
+  // 새 plx 호출은 그 화면을 보이려는 것이라 창을 닫는다.
+  const noticesRef = useRef(notices);
+  noticesRef.current = notices;
+  const deferredReloads = useRef<ViewAction[]>([]);
+  const reload = (action: ViewAction) => {
+    if (noticesRef.current) deferredReloads.current.push(action);
+    else dispatch(action);
+  };
+  useEffect(() => {
+    if (notices) return;
+    const actions = deferredReloads.current;
+    deferredReloads.current = [];
+    // 그사이 닫혔거나 다시 연 화면(옛 key)의 것은 reducer가 버린다.
+    for (const action of actions) dispatch(action);
+  }, [notices]);
 
   // 콜드 스타트에서 창은 첫 화면을 그린 뒤에 보인다(빈 화면 깜빡임 방지).
   const markReady = () => {
@@ -80,33 +114,21 @@ export default function App() {
 
   useEffect(() => {
     let disposed = false;
-    let unlisten: (() => void) | undefined;
-    const accept = (request: PlxRequest) => dispatch({ type: "request", request, receivedMs: nowMs() });
-    (async () => {
-      await initPerf();
-      // 먼저 듣기 시작한 뒤 놓친 요청을 가져온다. 순서를 바꾸면 그 사이에 온 요청을 잃는다.
-      unlisten = await listen<PlxRequest>("plx-request", (e) => accept(e.payload));
-      if (disposed) {
-        unlisten();
-        return;
-      }
-      const [latest, appInfo] = await Promise.all([
-        call<PlxRequest | null>("current_request"),
-        call<AppInfo>("app_info"),
-      ]);
-      if (disposed) return;
-      setInfo(appInfo);
-      if (latest) accept(latest);
-      else markReady();
-    })().catch((e) => {
-      console.error("초기화 실패", e);
-      markReady();
+    appInfo.then(
+      (appInfo) => !disposed && setInfo(appInfo),
+      (e) => console.error("앱 정보를 받지 못했다", e),
+    );
+    // 띄울 화면이 없으면(Finder·시작 메뉴로 띄움) 첫 화면 안내를 보인다.
+    if (!initial) markReady();
+    const stop = onRequest((request) => {
+      setNotices(false);
+      dispatch({ type: "request", request, receivedMs: nowMs() });
     });
     return () => {
       disposed = true;
-      unlisten?.();
+      stop();
     };
-    // markReady는 ref만 쓰므로 의존성이 없다.
+    // 첫 렌더의 요청만 본다. markReady는 ref만 쓴다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -138,8 +160,12 @@ export default function App() {
     if (title) invoke("set_window_title", { title }).catch(() => {});
   }, [top, rootLabel]);
 
+  // 키 처리기를 한 번만 만드는 화면은 처음 받은 onBack을 계속 부른다. 그때의 스택이 아니라 지금 스택을 본다
+  // (스택이 MAX_STACK을 넘어 아래를 버리면 그 화면이 맨 아래가 될 수 있다).
+  const stackRef = useRef(stack);
+  stackRef.current = stack;
   const back = () => {
-    if (stack.length > 1) dispatch({ type: "back" });
+    if (stackRef.current.length > 1) dispatch({ type: "back" });
     else hideWindow();
   };
 
@@ -155,8 +181,11 @@ export default function App() {
               depth: i + 1,
               onShown: entry.via === "request" ? (ms: number) => onShown(request.id, ms) : undefined,
               onBack: back,
-              onNavigate: (navigation: Navigation) => dispatch({ type: "navigate", navigation }),
-              onReload: (line?: number | null) => dispatch({ type: "reload", key: entry.key, line }),
+              onNavigate: (navigation: Navigation) => {
+                if (!noticesRef.current) dispatch({ type: "navigate", navigation });
+              },
+              onReload: (line?: number | null, search?: SearchState) =>
+                reload({ type: "reload", key: entry.key, line, search }),
             };
             const cold = entry.via === "request" && request.cold;
             return (
@@ -166,15 +195,17 @@ export default function App() {
                     {...common}
                     target={entry.target}
                     line={entry.line}
-                    backDirection={backDirectionOf(entry.via)}
+                    backDirection={backDirectionAt(stack, i)}
+                    search={entry.search}
                     cold={cold}
                   />
                 ) : entry.view === "history" ? (
                   <HistoryView
                     {...common}
-                    onReload={(lines) => dispatch({ type: "reload", key: entry.key, lines })}
+                    onReload={(lines, query) => reload({ type: "reload", key: entry.key, lines, query })}
                     target={entry.target}
                     lines={entry.lines}
+                    query={entry.query}
                     cold={cold}
                   />
                 ) : entry.view === "graph" ? (
@@ -193,8 +224,14 @@ export default function App() {
             {info && <span className="muted"> v{info.version}</span>}
           </p>
           <p className="muted">터미널에서 plx를 실행하면 이 창에 대상 뷰가 열린다.</p>
+          <p>
+            <button type="button" className="link" onClick={openNotices}>
+              오픈 소스 라이선스
+            </button>
+          </p>
         </main>
       )}
+      {notices && <Notices onClose={() => setNotices(false)} />}
       <Hud />
     </div>
   );

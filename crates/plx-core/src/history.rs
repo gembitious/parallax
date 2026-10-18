@@ -29,7 +29,7 @@ use crate::line_log::LineLogStream;
 use crate::linemap::LineMap;
 use crate::log::{EntrySource, LogEntry, LogError, LogStream};
 use crate::repo::{FilePath, Repo, RepoCache};
-use crate::requests::Requests;
+use crate::requests::{self, Requests};
 use crate::text;
 
 /// 성능 예산의 "첫 50개"
@@ -157,10 +157,15 @@ fn start(
     let Some(start) = start else {
         return Ok((meta, Plan::Empty));
     };
-    // 얕은 클론은 이력을 더 받으면(`fetch --unshallow`) 결과가 바뀐다.
-    let key = cache
-        .filter(|_| !repo.is_shallow())
-        .map(|_| CacheKey::history(repo.workdir(), &start.to_string(), &rel));
+    // 얕은 클론(이력을 더 받으면)과 부모를 바꾼 저장소(`git replace`)는 결과가 바뀐다.
+    let key = cache.filter(|_| repo.cacheable()).map(|_| {
+        CacheKey::history(
+            repo.workdir(),
+            &start.to_string(),
+            &rel,
+            &repo.history_settings(),
+        )
+    });
     if let Some(hit) = key
         .as_ref()
         .zip(cache)
@@ -236,9 +241,16 @@ fn start_lines(
         start: first,
         end: last,
     });
-    let key = cache
-        .filter(|_| !repo.is_shallow())
-        .map(|_| CacheKey::line_history(repo.workdir(), &sha, &rel, first, last));
+    let key = cache.filter(|_| repo.cacheable()).map(|_| {
+        CacheKey::line_history(
+            repo.workdir(),
+            &sha,
+            &rel,
+            first,
+            last,
+            &repo.line_history_settings(),
+        )
+    });
     if let Some(hit) = key
         .as_ref()
         .zip(cache)
@@ -300,7 +312,11 @@ impl HistorySessions {
         rev: Option<&str>,
         mut on_event: impl FnMut(HistoryEvent) -> bool,
     ) {
-        let end = self.drive(id, repos, &file.into(), rev, &mut on_event);
+        let file = file.into();
+        let end = requests::catch(
+            || self.drive(id, repos, &file, rev, &mut on_event),
+            |message| HistoryEvent::Error { message },
+        );
         self.requests.finish(id);
         on_event(end);
     }
@@ -315,7 +331,11 @@ impl HistorySessions {
         lines: LineRange,
         mut on_event: impl FnMut(HistoryEvent) -> bool,
     ) {
-        let end = self.drive_lines(id, repos, &file.into(), rev, lines, &mut on_event);
+        let file = file.into();
+        let end = requests::catch(
+            || self.drive_lines(id, repos, &file, rev, lines, &mut on_event),
+            |message| HistoryEvent::Error { message },
+        );
         self.requests.finish(id);
         on_event(end);
     }
