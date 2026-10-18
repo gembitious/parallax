@@ -1,0 +1,56 @@
+# 측정 항목: 저장소 종류 대상
+# 종류: spawn | blame | log | follow | line-log | show | graph | plx-blame | plx-show | plx-log | plx-line-log | plx-graph
+#       | plx-files | gix-blame
+#       (bench/src/main.rs의 Kind. gix-blame은 `--features gix-blame`으로 빌드해야 해 bench/cases-gix-blame.txt에 따로 둔다)
+# plx-*는 git 대신 앱의 blame 요청·커밋 상세·파일·라인 히스토리·커밋 그래프를 돌린다(같은 대상의 git 줄과 비교).
+# plx-graph의 대상은 범위(head: 클론 시점과 무관한 HEAD 이력만), +table은 앱 캐시의 커밋 표를 미리 채운 두 번째 열기.
+# plx-files는 Quick Open이고 대상은 검색어다(commit-graph와 무관해 두 열이 같다).
+# 대상을 바꾸면 results.md의 기존 수치와 비교할 수 없으니 모든 플랫폼에서 다시 잰다.
+
+# 프로세스 생성 비용 (Windows에서 특히 중요)
+git     spawn     -
+
+# git/git v2.56.0
+git     blame     diff.c                       # 7,860줄, 커밋 1,701개
+git     blame     builtin/blame.c              # 1,334줄, builtin-blame.c에서 rename
+git     plx-blame diff.c
+git     plx-blame builtin/blame.c
+git     log       Makefile                     # 커밋 3,276개 (가장 자주 바뀐 파일)
+git     log       diff.c
+git     follow    Documentation/git-log.adoc   # 2025년 .txt → .adoc rename: log 5개, --follow 120개
+git     follow    builtin/blame.c
+git     plx-log   Makefile
+git     plx-log   Documentation/git-log.adoc   # log 5개 + rename 앞(.txt) 구간
+git     plx-log   builtin/blame.c
+git     line-log  1000,1060:diff.c
+git     plx-line-log 1000,1060:diff.c
+git     show      HEAD
+git     plx-show  HEAD
+git     show      1f010d6bdf                   # .txt → .adoc: 파일 919개(rename 906개)
+git     plx-show  1f010d6bdf
+git     graph     -
+git     plx-graph head                         # 커밋 82,327개
+git     plx-graph head+table
+git     plx-files t                            # 한 글자: 거의 모두 맞는다
+git     plx-files blame
+
+# microsoft/vscode 1.142.0
+vscode  blame     src/vs/editor/common/config/editorOptions.ts                    # 6,989줄, 커밋 880개
+vscode  blame     src/vs/workbench/contrib/terminal/browser/terminalInstance.ts   # 3,021줄, 이동 이력 있음
+vscode  plx-blame src/vs/editor/common/config/editorOptions.ts
+vscode  plx-blame src/vs/workbench/contrib/terminal/browser/terminalInstance.ts
+vscode  log       package.json                                                    # 커밋 5,127개
+vscode  log       src/vs/workbench/browser/layout.ts
+vscode  follow    src/vs/workbench/contrib/terminal/browser/terminalInstance.ts   # log 1,342개, --follow 1,760개
+vscode  plx-log   package.json
+vscode  plx-log   src/vs/workbench/contrib/terminal/browser/terminalInstance.ts
+vscode  line-log  100,160:src/vs/editor/common/model/textModel.ts
+vscode  plx-line-log 100,160:src/vs/editor/common/model/textModel.ts
+vscode  show      HEAD
+vscode  plx-show  HEAD
+vscode  graph     -
+vscode  plx-graph head                         # 커밋 167,522개
+vscode  plx-graph head+table
+vscode  plx-files t                            # 추적 파일 20,355개
+vscode  plx-files editoroptions
+vscode  plx-files src/vs/editor                # 경로 조각: 모두 경로 등급이라 점수를 다 센다

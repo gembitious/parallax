@@ -1,0 +1,28 @@
+[package]
+name = "parallax"
+description = "로컬 git 이력을 생각하는 속도로 보는 읽기 전용 뷰어"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+default-run = "plx"
+
+# 실행 파일 이름이 곧 CLI 이름이다 (Windows plx.exe, macOS parallax.app/Contents/MacOS/plx).
+[[bin]]
+name = "plx"
+path = "src/main.rs"
+
+[lib]
+# 데스크탑 전용이라 모바일용 staticlib/cdylib는 만들지 않는다.
+name = "parallax_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.3", features = [] }
+
+[dependencies]
+plx-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2.12.4", features = ["tray-icon"] }

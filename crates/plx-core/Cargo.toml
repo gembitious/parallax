@@ -1,0 +1,41 @@
+[package]
+name = "plx-core"
+description = "parallax 코어: gix·git CLI 래퍼, 출력 파서, 캐시, 그래프 레이아웃, 인스턴스 간 전달 (UI 무관)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+# 저장소·객체 읽기, 리비전 해석, 트리·blob diff (프로세스를 띄우지 않는다)
+gix = { version = "0.89.0", default-features = false, features = ["basic", "sha1", "max-performance-safe"] }
+# 커밋의 encoding 헤더(예: euc-kr)에 맞춰 메시지를 디코드한다
+encoding_rs = "0.8.42"
+# Windows에서 canonicalize 결과의 `\\?\`를 안전할 때만 뗀다(git 작업 디렉터리·화면 표시용)
+dunce = "1.0.5"
+# .git(HEAD, refs, packed-refs) 변화 감시: 외부 커밋을 화면에 반영한다(M4)
+notify = { version = "8.2.0", default-features = false, features = ["macos_fsevent"] }
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.190"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_Console",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

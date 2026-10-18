@@ -1,0 +1,21 @@
+# Node
+node_modules/
+dist/
+dist-ssr/
+# 릴리스 빌드가 만드는 오픈 소스 라이선스 고지(npm run notices)
+/public/third-party-notices.txt
+*.local
+*.log
+
+# Rust / Tauri
+/target/
+/src-tauri/gen/schemas/
+
+# 에디터·OS
+.vscode/
+.idea/
+.DS_Store
+*.sw?
+
+# 벤치 참조 저장소 (bench/setup.sh)
+/bench/repos/
