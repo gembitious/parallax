@@ -255,8 +255,10 @@ fn hunk_header(line: &[u8]) -> Result<(u32, u32, u32, u32), ParseError> {
     Ok((old_start, old_lines, new_start, new_lines))
 }
 
-/// `a/경로` 또는 `"a/특수\"경로"`에서 접두어를 뗀 경로
+/// `a/경로` 또는 `"a/특수\"경로"`에서 접두어를 뗀 경로. git 2.54부터의 보통 diff 출력기는 공백이 든 경로 뒤에 TAB을
+/// 붙인다(`+++ b/a b.txt\t`). TAB이 든 경로는 따옴표로 감싸 `\t`로 나오므로 끝의 TAB 하나는 경로가 아니다.
 fn prefixed_path(raw: &[u8], prefix: &[u8]) -> String {
+    let raw = raw.strip_suffix(b"\t").unwrap_or(raw);
     let unquoted = git::unquote_path(raw);
     let path = unquoted.strip_prefix(prefix).unwrap_or(&unquoted);
     String::from_utf8_lossy(path).into_owned()
@@ -316,6 +318,11 @@ impl LineLogStream {
     ) -> io::Result<LineLogStream> {
         let mut command = git::command(repo_dir);
         command.args([
+            // `-L`의 경로도 이력을 걸을 때 pathspec이 된다. 파일 이름 그대로 본다(글롭 글자를 글롭으로 보지 않는다).
+            "--literal-pathspecs",
+            // git 2.54부터 `-L`은 보통 diff 출력기로 나온다. 빈 문맥 줄을 " " 없이 내면 줄 수를 셀 수 없다.
+            "-c",
+            "diff.suppressBlankEmpty=false",
             "log",
             FORMAT,
             "--date=raw",
@@ -463,6 +470,34 @@ mod tests {
         assert_eq!(added.old_path, None);
         assert_eq!(added.author_tz, "-0130");
         assert_eq!(added.hunks.as_ref().unwrap()[0].lines.len(), 3);
+    }
+
+    /// git 2.54부터 `-L`은 보통 diff 출력기로 나와, 공백이 든 경로 뒤에 TAB이 붙는다.
+    #[test]
+    fn standard_printer_tab_after_paths_with_spaces() {
+        let text = lines(&[
+            "\x01aaaa\0pppp\0A\0a@example.com\x001700000000 +0000\0edit\0",
+            "",
+            "diff --git a/한글 폴더/a b.txt b/한글 폴더/a b.txt",
+            "--- a/한글 폴더/a b.txt\t",
+            "+++ b/한글 폴더/a b.txt\t",
+            "@@ -2,1 +2,1 @@",
+            "-two",
+            "+TWO",
+            "\x01bbbb\0\0A\0a@example.com\x001600000000 +0000\0quoted\0",
+            "",
+            "--- /dev/null",
+            "+++ \"b/tab\\there.txt\"",
+            "@@ -0,0 +1,1 @@",
+            "+x",
+        ]);
+        let entries = parse(&[text.as_bytes()], "한글 폴더/a b.txt");
+        assert_eq!(entries[0].path, "한글 폴더/a b.txt");
+        assert_eq!(entries[0].status, Some(FileStatus::Modified));
+        assert_eq!(
+            entries[1].path, "tab\there.txt",
+            "TAB이 든 경로는 따옴표 안의 \\t"
+        );
     }
 
     #[test]

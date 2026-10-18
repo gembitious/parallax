@@ -18,6 +18,7 @@ use serde::Serialize;
 use crate::fuzzy::{self, Matcher, Query};
 pub use crate::graph::CANCELLED;
 use crate::repo::Repo;
+use crate::requests::lock_or_reset;
 
 /// 한 번에 돌려주는 결과 수 한도
 pub const MAX_LIMIT: usize = 1000;
@@ -306,7 +307,7 @@ impl FileLists {
         let limit = limit.clamp(1, MAX_LIMIT);
 
         let (list, load_ms, previous, recent) = {
-            let mut state = files.state.lock().unwrap();
+            let mut state = lock_or_reset(&files.state);
             let load_ms = state.refresh(repo)?;
             let list = state.loaded.as_ref().expect("방금 읽었다").1.clone();
             let previous = state
@@ -351,7 +352,7 @@ impl FileLists {
         mark_missing(repo.workdir(), &mut found.items);
         let matched = found.matched.len();
         if !stale() {
-            files.state.lock().unwrap().last = Some(Last {
+            lock_or_reset(&files.state).last = Some(Last {
                 list: list.clone(),
                 query: query.clone(),
                 matched: Arc::new(found.matched),
@@ -372,7 +373,7 @@ impl FileLists {
     /// 최근 연 파일로 기억한다(빈 검색어일 때 앞에 보인다).
     pub fn touch(&self, repo: &Repo, path: &str) {
         let files = self.files(repo);
-        let mut state = files.state.lock().unwrap();
+        let mut state = lock_or_reset(&files.state);
         state.recent.retain(|p| p != path);
         state.recent.push_front(path.to_owned());
         state.recent.truncate(RECENT);

@@ -1,0 +1,38 @@
+{
+  "files": {
+    "a.txt": {
+      "lines": {
+        "2": "53e3d5d6aed02a1c"
+      },
+      "prompts": {
+        "53e3d5d6aed02a1c": {
+          "agent_id": {
+            "id": "ai-thread-1792301826545758030",
+            "model": "unknown",
+            "tool": "mock_ai"
+          },
+          "human_author": "Test User <test@example.com>"
+        }
+      }
+    },
+    "sub/b.txt": {
+      "lines": {
+        "1": "306429871afc1861",
+        "3": "306429871afc1861"
+      },
+      "prompts": {
+        "306429871afc1861": {
+          "agent_id": {
+            "id": "ai-thread-1792301826657489045",
+            "model": "unknown",
+            "tool": "mock_ai"
+          },
+          "human_author": "Test User <test@example.com>"
+        }
+      }
+    }
+  },
+  "git_ai_version": "1.7.6",
+  "head": "a64e4097b60e531f2aaab029b4f6c928fe6c9753",
+  "notes_git_ai_version": "1.3.4"
+}

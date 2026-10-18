@@ -26,10 +26,10 @@ export function quickOpenNavigation(pick: QuickOpenPick): Navigation {
 
 type KeyLike = Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey" | "target">;
 
-/** 이 키로 Quick Open을 연다: `f`(입력란·코드 뷰 밖), Ctrl+P·⌘P(어디서나) */
+/** 이 키로 Quick Open을 연다: `f`(입력란 밖, 코드 뷰 안도: palette/keys.ts와 같다), Ctrl+P·⌘P(어디서나) */
 export function isQuickOpenKey(e: KeyLike): boolean {
   if (e.altKey || e.shiftKey) return false;
   if (e.ctrlKey || e.metaKey) return e.key === "p" || e.key === "P";
   const target = e.target as Element | null;
-  return e.key === "f" && !target?.closest?.("input, textarea, .cm-editor");
+  return e.key === "f" && !target?.closest?.("input, textarea");
 }

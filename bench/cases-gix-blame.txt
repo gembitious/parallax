@@ -1,0 +1,13 @@
+# gix-blame 전환 검토(CLAUDE.md 결정 기록): 앱이 쓰는 `git blame --incremental`(blame)과 gix의 blame을 같은 파일에서
+# 나란히 잰다. 표 아래에 줄마다 둘이 같은지 적는다. gix를 올리면 다시 잰다.
+#   cargo run -p plx-bench --release --features gix-blame -- --repos bench/repos --cases bench/cases-gix-blame.txt
+# 대상은 cases.txt의 blame과 같다(bench/setup.sh가 준비한 참조 저장소).
+
+git     blame      diff.c
+git     gix-blame  diff.c
+git     blame      builtin/blame.c
+git     gix-blame  builtin/blame.c
+vscode  blame      src/vs/editor/common/config/editorOptions.ts
+vscode  gix-blame  src/vs/editor/common/config/editorOptions.ts
+vscode  blame      src/vs/workbench/contrib/terminal/browser/terminalInstance.ts
+vscode  gix-blame  src/vs/workbench/contrib/terminal/browser/terminalInstance.ts

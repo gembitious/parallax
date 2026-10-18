@@ -3,6 +3,7 @@
 //! gix·git CLI 래퍼, git 출력 파서, 캐시, 그래프 레인 레이아웃, 인스턴스 간 전달을 둔다.
 //! UI(Tauri)에 의존하지 않으며, 모든 모듈은 단위 테스트를 가진다.
 
+pub mod ai_notes;
 pub mod blame;
 pub mod blame_session;
 pub mod cache;
@@ -10,6 +11,7 @@ pub mod cli;
 pub mod commit;
 pub mod commit_graph;
 pub mod commit_table;
+pub mod editor;
 pub mod files;
 pub mod fuzzy;
 pub mod git;
@@ -20,6 +22,7 @@ pub mod line_log;
 pub mod linemap;
 pub mod log;
 pub mod navigate;
+pub mod renames;
 pub mod repo;
 pub mod requests;
 pub mod similarity;

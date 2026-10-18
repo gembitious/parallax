@@ -1,5 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { splitPath } from "./highlight";
+import { highlightRuns, splitPath } from "./highlight";
+
+describe("highlightRuns", () => {
+  it("글 전체를 덩어리로 묶는다", () => {
+    expect(highlightRuns("파일 히스토리", [0, 3])).toEqual([
+      { text: "파", hit: true },
+      { text: "일 ", hit: false },
+      { text: "히", hit: true },
+      { text: "스토리", hit: false },
+    ]);
+    expect(highlightRuns("", [])).toEqual([]);
+    expect(highlightRuns("ab", [])).toEqual([{ text: "ab", hit: false }]);
+  });
+});
 
 describe("splitPath", () => {
   it("파일 이름과 디렉터리로 나누고 맞은 글자를 묶는다", () => {

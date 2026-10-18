@@ -10,8 +10,6 @@ import { splitPath, type Run } from "./highlight";
 import { quickOpenNavigation, type QuickOpenPick } from "./pick";
 import type { FileMatch, FileSearch } from "./types";
 
-export { isQuickOpenKey } from "./pick";
-
 /** 한 번에 받는 결과 수(화면에는 20여 개가 보인다. 많이 그릴수록 글자마다 페인트가 늘어난다) */
 const LIMIT = 50;
 /** 글자 하나를 친 뒤 결과가 그려지기까지(docs/MILESTONES.md 성능 예산) */
@@ -20,7 +18,7 @@ const PAGE = 10;
 
 /**
  * 화면에 Quick Open을 붙인다. `open()`으로 열고 `overlay`를 화면 끝에 그린다. 고르면 `onNavigate`로 가고,
- * 그냥 닫으면 `onClosed`(화면에 포커스를 돌려준다)를 부른다.
+ * 그냥 닫으면 `onClosed`(화면에 포커스를 돌려준다)를 부른다. `close()`는 화면이 숨을 때 닫는다(포커스는 그대로).
  */
 export function useQuickOpen({
   repo,
@@ -34,7 +32,7 @@ export function useQuickOpen({
   current: string | null;
   onNavigate(navigation: Navigation): void;
   onClosed?(): void;
-}): { open(): void; isOpen: boolean; overlay: ReactNode } {
+}): { open(): void; close(): void; isOpen: boolean; overlay: ReactNode } {
   const [isOpen, setOpen] = useState(false);
   const overlay =
     isOpen && repo ? (
@@ -51,7 +49,7 @@ export function useQuickOpen({
         }}
       />
     ) : null;
-  return { open: () => setOpen(true), isOpen, overlay };
+  return { open: () => setOpen(true), close: () => setOpen(false), isOpen, overlay };
 }
 
 type Shown = { search: FileSearch; seq: number };
@@ -85,6 +83,11 @@ export function QuickOpen({
 
   useEffect(() => {
     inputRef.current?.focus();
+    return () => {
+      // 닫은 뒤(Esc·바깥 클릭) 온 결과로는 고르지 않는다: 결과 전에 친 Enter가 남아 있으면 닫은 화면이 이동한다.
+      seq.current += 1;
+      pendingPick.current = null;
+    };
   }, []);
 
   useEffect(() => {
@@ -237,7 +240,8 @@ function pickOf(search: FileSearch, item: FileMatch, history: boolean): QuickOpe
   return { repo: search.repo, path: item.path, line: history ? null : search.line, history, missing: item.missing };
 }
 
-function Runs({ runs }: { runs: Run[] }) {
+/** 맞은 글자를 칠한 덩어리들(명령 팔레트도 쓴다) */
+export function Runs({ runs }: { runs: Run[] }) {
   return (
     <>
       {runs.map((run, i) =>

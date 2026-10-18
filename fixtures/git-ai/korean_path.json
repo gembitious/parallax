@@ -1,0 +1,22 @@
+{
+  "files": {
+    "자료/설명 문서.md": {
+      "lines": {
+        "2": "s_f8824fc066ea25::t_01b41caada6d5f",
+        "4": "s_f8824fc066ea25::t_01b41caada6d5f"
+      },
+      "prompts": {
+        "s_f8824fc066ea25::t_01b41caada6d5f": {
+          "agent_id": {
+            "id": "ai-thread-1792301146513189336",
+            "model": "unknown",
+            "tool": "mock_ai"
+          },
+          "human_author": "Test User <test@example.com>"
+        }
+      }
+    }
+  },
+  "git_ai_version": "1.7.6",
+  "head": "d03bc7c75da60de3465f2edcaff0f8f36ee0d705"
+}

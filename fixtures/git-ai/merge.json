@@ -1,0 +1,25 @@
+{
+  "files": {
+    "f.txt": {
+      "lines": {
+        "2": "s_42716592ee4399::t_23ca2cb2ecdbc2"
+      },
+      "prompts": {
+        "s_42716592ee4399::t_23ca2cb2ecdbc2": {
+          "agent_id": {
+            "id": "ai-thread-1792301146791564303",
+            "model": "unknown",
+            "tool": "mock_ai"
+          },
+          "human_author": "Test User <test@example.com>"
+        }
+      }
+    },
+    "other.txt": {
+      "lines": {},
+      "prompts": {}
+    }
+  },
+  "git_ai_version": "1.7.6",
+  "head": "806e576cf53cf3471a1f797a487c2287c20b8133"
+}
