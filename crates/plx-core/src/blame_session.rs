@@ -16,7 +16,7 @@ use serde::Serialize;
 use crate::blame::{Blame, BlameBlock, BlameCommit, BlameError, Chunk, Stats};
 use crate::cache::{CacheKey, DiskCache};
 use crate::repo::{FilePath, Repo, RepoCache};
-use crate::requests::Requests;
+use crate::requests::{self, Requests};
 use crate::text::{self, Decoded};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -297,7 +297,11 @@ impl Sessions {
         rev: Option<&str>,
         mut on_event: impl FnMut(SessionEvent) -> bool,
     ) {
-        let end = self.drive(id, repos, &file.into(), rev, &mut on_event);
+        let file = file.into();
+        let end = requests::catch(
+            || self.drive(id, repos, &file, rev, &mut on_event),
+            |message| SessionEvent::Error { message },
+        );
         self.requests.finish(id);
         on_event(end);
     }
