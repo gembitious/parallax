@@ -18,7 +18,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use gix::ObjectId;
@@ -31,6 +31,7 @@ use crate::cache::{CacheKey, DiskCache};
 use crate::commit_table::CommitTable;
 use crate::git::{self, Canceller, Streaming};
 use crate::repo::{Repo, RepoCache, decode_text, person};
+use crate::requests;
 
 /// 레인 색 수(화면 팔레트와 같다)
 pub const COLORS: u8 = 8;
@@ -269,6 +270,7 @@ struct Loader<'a> {
     graph: Option<&'a Graph>,
     table: Option<&'a CommitTable>,
     shallow: HashSet<ObjectId>,
+    rewrites: &'a Rewrites,
     dag: Dag,
     /// 노드마다 commit-graph 위치([`NONE`]이면 그래프에 없다)
     position: Vec<u32>,
@@ -296,12 +298,14 @@ impl<'a> Loader<'a> {
         graph: Option<&'a Graph>,
         table: Option<&'a CommitTable>,
         shallow: HashSet<ObjectId>,
+        rewrites: &'a Rewrites,
     ) -> Self {
         Loader {
             repo,
             graph,
             table,
             shallow,
+            rewrites,
             dag: Dag::default(),
             position: Vec::new(),
             table_index: Vec::new(),
@@ -369,6 +373,25 @@ impl<'a> Loader<'a> {
         node
     }
 
+    /// 시작점의 노드. commit-graph·커밋 표에 없는 시작점이 태그 객체면(태그를 `refs/remotes/` 아래로 받은 느슨한
+    /// 참조 등) 커밋까지 벗기고 그 커밋을 함께 돌려준다. 그래프·표에 있는 시작점은 커밋이라 객체를 읽지 않는다.
+    fn tip_node(&mut self, id: ObjectId) -> (u32, Option<ObjectId>) {
+        if let Some(graph) = self.graph
+            && let Some(position) = graph.lookup(id)
+        {
+            return (self.node_at(graph, position.0), None);
+        }
+        if let Some(table) = self.table
+            && let Some(index) = table.lookup(&id)
+        {
+            return (self.node_in_table(table, index), None);
+        }
+        match peel_tag(self.repo, id) {
+            Some(commit) if commit != id => (self.node_for(commit), Some(commit)),
+            _ => (self.node_for(id), None),
+        }
+    }
+
     fn expand(&mut self, node: u32) -> Result<(), String> {
         let start = self.dag.parents.len() as u32;
         let position = self.position[node as usize];
@@ -391,7 +414,12 @@ impl<'a> Loader<'a> {
             self.from_objects += 1;
             let mut parent_ids = std::mem::take(&mut self.parent_ids);
             parent_ids.clear();
-            match self.repo.objects.try_find(&id, &mut self.buf) {
+            // `git replace`로 바꾼 커밋은 바꾼 객체의 부모·시각을 읽는다(git log도 그렇게 보인다).
+            match self
+                .repo
+                .objects
+                .try_find(&self.rewrites.object(id), &mut self.buf)
+            {
                 Ok(Some(data)) => match data.try_into_commit_iter() {
                     Some(commit) => {
                         for token in commit {
@@ -407,6 +435,10 @@ impl<'a> Loader<'a> {
                                 Ok(_) => {}
                                 Err(e) => return Err(format!("커밋 {id} 해석 실패: {e}")),
                             }
+                        }
+                        if let Some(parents) = self.rewrites.grafts.get(&id) {
+                            parent_ids.clear();
+                            parent_ids.extend_from_slice(parents);
                         }
                         // 얕은 클론의 경계 커밋은 git처럼 부모가 없는 것으로 본다.
                         if self.shallow.contains(&id) {
@@ -467,7 +499,15 @@ impl<'a> Loader<'a> {
     /// 객체에서 읽은 커밋으로 새 커밋 표를 만든다. commit-graph가 없고 객체에서 많이 읽었을 때만 쓸모가 있다.
     fn new_table(&self, missing: &HashSet<u32>, min_new: usize) -> Option<CommitTable> {
         let new = self.from_objects - missing.len();
-        if self.graph.is_some() || !self.shallow.is_empty() || new == 0 || new < min_new {
+        // 객체를 읽지 못한 커밋이 있으면(대체 저장소가 잠시 없는 등) 그 자식의 부모가 빠진 채 적혀, 객체가 돌아와도
+        // 표가 이력을 끊는다. 얕은 클론·바꾼 부모(`git replace`, graft)는 객체와 다른 부모라 적지 않는다.
+        if self.graph.is_some()
+            || !self.shallow.is_empty()
+            || !self.rewrites.is_empty()
+            || !missing.is_empty()
+            || new == 0
+            || new < min_new
+        {
             return None;
         }
         let commits: Vec<(ObjectId, Vec<ObjectId>, i64)> = (0..self.dag.len() as u32)
@@ -505,6 +545,31 @@ struct Built {
     table: Option<Arc<CommitTable>>,
     node_of_table: Vec<u32>,
     node_of_id: HashMap<ObjectId, u32>,
+    /// 행의 요약·작성자와 검색도 바꾼 객체에서 읽는다.
+    rewrites: Arc<Rewrites>,
+}
+
+/// git이 객체와 다른 내용·부모를 보는 커밋: 객체를 바꾸는 참조(`git replace`, `refs/replace/<원래 sha>`)와
+/// `info/grafts`. 이것이 있거나 얕은 클론이면 git은 commit-graph를 쓰지 않는다(commit_graph_compatible). 우리도
+/// commit-graph와 커밋 표를 쓰지 않고 객체에서 바꾼 부모를 읽는다. gix 0.89는 `core.useReplaceRefs`를 거꾸로 읽어
+/// (설정이 없거나 true면 끈다) 객체를 바꾸지 않으므로 직접 한다. 경로 검색(git log)은 git이 바꿔 준다.
+#[derive(Debug, Default)]
+struct Rewrites {
+    /// 원래 커밋 → 그 내용 대신 읽을 객체
+    replace: HashMap<ObjectId, ObjectId>,
+    /// 커밋 → 그 부모 대신 쓸 부모
+    grafts: HashMap<ObjectId, Vec<ObjectId>>,
+}
+
+impl Rewrites {
+    fn is_empty(&self) -> bool {
+        self.replace.is_empty() && self.grafts.is_empty()
+    }
+
+    /// 내용을 읽을 객체
+    fn object(&self, id: ObjectId) -> ObjectId {
+        self.replace.get(&id).copied().unwrap_or(id)
+    }
 }
 
 impl Built {
@@ -530,22 +595,36 @@ struct LoadStats {
 }
 
 /// `tips`에서 닿는 DAG를 읽고 순서를 정한다. 취소되면 `None`. 새로 쓸 커밋 표가 있으면 같이 돌려준다.
+#[allow(clippy::too_many_arguments)]
 fn build(
     repo: &gix::Repository,
     graph: Option<Graph>,
     table: Option<Arc<CommitTable>>,
     table_min_new: usize,
     tips: &[ObjectId],
+    rewrites: &Arc<Rewrites>,
     cancelled: &AtomicBool,
     on_progress: &mut dyn FnMut(usize) -> bool,
-) -> Result<Option<(Built, LoadStats, Option<CommitTable>)>, String> {
+) -> Result<Option<Loaded>, String> {
     let started = Instant::now();
     let shallow = match repo.shallow_commits() {
         Ok(Some(commits)) => commits.iter().copied().collect(),
         _ => HashSet::new(),
     };
-    let mut loader = Loader::new(repo, graph.as_ref(), table.as_deref(), shallow);
-    let tip_nodes: Vec<u32> = tips.iter().map(|&id| loader.node_for(id)).collect();
+    let mut loader = Loader::new(repo, graph.as_ref(), table.as_deref(), shallow, rewrites);
+    let mut peeled = Vec::new();
+    let mut tip_nodes: Vec<u32> = Vec::with_capacity(tips.len());
+    for &id in tips {
+        let (node, commit) = loader.tip_node(id);
+        if let Some(commit) = commit {
+            peeled.push((id, commit));
+            // 벗긴 태그가 다른 시작점과 같은 커밋일 수 있다.
+            if tip_nodes.contains(&node) {
+                continue;
+            }
+        }
+        tip_nodes.push(node);
+    }
     let mut last = Instant::now();
     let mut expanded = 0usize;
     while let Some(node) = loader.stack.pop() {
@@ -604,11 +683,21 @@ fn build(
             table,
             node_of_table,
             node_of_id,
+            rewrites: rewrites.clone(),
         },
         stats,
         new_table,
+        peeled,
     )))
 }
+
+/// [`build`]의 결과: 그래프, 측정, 새로 쓸 커밋 표, 벗긴 시작점(태그 → 커밋)
+type Loaded = (
+    Built,
+    LoadStats,
+    Option<CommitTable>,
+    Vec<(ObjectId, ObjectId)>,
+);
 
 /// 검색을 새 검색이 멈췄을 때의 오류(화면은 무시한다)
 pub const CANCELLED: &str = "취소했다";
@@ -704,6 +793,7 @@ struct Refs {
     hidden_remotes: usize,
     /// 같은 시작점을 git log에 주는 인자(경로 검색용)
     revs: Vec<String>,
+    rewrites: Rewrites,
 }
 
 fn read_refs(repo: &Repo, options: GraphOptions) -> Result<Refs, String> {
@@ -719,6 +809,11 @@ fn read_refs(repo: &Repo, options: GraphOptions) -> Result<Refs, String> {
     let mut branches: Vec<(BString, ObjectId)> = Vec::new();
     let mut remotes: Vec<(BString, ObjectId)> = Vec::new();
     let mut tags: Vec<(BString, ObjectId)> = Vec::new();
+    let mut rewrites = Rewrites {
+        replace: HashMap::new(),
+        grafts: crate::repo::read_grafts(local.common_dir()),
+    };
+    let replace_base = crate::repo::replace_enabled(&local).then(crate::repo::replace_base);
     let platform = local.references().map_err(|e| format!("참조: {e}"))?;
     for reference in platform.all().map_err(|e| format!("참조: {e}"))? {
         // 읽지 못한 참조 하나 때문에 그래프 전체를 포기하지 않는다.
@@ -747,6 +842,11 @@ fn read_refs(repo: &Repo, options: GraphOptions) -> Result<Refs, String> {
             remotes.push((short.into(), id));
         } else if let Some(short) = name.strip_prefix(b"refs/tags/") {
             tags.push((short.into(), id));
+        } else if let Some(base) = &replace_base
+            && let Some(original) = name.strip_prefix(base.as_bytes())
+            && let Ok(original) = ObjectId::from_hex(original)
+        {
+            rewrites.replace.insert(original, id);
         }
     }
     // git의 `--branches`·`--remotes`처럼 이름 순
@@ -884,6 +984,7 @@ fn read_refs(repo: &Repo, options: GraphOptions) -> Result<Refs, String> {
         hidden_branches,
         hidden_remotes,
         revs,
+        rewrites,
     })
 }
 
@@ -1023,7 +1124,9 @@ struct State {
 
 struct Session {
     repo: Arc<Repo>,
-    labels: HashMap<ObjectId, Vec<Label>>,
+    /// 커밋 → 이름표. 태그 객체를 가리키는 시작점을 벗기면 커밋으로 옮긴다.
+    labels: Mutex<HashMap<ObjectId, Vec<Label>>>,
+    rewrites: Arc<Rewrites>,
     /// 시작점을 git log에 주는 인자
     revs: Vec<String>,
     state: Mutex<State>,
@@ -1046,7 +1149,10 @@ impl Session {
 
     /// 새 검색을 시작한다: 진행 중인 검색(경로 검색의 git 포함)을 멈추고 이 검색의 세대 번호를 돌려준다.
     fn start_search(&self) -> u64 {
-        if let Some((_, git)) = self.search_git.lock().unwrap().take() {
+        // 세대 올리기와 경로 검색 git 등록은 같은 잠금 안에서 한다: 앞 검색이 새 검색의 git을 덮어쓰면
+        // 그 git을 더는 멈출 수 없다.
+        let mut current = self.search_git.lock().unwrap();
+        if let Some((_, git)) = current.take() {
             git.cancel();
         }
         self.search_generation.fetch_add(1, Ordering::SeqCst) + 1
@@ -1100,6 +1206,7 @@ impl Session {
     fn rows(&self, built: &Built, nodes: &[u32], layouts: Vec<RowLayout>) -> Vec<GraphRow> {
         let mut repo = self.repo.local();
         repo.object_cache_size_if_unset(OBJECT_CACHE_BYTES);
+        let labels = self.labels.lock().unwrap();
         nodes
             .iter()
             .zip(layouts)
@@ -1118,10 +1225,10 @@ impl Session {
                     author_mail: String::new(),
                     author_time: 0,
                     author_tz_offset: 0,
-                    labels: self.labels.get(&id).cloned().unwrap_or_default(),
+                    labels: labels.get(&id).cloned().unwrap_or_default(),
                     layout,
                 };
-                if let Ok(commit) = repo.find_commit(id)
+                if let Ok(commit) = repo.find_commit(built.rewrites.object(id))
                     && let Ok(decoded) = commit.decode()
                 {
                     let encoding = decoded.encoding;
@@ -1243,7 +1350,8 @@ impl GraphSessions {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         let session = Arc::new(Session {
             repo,
-            labels: refs.labels,
+            labels: Mutex::new(refs.labels),
+            rewrites: Arc::new(refs.rewrites),
             revs: refs.revs,
             state: Mutex::new(State::default()),
             cancelled: AtomicBool::new(false),
@@ -1316,7 +1424,7 @@ impl GraphSessions {
             };
             let id = built.dag.id(built.order[row]);
             if (hex && id.to_hex().to_string().starts_with(&query))
-                || commit_matches(&repo, id, &query, &mut buf)
+                || commit_matches(&repo, built.rewrites.object(id), &query, &mut buf)
             {
                 return Ok(Some(row));
             }
@@ -1347,10 +1455,14 @@ impl GraphSessions {
             .arg("--")
             .arg(path);
         let mut git = Streaming::spawn(command, "git log").map_err(|e| e.to_string())?;
-        *session.search_git.lock().unwrap() = Some((generation, git.canceller()));
-        if session.search_stale(generation) {
-            git.abort();
-            return Err(CANCELLED.to_owned());
+        {
+            let mut current = session.search_git.lock().unwrap();
+            if session.search_stale(generation) {
+                drop(current);
+                git.abort();
+                return Err(CANCELLED.to_owned());
+            }
+            *current = Some((generation, git.canceller()));
         }
         let mut rows = Vec::new();
         let mut pending: Vec<u8> = Vec::new();
@@ -1410,8 +1522,16 @@ fn walk(
     started: Instant,
     mut on_event: impl FnMut(GraphEvent) -> bool,
 ) {
-    let end = walk_inner(&session, tables, &tips, meta, started, &mut on_event);
-    session.state.lock().unwrap().done = true;
+    let end = requests::catch(
+        || walk_inner(&session, tables, &tips, meta, started, &mut on_event),
+        |message| GraphEvent::Error { message },
+    );
+    // 패닉이 상태를 쥔 채였어도 끝났다고 적는다(이 그래프는 오류로 끝났다).
+    session
+        .state
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .done = true;
     on_event(end);
 }
 
@@ -1425,7 +1545,12 @@ fn walk_inner(
 ) -> GraphEvent {
     let mut repo = session.repo.local();
     repo.object_cache_size_if_unset(OBJECT_CACHE_BYTES);
-    let graph = repo.commit_graph_if_enabled().ok().flatten();
+    // git처럼(commit_graph_compatible) 얕은 클론이거나 부모를 바꾼 커밋(`git replace`, graft)이 있으면 commit-graph와
+    // 커밋 표의 부모는 git이 보는 부모가 아니다. 객체에서 읽는다(얕은 경계도 객체 쪽에서만 지킨다).
+    let compatible = session.rewrites.is_empty() && !repo.is_shallow().unwrap_or(true);
+    let graph = compatible
+        .then(|| repo.commit_graph_if_enabled().ok().flatten())
+        .flatten();
     meta.commit_graph = graph.is_some();
     if !on_event(GraphEvent::Meta(meta)) {
         return GraphEvent::Cancelled;
@@ -1433,17 +1558,18 @@ fn walk_inner(
 
     let git_dir =
         dunce::canonicalize(repo.common_dir()).unwrap_or_else(|_| repo.common_dir().to_owned());
-    let table = if graph.is_none() {
+    let table = if graph.is_none() && compatible {
         tables.get(&git_dir)
     } else {
         None
     };
-    let (built, load, new_table) = match build(
+    let (built, load, new_table, peeled) = match build(
         &repo,
         graph,
         table,
         tables.min_new,
         tips,
+        &session.rewrites,
         &session.cancelled,
         &mut |commits| on_event(GraphEvent::Loading { commits }),
     ) {
@@ -1451,6 +1577,19 @@ fn walk_inner(
         Ok(None) => return GraphEvent::Cancelled,
         Err(message) => return GraphEvent::Error { message },
     };
+    // 태그 객체를 가리키던 시작점의 이름표는 벗긴 커밋에 단다.
+    if !peeled.is_empty() {
+        let mut labels = session.labels.lock().unwrap();
+        for (tag, commit) in peeled {
+            if let Some(moved) = labels.remove(&tag) {
+                let list = labels.entry(commit).or_default();
+                list.extend(moved);
+                list.sort_by(|a, b| {
+                    (!a.current, a.kind, &a.name).cmp(&(!b.current, b.kind, &b.name))
+                });
+            }
+        }
+    }
     let mut stats = GraphStats {
         load_ms: load.load_ms,
         sort_ms: load.sort_ms,

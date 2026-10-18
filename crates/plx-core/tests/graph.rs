@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
-use common::{encoding, git, git_text, history};
+use common::{commit_at, encoding, git, git_text, history, scratch_repo};
 use plx_core::cache::DiskCache;
 use plx_core::graph::{
     CHECKPOINT, GraphEvent, GraphMeta, GraphOptions, GraphRow, GraphScope, GraphSessions,
@@ -612,4 +612,173 @@ fn search_paths_like_git_log() {
         }
         sessions.close(id);
     }
+}
+
+// ---------------------------------------------------------------- 리뷰에서 찾은 경우(회귀 테스트)
+
+const BRANCHES: [&str; 2] = ["HEAD", "--branches"];
+const EVERYTHING: [&str; 3] = ["HEAD", "--branches", "--remotes"];
+
+fn table_files(dir: &Path) -> usize {
+    std::fs::read_dir(dir).map_or(0, |entries| {
+        entries
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "bin"))
+            .count()
+    })
+}
+
+/// a - b - c - d(main), a - x(other). `git replace --graft main~1 other`로 c의 부모를 x로 바꾼다.
+fn replaced_repo(name: &str) -> std::path::PathBuf {
+    let dir = scratch_repo(name);
+    for (i, message) in ["a", "b", "c", "d"].iter().enumerate() {
+        commit_at(&dir, message, 1_000 + i as i64 * 100);
+    }
+    git(&dir, &["checkout", "-q", "-b", "other", "HEAD~3"]);
+    commit_at(&dir, "x", 1_250);
+    git(&dir, &["checkout", "-q", "main"]);
+    dir
+}
+
+/// `git replace`로 부모를 바꾼 커밋: git은 바꾼 부모를 보고 commit-graph를 쓰지 않는다. 그 전에 쓴 commit-graph나
+/// 앱의 커밋 표에 남은 원래 부모를 쓰면 안 된다.
+#[test]
+fn replace_refs_change_parents_like_git() {
+    let dir = replaced_repo("graph-replace");
+    git(&dir, &["commit-graph", "write", "--reachable"]);
+    git(&dir, &["replace", "--graft", "main~1", "other"]);
+    let opened = open(&dir, GraphOptions::default());
+    assert_matches_git(&dir, &opened, &BRANCHES);
+    assert!(
+        !opened.meta.commit_graph,
+        "바꾼 커밋이 있으면 commit-graph를 쓰지 않는다"
+    );
+    assert_eq!(
+        opened.rows.len(),
+        4,
+        "a는 바꾼 부모로 닿지 않는다(git과 같다)"
+    );
+    assert_eq!(opened.rows[1].summary, "c");
+
+    // 앱의 커밋 표: 바꾸기 전에 쓴 표를 쓰지 않고, 바꾼 동안에는 표를 쓰지 않는다.
+    let dir = replaced_repo("graph-replace-table");
+    let cache_dir = tempfile::tempdir().unwrap();
+    let cache = || Arc::new(DiskCache::new(cache_dir.path().to_path_buf(), 1 << 30));
+    let opened_with = |sessions: &GraphSessions| {
+        let (id, opened) = open_with(sessions, &dir, GraphOptions::default());
+        sessions.close(id);
+        opened
+    };
+    let first = opened_with(&GraphSessions::with_cache_min(cache(), 1));
+    assert_matches_git(&dir, &first, &BRANCHES);
+    assert_eq!(table_files(cache_dir.path()), 1);
+    git(&dir, &["replace", "--graft", "main~1", "other"]);
+    let replaced = opened_with(&GraphSessions::with_cache_min(cache(), 1));
+    assert_matches_git(&dir, &replaced, &BRANCHES);
+    assert_eq!(replaced.stats.from_table, 0);
+    let c = git_text(&dir, &["rev-parse", "main~1"]);
+    git(&dir, &["replace", "-d", &c]);
+    let restored = opened_with(&GraphSessions::with_cache_min(cache(), 1));
+    assert_matches_git(&dir, &restored, &BRANCHES);
+}
+
+/// `info/grafts`(오래된 방식)도 git과 같이 부모를 바꾼다.
+#[test]
+fn grafts_change_parents_like_git() {
+    let dir = scratch_repo("graph-grafts");
+    for (i, message) in ["a", "b", "c", "d"].iter().enumerate() {
+        commit_at(&dir, message, 1_000 + i as i64 * 100);
+    }
+    let graft = format!(
+        "{} {}\n",
+        git_text(&dir, &["rev-parse", "HEAD~1"]),
+        git_text(&dir, &["rev-parse", "HEAD~3"])
+    );
+    std::fs::write(dir.join(".git/info/grafts"), graft).unwrap();
+    git(&dir, &["commit-graph", "write", "--reachable"]);
+    let opened = open(&dir, GraphOptions::default());
+    assert_matches_git(&dir, &opened, &BRANCHES);
+    assert_eq!(opened.rows.len(), 3);
+}
+
+/// 다 받은 클론에 commit-graph·커밋 표를 만든 뒤 `fetch --depth`로 얕아졌다: 경계에서 멈춘다(git과 같다).
+#[test]
+fn clone_that_became_shallow_stops_at_the_boundary() {
+    let temp = tempfile::tempdir().unwrap();
+    let with_graph = temp.path().join("with-graph");
+    clone(&history(), &with_graph, &[]);
+    git(&with_graph, &["commit-graph", "write", "--reachable"]);
+    git(&with_graph, &["fetch", "-q", "--depth=2", "origin"]);
+    let opened = open(&with_graph, ALL);
+    assert_matches_git(&with_graph, &opened, &EVERYTHING);
+    assert!(!opened.meta.commit_graph);
+
+    let with_table = temp.path().join("with-table");
+    clone(&history(), &with_table, &[]);
+    let cache_dir = temp.path().join("cache");
+    let cache = || Arc::new(DiskCache::new(cache_dir.clone(), 1 << 30));
+    let sessions = GraphSessions::with_cache_min(cache(), 1);
+    let (id, _) = open_with(&sessions, &with_table, ALL);
+    sessions.close(id);
+    git(&with_table, &["fetch", "-q", "--depth=2", "origin"]);
+    let sessions = GraphSessions::with_cache_min(cache(), 1);
+    let (id, opened) = open_with(&sessions, &with_table, ALL);
+    sessions.close(id);
+    assert_matches_git(&with_table, &opened, &EVERYTHING);
+    assert_eq!(opened.stats.from_table, 0);
+}
+
+/// 느슨한 원격 참조가 annotated 태그를 가리킨다(`+refs/tags/*:refs/remotes/origin/tags/*`로 받은 태그):
+/// 그 태그의 커밋에서 걷고 이름표도 커밋에 단다.
+#[test]
+fn loose_remote_ref_to_an_annotated_tag_is_peeled() {
+    let dir = scratch_repo("graph-tag-ref");
+    commit_at(&dir, "root", 1_000);
+    commit_at(&dir, "second", 1_100);
+    git(&dir, &["checkout", "-q", "-b", "side"]);
+    commit_at(&dir, "side only", 1_200);
+    let side = commit_at(&dir, "side only 2", 1_300);
+    git(&dir, &["tag", "-a", "-m", "tagged", "vside"]);
+    git(&dir, &["checkout", "-q", "main"]);
+    git(&dir, &["branch", "-q", "-D", "side"]);
+    let tag = git_text(&dir, &["rev-parse", "vside"]);
+    git(
+        &dir,
+        &["update-ref", "refs/remotes/origin/tags/vside", &tag],
+    );
+    let opened = open(&dir, ALL);
+    assert_matches_git(&dir, &opened, &EVERYTHING);
+    assert_eq!(opened.rows.len(), 4, "태그로만 닿는 커밋도 보인다");
+    let row = opened.rows.iter().find(|r| r.sha == side).unwrap();
+    assert!(
+        row.labels.iter().any(|l| l.name == "origin/tags/vside"),
+        "{:?}",
+        row.labels
+    );
+}
+
+/// 객체를 읽지 못한 커밋이 있으면 커밋 표를 쓰지 않는다: 그 자식의 부모가 빠진 채 적혀 객체가 돌아와도 이력이 끊긴다.
+#[test]
+fn missing_parents_are_not_put_in_the_table() {
+    let dir = scratch_repo("graph-missing-parent");
+    let root = commit_at(&dir, "root", 1_000);
+    commit_at(&dir, "second", 1_100);
+    commit_at(&dir, "third", 1_200);
+    let object = dir.join(".git/objects").join(&root[..2]).join(&root[2..]);
+    let saved = std::fs::read(&object).expect("느슨한 객체");
+    std::fs::remove_file(&object).unwrap();
+    let cache_dir = tempfile::tempdir().unwrap();
+    let sessions = GraphSessions::with_cache_min(
+        Arc::new(DiskCache::new(cache_dir.path().to_path_buf(), 1 << 30)),
+        1,
+    );
+    let (id, opened) = open_with(&sessions, &dir, GraphOptions::default());
+    sessions.close(id);
+    assert_eq!(opened.rows.len(), 2);
+    assert_eq!(table_files(cache_dir.path()), 0);
+    // 객체가 돌아오면 이력이 다 보인다.
+    std::fs::write(&object, saved).unwrap();
+    let (id, opened) = open_with(&sessions, &dir, GraphOptions::default());
+    sessions.close(id);
+    assert_eq!(opened.rows.len(), 3);
 }

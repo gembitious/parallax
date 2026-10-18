@@ -29,12 +29,24 @@ export type DiffOptions = {
 /** 바뀐 곳 앞뒤로 보여 줄 줄 수와, 이보다 짧은 같은 부분은 접지 않는 기준 */
 const COLLAPSE = { margin: 3, minSize: 6 };
 
+/**
+ * 접은 줄 표시. 기본 테마가 앞뒤에 붙이는 '⦚'(U+299A)는 코드·UI 글꼴에 없는 글자라 처음 그릴 때 시스템 글꼴 대체를
+ * 찾는다(앱이 뜬 뒤 첫 diff의 첫 프레임이 늦었다, bench/results.md). 그 글자를 빼고 문구를 한국어로 쓴다.
+ */
+const collapsedLines: Extension = [
+  EditorView.theme({
+    ".cm-collapsedLines": { "&:before": { content: "none" }, "&:after": { content: "none" } },
+  }),
+  EditorState.phrases.of({ "$ unchanged lines": "바뀌지 않은 줄 $개" }),
+];
+
 export function createDiffView(parent: HTMLElement, options: DiffOptions): DiffView {
   const support = codeSupport(options.path);
   const base: Extension = [
     // git과 같은 줄 단위로 비교한다(CRLF는 미리 LF로 바꿔 둔다).
     EditorState.lineSeparator.of("\n"),
     support.extensions,
+    collapsedLines,
     lineNumbers(),
     highlightSpecialChars(),
     drawSelection(),

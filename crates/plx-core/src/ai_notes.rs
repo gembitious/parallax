@@ -20,6 +20,7 @@ use gix::ObjectId;
 use serde::{Deserialize, Serialize};
 
 use crate::repo::{Error, Repo, Result};
+use crate::requests::lock_or_reset;
 
 /// git-ai가 쓰는 노트 참조
 pub const NOTES_REF: &str = "refs/notes/ai";
@@ -502,7 +503,8 @@ impl AiNotes {
             .entry(repo.workdir().to_path_buf())
             .or_default()
             .clone();
-        let mut guard = slot.lock().unwrap();
+        // 노트를 읽고 해석하는 동안 쥐는 잠금이라 패닉이 지나갔으면 처음부터 다시 읽는다.
+        let mut guard = lock_or_reset(&slot);
         // 참조가 그대로면 앞서 읽은 트리를 쓴다.
         let tip = local
             .try_find_reference(NOTES_REF)

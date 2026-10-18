@@ -1,0 +1,21 @@
+{
+  "files": {
+    "doc/new.md": {
+      "lines": {
+        "2-3": "s_50b9498a2903ec::t_4fdc702c3349d3"
+      },
+      "prompts": {
+        "s_50b9498a2903ec::t_4fdc702c3349d3": {
+          "agent_id": {
+            "id": "ai-thread-1792301146821127276",
+            "model": "unknown",
+            "tool": "mock_ai"
+          },
+          "human_author": "Test User <test@example.com>"
+        }
+      }
+    }
+  },
+  "git_ai_version": "1.7.6",
+  "head": "f56ccea35984bcb153026c091ff9ca6a1570e91d"
+}

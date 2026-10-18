@@ -1,49 +1,94 @@
 //! Unix 도메인 소켓 전송 (macOS, 개발용 Linux).
 
-use std::io::{self, IsTerminal};
+use std::io;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+
+use super::IO_TIMEOUT;
 
 pub type SocketName = PathBuf;
 
 /// `sockaddr_un.sun_path` 한도(macOS 104바이트, NUL 포함)를 넘지 않게 한다.
 const MAX_SOCKET_PATH: usize = 103;
-const IO_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn locate(app_id: &str, stem: &str) -> io::Result<(PathBuf, SocketName)> {
     // SAFETY: getuid는 항상 성공한다.
     let uid = unsafe { libc::getuid() };
-    let dir = runtime_base().join(format!("{app_id}.{uid}"));
-    ensure_private_dir(&dir, uid)?;
-    let socket = dir.join(format!("{stem}.sock"));
-    if socket.as_os_str().len() > MAX_SOCKET_PATH {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("소켓 경로가 너무 길다: {}", socket.display()),
-        ));
+    let socket_name = format!("{stem}.sock");
+    // 사용자 전용 자리가 너무 깊어 소켓 경로가 한도를 넘으면 /tmp 아래로 간다(어느 프로세스든 같은 순서로 고른다).
+    for base in runtime_bases(uid) {
+        let dir = base.join(format!("{app_id}.{uid}"));
+        let socket = dir.join(&socket_name);
+        if socket.as_os_str().len() > MAX_SOCKET_PATH {
+            continue;
+        }
+        ensure_private_dir(&dir, uid)?;
+        return Ok((dir.join(format!("{stem}.lock")), socket));
     }
-    Ok((dir.join(format!("{stem}.lock")), socket))
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("소켓 경로가 너무 길다: /tmp/{app_id}.{uid}/{socket_name}"),
+    ))
 }
 
 pub fn socket_in_dir(dir: &Path, name: &str) -> SocketName {
     dir.join(format!("{name}.sock"))
 }
 
-/// 사용자 전용 디렉터리: macOS는 사용자별 `$TMPDIR`, Linux는 `$XDG_RUNTIME_DIR`.
-fn runtime_base() -> PathBuf {
-    if cfg!(target_os = "linux")
-        && let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from)
-        && dir.is_absolute()
+/// 인스턴스 디렉터리를 둘 자리(앞에서부터 고른다). 환경 변수는 보지 않는다: 셸마다 TMPDIR·XDG_RUNTIME_DIR가
+/// 달라도(`nix develop`, Dock에서 뜬 앱) 같은 자리여야 같은 인스턴스를 찾는다.
+/// macOS는 사용자별 임시 디렉터리(`confstr(_CS_DARWIN_USER_TEMP_DIR)`, launchd가 주는 TMPDIR와 같은 곳),
+/// Linux는 로그인 세션의 `/run/user/<uid>`(systemd, 이 사용자 전용일 때만). 마지막은 `/tmp`다.
+fn runtime_bases(uid: u32) -> Vec<PathBuf> {
+    let mut bases = Vec::new();
+    #[cfg(target_os = "macos")]
     {
-        return dir;
+        // macOS는 confstr가 이 사용자의 자리를 준다.
+        let _ = uid;
+        bases.extend(darwin_user_temp_dir());
     }
-    std::env::temp_dir()
+    #[cfg(not(target_os = "macos"))]
+    {
+        let run = PathBuf::from(format!("/run/user/{uid}"));
+        if is_private_dir(&run, uid) {
+            bases.push(run);
+        }
+    }
+    bases.push(PathBuf::from("/tmp"));
+    bases
+}
+
+#[cfg(target_os = "macos")]
+fn darwin_user_temp_dir() -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    let mut buf = vec![0u8; libc::PATH_MAX as usize];
+    // SAFETY: buf는 len바이트 쓰기 가능하다. confstr는 NUL을 포함한 필요한 길이를 돌려주고 넘치면 자른다.
+    let len = unsafe {
+        libc::confstr(
+            libc::_CS_DARWIN_USER_TEMP_DIR,
+            buf.as_mut_ptr().cast(),
+            buf.len(),
+        )
+    };
+    if len == 0 || len > buf.len() {
+        return None;
+    }
+    buf.truncate(len - 1);
+    let dir = PathBuf::from(std::ffi::OsString::from_vec(buf));
+    dir.is_absolute().then_some(dir)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_private_dir(dir: &Path, uid: u32) -> bool {
+    std::fs::symlink_metadata(dir).is_ok_and(|meta| {
+        meta.is_dir() && meta.uid() == uid && meta.permissions().mode() & 0o077 == 0
+    })
 }
 
 /// 다른 사용자가 미리 만들어 둔 디렉터리로 소켓을 가로채지 못하게 소유자와 권한을 확인한다.
@@ -64,6 +109,7 @@ fn ensure_private_dir(dir: &Path, uid: u32) -> io::Result<()> {
 }
 
 pub fn connect(socket: &SocketName) -> io::Result<UnixStream> {
+    // 응답 시간 제한은 부른 쪽(`exchange`)이 따로 건다. 소켓의 제한은 남은 스레드가 끝나게 하는 것이다.
     let stream = UnixStream::connect(socket)?;
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
@@ -133,11 +179,14 @@ pub fn cleanup(socket: &SocketName) {
 
 pub fn allow_foreground() {}
 
+/// macOS에서 launchd가 부모면(Finder·Dock·`open`) 앱으로 뜬 것이다. 그 밖에는 부른 쪽이 기다릴 수 있다:
+/// 터미널만 보면 파이프로 부르는 도구(에이전트의 셸 도구, 에디터의 `:!`, lazygit)가 앱이 끝날 때까지 멈춘다.
 pub fn launched_from_shell() -> bool {
-    io::stdin().is_terminal() || io::stdout().is_terminal() || io::stderr().is_terminal()
+    // SAFETY: getppid는 항상 성공한다.
+    !(cfg!(target_os = "macos") && unsafe { libc::getppid() } == 1)
 }
 
-pub fn spawn_detached(mut command: Command) -> io::Result<()> {
+pub fn spawn_detached(mut command: Command) -> io::Result<Child> {
     // 새 세션으로 떼어 내 터미널이 닫힐 때 오는 SIGHUP을 받지 않게 한다.
     // SAFETY: fork 뒤 exec 전에는 async-signal-safe 함수만 부를 수 있고, setsid는 그에 해당한다.
     unsafe {
@@ -148,5 +197,5 @@ pub fn spawn_detached(mut command: Command) -> io::Result<()> {
             Ok(())
         });
     }
-    command.spawn().map(drop)
+    command.spawn()
 }

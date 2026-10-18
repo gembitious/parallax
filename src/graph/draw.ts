@@ -1,4 +1,5 @@
-// 그래프 레인 그리기: 보이는 행의 선과 커밋 점을 캔버스 하나에 그린다(스크롤마다 다시 그린다).
+// 그래프 레인 그리기: 그리는 범위(화면과 그 위아래)의 행의 선과 커밋 점을 캔버스 하나에 그린다. 캔버스는 스크롤 내용
+// 안에 있어 범위 안의 스크롤은 다시 그리지 않는다(GraphView).
 // 행 레이아웃(plx-core graph::RowLayout)은 행 하나만 보고 그릴 수 있게 반 칸 선으로 나뉘어 있다.
 import type { GraphRow } from "./types";
 
@@ -40,7 +41,7 @@ export function readPalette(element: Element): Palette {
 export type Visible = { index: number; row: GraphRow };
 
 /**
- * `rows`를 그린다. 캔버스 좌표의 y = 행 번호 × ROW_HEIGHT − `scrollTop`.
+ * `rows`를 그린다. 캔버스 좌표의 y = 행 번호 × ROW_HEIGHT − `scrollTop`(캔버스 맨 위 행의 위치).
  * `width`는 캔버스의 CSS 너비(px)다. 그보다 오른쪽 레인은 잘리고, 잘린 행은 오른쪽 끝을 흐리게 표시한다.
  */
 export function drawRows(
