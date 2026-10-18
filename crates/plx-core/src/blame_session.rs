@@ -16,7 +16,7 @@ use serde::Serialize;
 use crate::blame::{Blame, BlameBlock, BlameCommit, BlameError, Chunk, Stats};
 use crate::cache::{CacheKey, DiskCache};
 use crate::repo::{FilePath, Repo, RepoCache};
-use crate::requests::Requests;
+use crate::requests::{self, Requests};
 use crate::text::{self, Decoded};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -28,6 +28,9 @@ pub struct BlameMeta {
     pub path: String,
     /// 고정 리비전이면 그 커밋 sha. 작업트리 blame이면 없다.
     pub rev: Option<String>,
+    /// 작업트리 blame이 기준으로 삼은 HEAD 커밋. 고정 리비전이거나 커밋이 없는 저장소면 없다. 화면은 이것으로
+    /// 열기 전에 일어난 HEAD 변화의 늦은 알림을 거른다(이미 그 HEAD로 읽었다).
+    pub head: Option<String>,
     /// 바이너리 파일이면 없다.
     pub content: Option<Decoded>,
     pub binary: bool,
@@ -144,6 +147,7 @@ fn start(
         repo: repo.workdir().to_string_lossy().into_owned(),
         path: rel,
         rev: Some(sha),
+        head: None,
         content,
         binary,
     };
@@ -163,17 +167,18 @@ fn start_worktree(
         .ok_or_else(|| format!("작업트리에 {rel} 파일이 없다"))?;
     let binary = text::is_binary(&bytes);
     let content = (!binary).then(|| text::decode(&bytes));
+    let head = repo.head().map_err(|e| e.to_string())?;
     let meta = |content| BlameMeta {
         repo: repo.workdir().to_string_lossy().into_owned(),
         path: rel.clone(),
         rev: None,
+        head: head.map(|id| id.to_string()),
         content,
         binary,
     };
     let Some(decoded) = content else {
         return Ok((meta(None), Source::Nothing));
     };
-    let head = repo.head().map_err(|e| e.to_string())?;
     let in_head = match head {
         Some(head) => repo.has_file(head, &rel).map_err(|e| e.to_string())?,
         None => false,
@@ -292,7 +297,11 @@ impl Sessions {
         rev: Option<&str>,
         mut on_event: impl FnMut(SessionEvent) -> bool,
     ) {
-        let end = self.drive(id, repos, &file.into(), rev, &mut on_event);
+        let file = file.into();
+        let end = requests::catch(
+            || self.drive(id, repos, &file, rev, &mut on_event),
+            |message| SessionEvent::Error { message },
+        );
         self.requests.finish(id);
         on_event(end);
     }
