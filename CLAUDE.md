@@ -348,6 +348,10 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
   모듈을 실행하는 동안 오가게 하고, 첫 렌더는 답을 받은 뒤 요청한 화면으로 바로 한다. 듣기 전에 온 요청은 듣기 시작한 뒤
   current_request를 한 번 더 물어 받는다. 화면별로 나눠 불러오기는 blame 화면이 CodeMirror 대부분을 써서 덜 수 있는 것이
   첫 묶음의 12% 남짓이라 하지 않았다.
+- 2026-10-16: 상주 앱이 연 저장소가 사용자의 git 정리를 막는지 확인했다(가속 설정 리뷰의 인접 위험). gix가 pack·idx·
+  commit-graph를 메모리 매핑한 채로(저장소 캐시, 그래프 화면) `git repack -a -d`·`git commit-graph write`를 하면 Windows
+  (windows-latest, Git for Windows 2.56)에서도 git이 옛 pack을 지우고 commit-graph를 새 파일로 바꾼다(`tests/maintenance.rs`,
+  세 플랫폼 CI). 그래서 매핑을 놓는 장치(쉴 때 저장소 닫기 등)는 만들지 않고 이 테스트를 회귀 확인으로 둔다.
 - 2026-10-18: gix-blame 전환 검토. blame은 git CLI를 그대로 쓰고 gix-blame은 실험 플래그로도 앱에 넣지 않는다.
   gix 0.89(gix-blame 0.19)를 참조 저장소의 blame 대상 네 파일에서 git과 나란히 쟀다(bench/results.md,
   `bench/cases-gix-blame.txt`). 결과를 한꺼번에 내 첫 줄이 0.85~7.2초 뒤다(git `--incremental`은 첫 블록 10~20ms).
