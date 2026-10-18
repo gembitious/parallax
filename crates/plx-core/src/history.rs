@@ -14,7 +14,6 @@
 //! 받은 커밋을 다음 출력까지 붙잡지 않고 16ms 안에 보낸다.
 
 use std::collections::HashSet;
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread::JoinHandle;
@@ -26,9 +25,12 @@ use serde::{Deserialize, Serialize};
 use crate::cache::{CacheKey, DiskCache};
 use crate::commit::FileStatus;
 use crate::git::Canceller;
-use crate::log::{LogEntry, LogError, LogStream};
-use crate::repo::{Repo, RepoCache};
-use crate::requests::Requests;
+use crate::line_log::LineLogStream;
+use crate::linemap::LineMap;
+use crate::log::{EntrySource, LogEntry, LogError, LogStream};
+use crate::repo::{FilePath, Repo, RepoCache};
+use crate::requests::{self, Requests};
+use crate::text;
 
 /// 성능 예산의 "첫 50개"
 pub const PAGE: usize = 50;
@@ -52,6 +54,15 @@ pub struct HistoryMeta {
     pub rev: Option<String>,
     /// 이력을 거슬러 올라가기 시작한 커밋. 커밋이 없는 저장소면 없다.
     pub start: Option<String>,
+    /// 라인 히스토리면 시작 커밋 버전의 줄 범위(작업트리 줄 번호로 요청했으면 HEAD 버전으로 옮긴 범위)
+    pub lines: Option<LineRange>,
+}
+
+/// 줄 범위(1부터, 양쪽 포함)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LineRange {
+    pub start: u32,
+    pub end: u32,
 }
 
 /// 측정값. 시각은 모두 요청을 받은 때부터(ms)다.
@@ -111,10 +122,10 @@ struct Cached {
     segments: usize,
 }
 
-enum Plan {
+enum Plan<S> {
     Git {
         repo: Arc<Repo>,
-        stream: Box<LogStream>,
+        stream: Box<S>,
         key: Option<CacheKey>,
     },
     Cached(Cached),
@@ -125,11 +136,10 @@ enum Plan {
 fn start(
     repos: &RepoCache,
     cache: Option<&DiskCache>,
-    path: &Path,
+    file: &FilePath,
     rev: Option<&str>,
-) -> Result<(HistoryMeta, Plan), String> {
-    let repo = repos.for_path(path).map_err(|e| e.to_string())?;
-    let mut rel = repo.relative_path(path).map_err(|e| e.to_string())?;
+) -> Result<(HistoryMeta, Plan<LogStream>), String> {
+    let (repo, mut rel) = repos.locate(file).map_err(|e| e.to_string())?;
     if rel.is_empty() {
         rel = ".".to_owned();
     }
@@ -142,11 +152,20 @@ fn start(
         path: rel.clone(),
         rev: rev.and(start).map(|id| id.to_string()),
         start: start.map(|id| id.to_string()),
+        lines: None,
     };
     let Some(start) = start else {
         return Ok((meta, Plan::Empty));
     };
-    let key = cache.map(|_| CacheKey::history(repo.workdir(), &start.to_string(), &rel));
+    // 얕은 클론(이력을 더 받으면)과 부모를 바꾼 저장소(`git replace`)는 결과가 바뀐다.
+    let key = cache.filter(|_| repo.cacheable()).map(|_| {
+        CacheKey::history(
+            repo.workdir(),
+            &start.to_string(),
+            &rel,
+            &repo.history_settings(),
+        )
+    });
     if let Some(hit) = key
         .as_ref()
         .zip(cache)
@@ -156,6 +175,91 @@ fn start(
     }
     let stream = LogStream::spawn(repo.workdir(), &[start.to_string()], &rel)
         .map_err(|e| format!("git log 실행 실패: {e}"))?;
+    Ok((
+        meta,
+        Plan::Git {
+            repo,
+            stream: Box::new(stream),
+            key,
+        },
+    ))
+}
+
+/// 라인 히스토리를 연다. `rev`가 없으면 `lines`는 작업트리 파일의 줄이고, HEAD 버전의 줄로 옮겨 `git log -L`에 준다
+/// (바꾸거나 새로 쓴 줄은 그 부분이 시작하는 줄로 간다).
+fn start_lines(
+    repos: &RepoCache,
+    cache: Option<&DiskCache>,
+    file: &FilePath,
+    rev: Option<&str>,
+    lines: LineRange,
+) -> Result<(HistoryMeta, Plan<LineLogStream>), String> {
+    let (repo, rel) = repos.locate(file).map_err(|e| e.to_string())?;
+    let start = match rev {
+        Some(rev) => Some(repo.resolve_commit(rev).map_err(|e| e.to_string())?),
+        None => repo.head().map_err(|e| e.to_string())?,
+    };
+    let mut meta = HistoryMeta {
+        repo: repo.workdir().to_string_lossy().into_owned(),
+        path: rel.clone(),
+        rev: rev.and(start).map(|id| id.to_string()),
+        start: start.map(|id| id.to_string()),
+        lines: None,
+    };
+    let Some(start) = start else {
+        return Ok((meta, Plan::Empty));
+    };
+    let sha = start.to_string();
+    let short = &sha[..sha.len().min(10)];
+    let blob = repo
+        .blob_at(start, &rel)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| {
+            format!("{short}에 {rel} 파일이 없다(커밋하지 않은 파일은 라인 히스토리가 없다)")
+        })?;
+    if text::is_binary(&blob) {
+        return Err(format!(
+            "바이너리 파일이라 라인 히스토리를 보지 않는다: {rel}"
+        ));
+    }
+    let total = text::line_count(&blob);
+    if total == 0 {
+        return Err(format!("{short}의 {rel}은 빈 파일이다"));
+    }
+    let (mut first, mut last) = (lines.start.min(lines.end), lines.start.max(lines.end));
+    // 작업트리 줄은 clean 모양(줄 끝을 git처럼 바꾼 것)으로 옮긴다: CRLF 작업트리도 blob과 줄 단위로 맞는다.
+    if rev.is_none()
+        && let Ok(Some(worktree)) = repo.worktree_clean(&rel)
+        && worktree != blob
+    {
+        let map = LineMap::new(&blob, &worktree);
+        (first, last) = (map.to_before(first), map.to_before(last));
+    }
+    let last = last.clamp(1, total);
+    let first = first.clamp(1, last);
+    meta.lines = Some(LineRange {
+        start: first,
+        end: last,
+    });
+    let key = cache.filter(|_| repo.cacheable()).map(|_| {
+        CacheKey::line_history(
+            repo.workdir(),
+            &sha,
+            &rel,
+            first,
+            last,
+            &repo.line_history_settings(),
+        )
+    });
+    if let Some(hit) = key
+        .as_ref()
+        .zip(cache)
+        .and_then(|(key, cache)| cache.get::<Cached>(key))
+    {
+        return Ok((meta, Plan::Cached(hit)));
+    }
+    let stream = LineLogStream::spawn(repo.workdir(), &sha, &rel, first, last)
+        .map_err(|e| format!("git log -L 실행 실패: {e}"))?;
     Ok((
         meta,
         Plan::Git {
@@ -204,20 +308,94 @@ impl HistorySessions {
         &self,
         id: u64,
         repos: &RepoCache,
-        path: &Path,
+        file: impl Into<FilePath>,
         rev: Option<&str>,
         mut on_event: impl FnMut(HistoryEvent) -> bool,
     ) {
-        let end = self.drive(id, repos, path, rev, &mut on_event);
+        let file = file.into();
+        let end = requests::catch(
+            || self.drive(id, repos, &file, rev, &mut on_event),
+            |message| HistoryEvent::Error { message },
+        );
         self.requests.finish(id);
         on_event(end);
+    }
+
+    /// `id` 라인 히스토리 요청을 끝까지 처리한다(`git log -L`). 끝 이벤트는 반드시 하나 보낸다.
+    pub fn run_lines(
+        &self,
+        id: u64,
+        repos: &RepoCache,
+        file: impl Into<FilePath>,
+        rev: Option<&str>,
+        lines: LineRange,
+        mut on_event: impl FnMut(HistoryEvent) -> bool,
+    ) {
+        let file = file.into();
+        let end = requests::catch(
+            || self.drive_lines(id, repos, &file, rev, lines, &mut on_event),
+            |message| HistoryEvent::Error { message },
+        );
+        self.requests.finish(id);
+        on_event(end);
+    }
+
+    fn drive_lines(
+        &self,
+        id: u64,
+        repos: &RepoCache,
+        file: &FilePath,
+        rev: Option<&str>,
+        lines: LineRange,
+        on_event: &mut impl FnMut(HistoryEvent) -> bool,
+    ) -> HistoryEvent {
+        let started = Instant::now();
+        if self.requests.is_cancelled(id) {
+            return HistoryEvent::Cancelled;
+        }
+        let (meta, plan) = match start_lines(repos, self.cache.as_deref(), file, rev, lines) {
+            Ok(started) => started,
+            Err(message) => return HistoryEvent::Error { message },
+        };
+        let (stream, key) = match plan {
+            Plan::Git { stream, key, .. } => (stream, key),
+            Plan::Cached(cached) => return self.replay(id, meta, cached, started, on_event),
+            Plan::Empty => return self.empty(id, meta, started, on_event),
+        };
+        let Some(reader) = self.attach(id, *stream) else {
+            return HistoryEvent::Cancelled;
+        };
+        let meta_ms = ms(started);
+        if !on_event(HistoryEvent::Meta(meta)) {
+            self.requests.cancel(id);
+        }
+        let mut sink = Sink::new(started, key.is_some());
+        let mut received = 0;
+        loop {
+            let entries = match self.next_batch(id, &reader, &mut sink, on_event) {
+                Ok(Some(entries)) => entries,
+                Ok(None) => break,
+                Err(end) => return end,
+            };
+            received += entries.len();
+            if received >= PAGE {
+                sink.stats.git_page_ms.get_or_insert_with(|| ms(started));
+            }
+            for entry in entries {
+                sink.push(entry);
+            }
+            if sink.due() && !sink.flush(on_event) {
+                self.requests.cancel(id);
+            }
+        }
+        self.done(sink, 1, key.as_ref(), meta_ms, on_event)
     }
 
     fn drive(
         &self,
         id: u64,
         repos: &RepoCache,
-        path: &Path,
+        file: &FilePath,
         rev: Option<&str>,
         on_event: &mut impl FnMut(HistoryEvent) -> bool,
     ) -> HistoryEvent {
@@ -225,7 +403,7 @@ impl HistorySessions {
         if self.requests.is_cancelled(id) {
             return HistoryEvent::Cancelled;
         }
-        let (meta, plan) = match start(repos, self.cache.as_deref(), path, rev) {
+        let (meta, plan) = match start(repos, self.cache.as_deref(), file, rev) {
             Ok(started) => started,
             Err(message) => return HistoryEvent::Error { message },
         };
@@ -233,25 +411,13 @@ impl HistorySessions {
         let (repo, stream, key) = match plan {
             Plan::Git { repo, stream, key } => (repo, stream, key),
             Plan::Cached(cached) => return self.replay(id, meta, cached, started, on_event),
-            Plan::Empty => {
-                if self.requests.is_cancelled(id) {
-                    return HistoryEvent::Cancelled;
-                }
-                let meta_ms = ms(started);
-                on_event(HistoryEvent::Meta(meta));
-                return HistoryEvent::Done {
-                    meta_ms,
-                    stats: HistoryStats {
-                        total_ms: ms(started),
-                        ..HistoryStats::default()
-                    },
-                };
-            }
+            Plan::Empty => return self.empty(id, meta, started, on_event),
         };
-        let Some(mut reader) = self.attach(id, *stream) else {
+        let Some(reader) = self.attach(id, *stream) else {
             return HistoryEvent::Cancelled;
         };
         let meta_ms = ms(started);
+        let first_start = meta.start.clone().unwrap_or_default();
         if !on_event(HistoryEvent::Meta(meta)) {
             self.requests.cancel(id);
         }
@@ -259,73 +425,80 @@ impl HistorySessions {
         let mut sink = Sink::new(started, key.is_some());
         let mut received = 0;
         let mut seen = HashSet::new();
-        let mut path = path;
         let mut segments = 1;
-        loop {
-            // (첫 부모, 옛 이름): 이 구간에서 파일이 rename으로 생긴 커밋들
-            let mut boundaries: Vec<(String, String)> = Vec::new();
-            // 처음 찾은 경계에서 미리 띄운 다음 구간
-            let mut next: Option<(String, String, Reader)> = None;
-            loop {
-                let message = match sink.deadline() {
-                    Some(deadline) => {
-                        let wait = deadline.saturating_duration_since(Instant::now());
-                        match reader.rx().recv_timeout(wait) {
-                            Ok(message) => message,
-                            Err(RecvTimeoutError::Timeout) => {
-                                if !sink.flush(on_event) {
-                                    self.requests.cancel(id);
-                                }
-                                continue;
+        // 옛 이름을 찾지 못한 커밋이 있었다(부분 클론에서 blob이 없는 등). 이어 붙이지 못한 결과는 넣지 않는다.
+        let mut incomplete = false;
+        // 이미 띄운 (옛 이름, 시작 커밋). 이름을 주고받는 이력에서도 같은 구간을 다시 돌지 않는다.
+        let mut spawned: HashSet<(String, String)> = HashSet::new();
+        spawned.insert((path.clone(), first_start));
+        // 읽을 구간들. 맨 위부터 읽는다: 파일이 rename으로 생긴 커밋에서 구간을 나눠, 옛 이름의 이력을 먼저 보이고
+        // 같은 이름의 더 오래된 커밋(그 이름을 전에 쓴 다른 파일)은 그 뒤에 보인다.
+        let mut stack = vec![Segment {
+            path,
+            reader,
+            pending: Vec::new(),
+        }];
+        // 처음 찾은 rename에서 미리 띄운 옛 이름 구간(옛 이름, 시작 커밋). 구간을 다 읽는 동안 git이 일을 시작한다.
+        let mut prefetched: Option<(String, String, Reader)> = None;
+        while let Some(Segment {
+            path,
+            reader,
+            pending,
+        }) = stack.pop()
+        {
+            // 이 구간에서 찾은 옛 이름과 그 이름으로 거슬러 올라갈 시작 커밋들(처음 찾은 순서)
+            let mut found: Vec<(String, Vec<String>)> = Vec::new();
+            let mut pending = Some(pending).filter(|p| !p.is_empty());
+            'read: loop {
+                let entries = match pending.take() {
+                    Some(entries) => entries,
+                    None => match self.next_batch(id, &reader, &mut sink, on_event) {
+                        Ok(Some(entries)) => {
+                            received += entries.len();
+                            if received >= PAGE {
+                                sink.stats.git_page_ms.get_or_insert_with(|| ms(started));
                             }
-                            Err(RecvTimeoutError::Disconnected) => Message::Gone,
+                            entries
                         }
-                    }
-                    None => reader.rx().recv().unwrap_or(Message::Gone),
+                        Ok(None) => break,
+                        Err(end) => return end,
+                    },
                 };
-                let entries = match message {
-                    Message::Entries(entries) => entries,
-                    Message::End(Ok(())) => break,
-                    Message::End(Err(LogError::Cancelled)) => return HistoryEvent::Cancelled,
-                    Message::End(Err(e)) => {
-                        return HistoryEvent::Error {
-                            message: e.to_string(),
-                        };
+                let mut entries = entries.into_iter();
+                while let Some(mut entry) = entries.next() {
+                    // rename으로 생긴 뒤 같은 이름이 지워진 커밋이 나오면, 그 아래는 이 이름을 전에 쓴 다른 파일이다
+                    // (A → B → A, 지우고 다른 파일을 같은 이름으로 옮김). 옛 이름의 이력을 먼저 보이고 그 뒤에 읽는다.
+                    if !found.is_empty()
+                        && entry.status == Some(FileStatus::Deleted)
+                        && entry.path == path
+                    {
+                        let mut rest = vec![entry];
+                        rest.extend(entries);
+                        stack.push(Segment {
+                            path: path.clone(),
+                            reader,
+                            pending: rest,
+                        });
+                        break 'read;
                     }
-                    Message::Gone => {
-                        return HistoryEvent::Error {
-                            message: "git log를 읽는 스레드가 끝났다".into(),
-                        };
-                    }
-                };
-                received += entries.len();
-                if received >= PAGE {
-                    sink.stats.git_page_ms.get_or_insert_with(|| ms(started));
-                }
-                for mut entry in entries {
-                    if let Some(old) = rename_source(&repo, &entry, &path) {
-                        let parent = entry.parents[0].clone();
-                        entry.status = Some(FileStatus::Renamed);
-                        entry.old_path = Some(old.clone());
-                        if next.is_none() {
-                            let stream = match LogStream::spawn(
-                                repo.workdir(),
-                                std::slice::from_ref(&parent),
-                                &old,
-                            ) {
-                                Ok(stream) => stream,
-                                Err(e) => {
-                                    return HistoryEvent::Error {
-                                        message: format!("git log 실행 실패: {e}"),
-                                    };
-                                }
-                            };
-                            let Some(reader) = self.attach(id, stream) else {
-                                return HistoryEvent::Cancelled;
-                            };
-                            next = Some((parent.clone(), old.clone(), reader));
+                    let renamed = boundaries(&repo, &mut entry, &path, &mut found, &mut incomplete);
+                    if let Some((old, parent)) = renamed
+                        && prefetched.is_none()
+                        && segments < MAX_SEGMENTS
+                        && !spawned.contains(&(old.clone(), parent.clone()))
+                    {
+                        match LogStream::spawn(repo.workdir(), std::slice::from_ref(&parent), &old)
+                        {
+                            Ok(stream) => match self.attach(id, stream) {
+                                Some(reader) => prefetched = Some((old, parent, reader)),
+                                None => return HistoryEvent::Cancelled,
+                            },
+                            Err(e) => {
+                                return HistoryEvent::Error {
+                                    message: format!("git log 실행 실패: {e}"),
+                                };
+                            }
                         }
-                        boundaries.push((parent, old));
                     }
                     if seen.insert(entry.sha.clone()) {
                         sink.push(entry);
@@ -335,48 +508,115 @@ impl HistorySessions {
                     self.requests.cancel(id);
                 }
             }
-
-            // 다음 구간: 처음 찾은 옛 이름으로, 같은 이름에서 생긴 모든 경계의 부모부터 거슬러 올라간다.
-            let Some(old) = boundaries.first().map(|(_, old)| old.clone()) else {
-                break;
-            };
-            if segments == MAX_SEGMENTS {
-                break;
-            }
-            let mut starts: Vec<String> = Vec::new();
-            for (parent, name) in &boundaries {
-                if *name == old && !starts.contains(parent) {
-                    starts.push(parent.clone());
+            // 처음 찾은 옛 이름부터 읽도록 거꾸로 쌓는다. 같은 이름의 경계는 모두 한 구간의 시작이다
+            // (두 브랜치가 같은 rename을 했으면 옛 이름의 이력은 한 번에 합친다).
+            for (old, starts) in found.into_iter().rev() {
+                let starts: Vec<String> = starts
+                    .into_iter()
+                    .filter(|start| spawned.insert((old.clone(), start.clone())))
+                    .collect();
+                if starts.is_empty() || segments == MAX_SEGMENTS {
+                    continue;
                 }
-            }
-            reader = match next {
-                Some((parent, name, ready))
-                    if name == old && starts.len() == 1 && starts[0] == parent =>
-                {
-                    ready
-                }
-                _ => match LogStream::spawn(repo.workdir(), &starts, &old) {
-                    Ok(stream) => match self.attach(id, stream) {
-                        Some(reader) => reader,
-                        None => return HistoryEvent::Cancelled,
-                    },
-                    Err(e) => {
-                        return HistoryEvent::Error {
-                            message: format!("git log 실행 실패: {e}"),
-                        };
+                let ready = match prefetched.take() {
+                    Some((name, start, reader)) if name == old && starts == [start.clone()] => {
+                        Some(reader)
                     }
-                },
-            };
-            path = old;
-            segments += 1;
+                    other => {
+                        prefetched = other;
+                        None
+                    }
+                };
+                let reader = match ready {
+                    Some(reader) => reader,
+                    None => match LogStream::spawn(repo.workdir(), &starts, &old) {
+                        Ok(stream) => match self.attach(id, stream) {
+                            Some(reader) => reader,
+                            None => return HistoryEvent::Cancelled,
+                        },
+                        Err(e) => {
+                            return HistoryEvent::Error {
+                                message: format!("git log 실행 실패: {e}"),
+                            };
+                        }
+                    },
+                };
+                segments += 1;
+                stack.push(Segment {
+                    path: old,
+                    reader,
+                    pending: Vec::new(),
+                });
+            }
+            // 미리 띄운 구간을 쓰지 않았으면(다른 시작 커밋과 합쳤다) 버린다.
+            if prefetched
+                .as_ref()
+                .is_some_and(|(name, start, _)| spawned.contains(&(name.clone(), start.clone())))
+            {
+                prefetched = None;
+            }
         }
+        let key = key.filter(|_| !incomplete);
+        self.done(sink, segments, key.as_ref(), meta_ms, on_event)
+    }
+
+    /// 다음 커밋 묶음. 기다리는 동안 쌓인 커밋은 제때(16ms) 보낸다. 출력이 끝났으면 `Ok(None)`,
+    /// 실패·취소면 보낼 끝 이벤트.
+    fn next_batch(
+        &self,
+        id: u64,
+        reader: &Reader,
+        sink: &mut Sink,
+        on_event: &mut impl FnMut(HistoryEvent) -> bool,
+    ) -> Result<Option<Vec<LogEntry>>, HistoryEvent> {
+        loop {
+            let message = match sink.deadline() {
+                Some(deadline) => {
+                    let wait = deadline.saturating_duration_since(Instant::now());
+                    match reader.rx().recv_timeout(wait) {
+                        Ok(message) => message,
+                        Err(RecvTimeoutError::Timeout) => {
+                            if !sink.flush(on_event) {
+                                self.requests.cancel(id);
+                            }
+                            continue;
+                        }
+                        Err(RecvTimeoutError::Disconnected) => Message::Gone,
+                    }
+                }
+                None => reader.rx().recv().unwrap_or(Message::Gone),
+            };
+            return match message {
+                Message::Entries(entries) => Ok(Some(entries)),
+                Message::End(Ok(())) => Ok(None),
+                Message::End(Err(LogError::Cancelled)) => Err(HistoryEvent::Cancelled),
+                Message::End(Err(e)) => Err(HistoryEvent::Error {
+                    message: e.to_string(),
+                }),
+                Message::Gone => Err(HistoryEvent::Error {
+                    message: "git log를 읽는 스레드가 끝났다".into(),
+                }),
+            };
+        }
+    }
+
+    /// 남은 커밋을 보내고 캐시에 넣는다.
+    fn done(
+        &self,
+        mut sink: Sink,
+        segments: usize,
+        key: Option<&CacheKey>,
+        meta_ms: f64,
+        on_event: &mut impl FnMut(HistoryEvent) -> bool,
+    ) -> HistoryEvent {
+        let started = sink.started;
         sink.stats.git_page_ms.get_or_insert_with(|| ms(started));
         if !sink.flush(on_event) {
             return HistoryEvent::Cancelled;
         }
         let (entries, mut stats) = sink.finish();
         stats.segments = segments;
-        if let (Some(cache), Some(key), Some(entries)) = (&self.cache, &key, entries)
+        if let (Some(cache), Some(key), Some(entries)) = (&self.cache, key, entries)
             && entries.len() <= MAX_CACHED_ENTRIES
             && let Err(e) = cache.put(key, &Cached { entries, segments })
         {
@@ -385,8 +625,30 @@ impl HistorySessions {
         HistoryEvent::Done { meta_ms, stats }
     }
 
+    /// 커밋이 없는 저장소: meta만 보내고 끝낸다.
+    fn empty(
+        &self,
+        id: u64,
+        meta: HistoryMeta,
+        started: Instant,
+        on_event: &mut impl FnMut(HistoryEvent) -> bool,
+    ) -> HistoryEvent {
+        if self.requests.is_cancelled(id) {
+            return HistoryEvent::Cancelled;
+        }
+        let meta_ms = ms(started);
+        on_event(HistoryEvent::Meta(meta));
+        HistoryEvent::Done {
+            meta_ms,
+            stats: HistoryStats {
+                total_ms: ms(started),
+                ..HistoryStats::default()
+            },
+        }
+    }
+
     /// 띄운 git을 요청에 붙이고 읽기 시작한다. 이미 취소된 요청이면 `None`(git은 끝낸다).
-    fn attach(&self, id: u64, stream: LogStream) -> Option<Reader> {
+    fn attach<S: EntrySource>(&self, id: u64, stream: S) -> Option<Reader> {
         self.requests
             .attach(id, stream.canceller())
             .then(|| Reader::start(stream))
@@ -437,17 +699,69 @@ impl HistorySessions {
     }
 }
 
-/// `entry`가 `path`를 rename으로 만든 커밋이면 원래 경로. 찾지 못하면(얕은 클론, 부분 클론에서 blob이
-/// 없는 경우 등) rename이 아닌 것으로 본다.
-fn rename_source(repo: &Repo, entry: &LogEntry, path: &str) -> Option<String> {
-    if entry.status != Some(FileStatus::Added) || entry.path != path || entry.parents.is_empty() {
+/// 한 이름의 `git log` 구간. 나눈 구간이면 `pending`(이미 받은 남은 커밋)부터 읽는다.
+struct Segment {
+    path: String,
+    reader: Reader,
+    pending: Vec<LogEntry>,
+}
+
+/// `entry`에서 `path`가 옛 이름으로 이어지는 곳을 `found`에 더한다. 파일이 rename으로 생긴 커밋(상태 A)이면 상태를
+/// rename으로 바꾸고 (옛 이름, 첫 부모)를 돌려준다. merge는 파일이 없는 부모마다 옛 이름을 찾는다(곁가지에서 옮긴
+/// 파일의 본줄기 이력). 옛 이름을 찾다 실패하면(얕은 클론, 부분 클론에서 blob이 없음) `incomplete`를 켜고 rename이
+/// 아닌 것으로 본다.
+fn boundaries(
+    repo: &Repo,
+    entry: &mut LogEntry,
+    path: &str,
+    found: &mut Vec<(String, Vec<String>)>,
+    incomplete: &mut bool,
+) -> Option<(String, String)> {
+    if path == "." || entry.path != path {
         return None;
     }
     let id = ObjectId::from_hex(entry.sha.as_bytes()).ok()?;
+    let mut add = |old: &str, parent: &str| match found.iter_mut().find(|(name, _)| name == old) {
+        Some((_, starts)) if starts.iter().any(|s| s == parent) => {}
+        Some((_, starts)) => starts.push(parent.to_owned()),
+        None => found.push((old.to_owned(), vec![parent.to_owned()])),
+    };
+    let mut failed = |e: crate::repo::Error| {
+        eprintln!("plx: rename 원본을 찾지 못했다 ({}): {e}", entry.sha);
+        *incomplete = true;
+    };
+    if entry.parents.len() > 1 {
+        for parent in &entry.parents {
+            let Ok(parent_id) = ObjectId::from_hex(parent.as_bytes()) else {
+                continue;
+            };
+            match repo.has_file(parent_id, path) {
+                Ok(true) => {}
+                Ok(false) => match repo.rename_source_from(id, parent_id, path) {
+                    Ok(Some(old)) => add(&old, parent),
+                    Ok(None) => {}
+                    Err(e) => failed(e),
+                },
+                // 얕은 클론의 경계 너머 부모
+                Err(e) => failed(e),
+            }
+        }
+        return None;
+    }
+    if entry.status != Some(FileStatus::Added) || entry.parents.is_empty() {
+        return None;
+    }
     match repo.rename_source(id, path) {
-        Ok(source) => source,
+        Ok(Some(old)) => {
+            let parent = entry.parents[0].clone();
+            add(&old, &parent);
+            entry.status = Some(FileStatus::Renamed);
+            entry.old_path = Some(old.clone());
+            Some((old, parent))
+        }
+        Ok(None) => None,
         Err(e) => {
-            eprintln!("plx: rename 원본을 찾지 못했다 ({}): {e}", entry.sha);
+            failed(e);
             None
         }
     }
@@ -469,7 +783,7 @@ struct Reader {
 }
 
 impl Reader {
-    fn start(mut stream: LogStream) -> Reader {
+    fn start<S: EntrySource>(mut stream: S) -> Reader {
         let canceller = stream.canceller();
         let (tx, rx) = mpsc::sync_channel(8);
         let thread = std::thread::spawn(move || {

@@ -2,6 +2,7 @@
 // blame은 점진적으로 오므로 모델이 바뀔 때마다(blameChanged) 보이는 줄의 표시만 다시 계산한다.
 import { StateEffect, type EditorState } from "@codemirror/state";
 import { EditorView, GutterMarker, gutter, type BlockInfo, type ViewUpdate } from "@codemirror/view";
+import { aiLabel } from "./ai";
 import { heatLevel, isUncommitted, relativeTime } from "./format";
 import type { BlameModel } from "./model";
 
@@ -66,20 +67,31 @@ export function blameGutter(ctx: GutterContext) {
   let cursor = 0;
   let active: string | undefined;
 
-  /** `start`: 묶음의 첫 줄(위에 구분선), `label`: 글을 쓴다, `isActive`: 커서 줄과 같은 커밋 */
-  const markerFor = (sha: string, start: boolean, label: boolean, isActive: boolean): LineMarker => {
-    const key = `${sha}:${+start}${+label}${+isActive}`;
+  /**
+   * `start`: 묶음의 첫 줄(위에 구분선), `label`: 글을 쓴다, `isActive`: 커서 줄과 같은 커밋,
+   * `ai`: 그 줄을 쓴 AI 에이전트·사람(git-ai 노트, 작성자 번호). 에이전트 줄은 보라 줄을 긋고 작성자 자리에 도구 이름을 쓴다.
+   */
+  const markerFor = (sha: string, start: boolean, label: boolean, isActive: boolean, ai: number | null): LineMarker => {
+    const key = `${sha}:${+start}${+label}${+isActive}:${ai ?? ""}`;
     let marker = markers.get(key);
     if (marker) return marker;
     const commit = model.commits.get(sha);
     const uncommitted = isUncommitted(sha);
+    const author = ai === null ? null : model.ai.authors[ai];
+    const agent = author?.kind === "agent" ? author : null;
     const heat = uncommitted ? "uncommitted" : `heat-${commit ? heatLevel(commit.authorTime, nowMs) : 0}`;
-    const className = ["cm-blame-line", heat, start ? "start" : "", isActive ? "active" : ""].join(" ").trim();
+    const className = ["cm-blame-line", heat, start ? "start" : "", isActive ? "active" : "", agent ? "ai" : ""]
+      .join(" ")
+      .trim();
     let texts: LineMarker["texts"] = null;
     if (label) {
       texts = uncommitted
         ? ["커밋 안 됨", "", ""]
-        : [commit?.summary ?? "", commit?.author ?? "", commit ? relativeTime(commit.authorTime, nowMs) : ""];
+        : [
+            commit?.summary ?? "",
+            agent ? `✦ ${aiLabel(agent)}` : (commit?.author ?? ""),
+            commit ? relativeTime(commit.authorTime, nowMs) : "",
+          ];
     }
     marker = new LineMarker(key, className, texts);
     markers.set(key, marker);
@@ -98,7 +110,7 @@ export function blameGutter(ctx: GutterContext) {
         active = model.sha(cursor);
       }
       const start = model.isRunStart(line);
-      return markerFor(sha, start, start || line === cursor, sha === active);
+      return markerFor(sha, start, start || line === cursor, sha === active, model.aiIndexAt(line));
     },
     lineMarkerChange: (update: ViewUpdate) =>
       update.selectionSet || update.transactions.some((tr) => tr.effects.some((e) => e.is(blameChanged))),

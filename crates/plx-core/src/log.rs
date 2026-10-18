@@ -40,6 +40,9 @@ pub struct LogEntry {
     pub path: String,
     /// 이 커밋에서 이름이 바뀌었으면 원래 경로
     pub old_path: Option<String>,
+    /// 라인 히스토리에서만: 그 줄 범위의 변경. merge는 빈 목록일 수 있다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hunks: Option<Vec<crate::line_log::Hunk>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,6 +192,7 @@ impl LogParser {
                         status: None,
                         path: text(&self.path),
                         old_path: None,
+                        hunks: None,
                     });
                     self.state = State::Header(1);
                     return Ok(());
@@ -285,6 +289,31 @@ fn preview(bytes: &[u8]) -> String {
     text.chars().take(40).collect()
 }
 
+/// git 출력을 읽어 커밋을 내놓는 실행기(`git log`, `git log -L`). 파일 히스토리가 다른 스레드에서 읽는다.
+pub trait EntrySource: Send + 'static {
+    fn canceller(&self) -> Canceller;
+    /// git이 내놓은 만큼 커밋을 `out`에 더한다(없을 수도 있다). 출력이 끝났으면 `false`.
+    fn read(&mut self, out: &mut Vec<LogEntry>) -> Result<bool, LogError>;
+    /// 출력을 끝까지 읽은 뒤 git이 성공했는지 본다.
+    fn finish(self) -> Result<(), LogError>
+    where
+        Self: Sized;
+}
+
+impl EntrySource for LogStream {
+    fn canceller(&self) -> Canceller {
+        LogStream::canceller(self)
+    }
+
+    fn read(&mut self, out: &mut Vec<LogEntry>) -> Result<bool, LogError> {
+        LogStream::read(self, out)
+    }
+
+    fn finish(self) -> Result<(), LogError> {
+        LogStream::finish(self)
+    }
+}
+
 /// `git log <starts> -- <path>` 실행. 읽는 쪽은 [`LogStream::read`]로 커밋을 받는다.
 pub struct LogStream {
     git: git::Streaming,
@@ -302,19 +331,30 @@ impl LogStream {
     pub fn spawn(repo_dir: &Path, starts: &[String], path: &str) -> io::Result<LogStream> {
         let mut command = git::command(repo_dir);
         command.args([
+            // 경로는 파일 이름 그대로다: `app/[slug]/page.tsx`의 `[slug]`를 글롭으로 보면 다른 파일의 커밋이
+            // 끼고 changed-path Bloom 필터도 쓰지 못한다.
+            "--literal-pathspecs",
             "-c",
             "log.showRoot=true",
             "log",
             "-z",
             FORMAT,
             "--date=raw",
-            "--name-status",
             "--no-follow",
             "--no-show-signature",
             "--no-color",
             "--encoding=UTF-8",
         ]);
-        command.args(starts).arg("--").arg(path);
+        // 저장소 전체(`plx log .`)는 `git log`와 같게 경로를 주지 않는다: `-- .`은 이력 단순화를 해서 빈 커밋,
+        // `-s ours`로 합친 곁가지, 본줄기가 그대로인 `--no-ff` merge를 뺀다. 커밋마다 바뀐 파일 목록도 받지 않는다.
+        let whole = path.is_empty() || path == ".";
+        if !whole {
+            command.arg("--name-status");
+        }
+        command.args(starts);
+        if !whole {
+            command.arg("--").arg(path);
+        }
         Ok(LogStream {
             git: git::Streaming::spawn(command, "git log")?,
             parser: LogParser::new(path),

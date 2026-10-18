@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{git_text, history};
+use common::{commit_all, git, git_text, history, scratch_repo, ten_lines};
 use plx_core::navigate::{self, Direction, Version};
 use plx_core::repo::Repo;
 
@@ -163,4 +163,73 @@ fn map_line_between_versions() {
     // 없는 버전
     let error = navigate::map_line(&repo, &v, &at(&head, "no/such.rs"), 1).unwrap_err();
     assert!(error.to_string().contains("no/such.rs"), "{error}");
+}
+
+/// Git for Windows 기본값(`core.autocrlf=true`)이면 작업트리는 CRLF, blob은 LF다. 작업트리 쪽을 git처럼 바꿔(clean)
+/// 비교해야 줄이 맞는다: 그대로 비교하면 모든 줄이 바뀐 것으로 보여 `,`·`<`·`>`·`o`가 1번 줄로 간다.
+#[test]
+fn crlf_worktree_maps_lines_like_git() {
+    let dir = scratch_repo("crlf-navigate");
+    git(&dir, &["config", "core.autocrlf", "true"]);
+    std::fs::write(dir.join("f.txt"), ten_lines(&[])).unwrap();
+    let c1 = commit_all(&dir, "c1");
+    std::fs::write(dir.join("f.txt"), ten_lines(&[3])).unwrap();
+    let c2 = commit_all(&dir, "c2");
+    // 다시 꺼내면 작업트리가 CRLF가 된다(Git for Windows가 체크아웃하는 모양).
+    std::fs::remove_file(dir.join("f.txt")).unwrap();
+    git(&dir, &["checkout", "--", "f.txt"]);
+    let bytes = std::fs::read(dir.join("f.txt")).unwrap();
+    assert!(bytes.windows(2).any(|w| w == b"\r\n"), "작업트리는 CRLF");
+    let porcelain = git_text(&dir, &["blame", "--porcelain", "--", "f.txt"]);
+    assert!(
+        !porcelain.contains(&"0".repeat(40)),
+        "git은 미커밋 줄이 없다고 본다"
+    );
+
+    let repo = Repo::discover(&dir).unwrap();
+    let wt = working("f.txt");
+    let head = at(&c2, "f.txt");
+    assert_eq!(navigate::map_line(&repo, &wt, &head, 7).unwrap(), 7);
+    assert_eq!(navigate::map_line(&repo, &head, &wt, 7).unwrap(), 7);
+    // 작업트리가 HEAD와 같으면(줄 끝만 다르다) `<`는 HEAD 버전을 건너뛴다.
+    let older = navigate::neighbor(&repo, &wt, Direction::Older).unwrap();
+    assert_eq!(older, Some(at(&c1, "f.txt")));
+
+    // 섞인 줄 끝(CRLF와 LF)도 줄 단위로 맞는다(core.safecrlf로 실패하지 않는다).
+    let mut mixed = ten_lines(&[3]).replace('\n', "\r\n");
+    mixed.push_str("new line\n");
+    std::fs::write(dir.join("f.txt"), mixed).unwrap();
+    assert_eq!(navigate::map_line(&repo, &wt, &head, 7).unwrap(), 7);
+    assert_eq!(
+        navigate::map_line(&repo, &wt, &head, 11).unwrap(),
+        10,
+        "새 줄은 그 부분이 시작하는 줄로"
+    );
+}
+
+/// `.gitattributes`의 `eol=crlf`·`text`도 git처럼 따른다(`core.autocrlf`를 끄고도 CRLF 작업트리).
+#[test]
+fn eol_attribute_is_followed() {
+    let dir = scratch_repo("crlf-attribute");
+    std::fs::write(dir.join(".gitattributes"), "*.txt text eol=crlf\n").unwrap();
+    std::fs::write(dir.join("f.txt"), ten_lines(&[])).unwrap();
+    let c1 = commit_all(&dir, "c1");
+    std::fs::remove_file(dir.join("f.txt")).unwrap();
+    git(&dir, &["checkout", "--", "f.txt"]);
+    assert!(
+        std::fs::read(dir.join("f.txt"))
+            .unwrap()
+            .windows(2)
+            .any(|w| w == b"\r\n")
+    );
+    let repo = Repo::discover(&dir).unwrap();
+    assert_eq!(
+        navigate::map_line(&repo, &working("f.txt"), &at(&c1, "f.txt"), 5).unwrap(),
+        5
+    );
+    assert_eq!(
+        navigate::neighbor(&repo, &working("f.txt"), Direction::Older).unwrap(),
+        None,
+        "HEAD와 같은 작업트리 앞은 없다"
+    );
 }
