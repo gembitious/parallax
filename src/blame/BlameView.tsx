@@ -6,13 +6,13 @@ import { copyText } from "../clipboard";
 import { call } from "../ipc";
 import { afterPaint, getPerfInfo, nowMs, record } from "../perf";
 import { CommitCard, type InfoState } from "./CommitCard";
-import { createEditor, type Editor } from "./editor";
+import { createEditor, restoreSearch, searchStateOf, type Editor, type SearchState } from "./editor";
 import { formatCount, isUncommitted, shortSha } from "./format";
 import { blameChanged } from "./gutter";
 import { BlameModel } from "./model";
 import { aiSummary, type AiAttribution, type AiItem } from "./ai";
 import type { Navigation } from "../nav";
-import { watchFile, watchRepo } from "../watch";
+import { headMoved, watchFile, watchRepo } from "../watch";
 import { WorktreePicker } from "../worktree/WorktreePicker";
 import { useQuickOpen } from "../quickopen/QuickOpen";
 import { commonCommands, usePalette, type Command } from "../palette/Palette";
@@ -20,9 +20,11 @@ import { routeKey } from "../keys";
 import { openInEditor } from "../editor";
 import { toggleHud } from "../Hud";
 import { openSearchPanel } from "@codemirror/search";
+import { runScopeHandlers } from "@codemirror/view";
 import { blameSwitch } from "../worktree/switch";
 import { openBlame, type BlameTarget } from "./session";
 import type { BlameBlock, BlameMeta, BlameStats, CommitInfo, Neighbor, Version } from "./types";
+import { useMounted } from "../mounted";
 
 
 type Props = {
@@ -43,8 +45,10 @@ type Props = {
   /** `q`: 뒤로. 더 돌아갈 곳이 없으면 창을 숨긴다. */
   onBack(): void;
   onNavigate(navigation: Navigation): void;
-  /** 저장소가 바뀌었다(작업트리 blame의 HEAD 이동): 이 화면을 `line` 줄로 새로 연다. */
-  onReload?(line: number | null): void;
+  /** 다시 열기 전 화면의 검색(검색어·패널). 이 화면에서 되살린다. */
+  search?: SearchState;
+  /** 저장소가 바뀌었다(작업트리 blame의 HEAD 이동): 이 화면을 `line` 줄로 새로 연다. `search`는 새 화면으로 넘긴다. */
+  onReload?(line: number | null, search?: SearchState): void;
 };
 
 type Progress =
@@ -78,6 +82,21 @@ type Actions = {
   escape(): boolean;
 };
 
+type NoEditorAction = "back" | "help" | "history" | "worktrees" | "graph" | "openEditor" | "older" | "newer" | "escape";
+
+/** 코드 뷰가 없는 화면(바이너리, 열지 못한 파일)에서도 먹는 키. 나머지는 줄이 있어야 한다. */
+const NO_EDITOR_KEYS = new Map<string, NoEditorAction>([
+  ["q", "back"],
+  ["?", "help"],
+  ["H", "history"],
+  ["W", "worktrees"],
+  ["G", "graph"],
+  ["o", "openEditor"],
+  ["<", "older"],
+  [">", "newer"],
+  ["Escape", "escape"],
+]);
+
 const SHOW_DELAY_MS = 150;
 const HIDE_DELAY_MS = 250;
 const TOAST_MS = 1800;
@@ -100,6 +119,7 @@ export function BlameView({
   depth,
   backDirection,
   cold = false,
+  search,
   onShown,
   onBack,
   onNavigate,
@@ -121,6 +141,12 @@ export function BlameView({
   const [toast, setToast] = useState<string | null>(null);
   /** AI 출처 응답을 받을 때마다 오른다(머리줄 요약을 다시 센다). */
   const [aiVersion, setAiVersion] = useState(0);
+  /** 코드 뷰의 검색 패널(`/`)이 열려 있다 */
+  const [searching, setSearching] = useState(false);
+  /** 파일이나 HEAD가 바뀌어 다시 열어야 한다(열린 창·검색을 닫을 때까지 미뤘다) */
+  const [changed, setChanged] = useState(false);
+  /** HEAD가 움직였다는 마지막 알림의 HEAD(없었으면 undefined) */
+  const [movedTo, setMovedTo] = useState<string | null | undefined>(undefined);
   // 저장소를 아직 모르면(meta 전) 연 파일 경로로 찾는다(저장소 안의 아무 경로면 된다).
   const quickOpen = useQuickOpen({
     repo: meta?.repo ?? target.repo ?? path,
@@ -157,14 +183,20 @@ export function BlameView({
   const pointerInCard = useRef(false);
   /** 이동 요청을 보내 놓고 답을 기다리는 중(키를 여러 번 눌러도 한 번만 간다) */
   const navigating = useRef(false);
-  const latest = useRef({ hover, help, meta, infos, active });
-  latest.current = { hover, help, meta, infos, active };
+  const mounted = useMounted();
+  /** 키를 가져가는 창(도움말·워크트리·Quick Open·팔레트)이 열려 있다 */
+  const overlay = help || worktrees || quickOpen.isOpen || palette.isOpen;
+  const latest = useRef({ hover, help, meta, infos, active, fatal, overlay });
+  latest.current = { hover, help, meta, infos, active, fatal, overlay };
 
   const showToast = (message: string) => {
     setToast(message);
     window.clearTimeout(timers.current.toast);
     timers.current.toast = window.setTimeout(() => setToast(null), TOAST_MS);
   };
+
+  /** 파일을 아직 열지 못했다(여는 중이거나 실패했다). */
+  const notOpened = () => showToast(latest.current.fatal ? "파일을 열지 못했다" : "아직 파일을 여는 중이다");
 
   const loadInfo = (sha: string) => {
     const repo = latest.current.meta?.repo;
@@ -194,18 +226,31 @@ export function BlameView({
   // (체크아웃으로 파일이 사라짐)은 파일이 돌아와도 더는 바뀌지 않는다.
   useEffect(() => {
     if (rev !== null || !onReload) return;
-    const reload = () => onReload(editor.current ? cursorLine() : line);
     const stopRepo = watchRepo(target.repo ?? path, (change) => {
-      if (change.headChanged) reload();
+      if (change.headChanged) setMovedTo(change.head);
     });
-    const stopFile = watchFile(target.repo ? `${target.repo}/${path}` : path, reload);
+    const stopFile = watchFile(target.repo ? `${target.repo}/${path}` : path, () => setChanged(true));
     return () => {
       stopRepo();
       stopFile();
     };
-    // 요청마다 새 컴포넌트다(App이 key를 준다). cursorLine은 ref만 읽는다.
+    // 요청마다 새 컴포넌트다(App이 key를 준다).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 다시 열기는 화면을 새로 만든다. 보이는 화면에 창(도움말·워크트리·Quick Open·팔레트·고정 카드)이나 검색 패널이
+  // 열려 있으면 닫을 때까지 미룬다: 바로 열면 그 창과 치던 글자가 사라지고 남은 글자가 화면 키가 된다(`o`가 에디터를
+  // 띄우고 `q`가 창을 숨겼다). 검색어는 새 화면으로 넘긴다(`n`/`N`이 이어서 찾는다).
+  const busy = active && (overlay || !!hover?.pinned || searching);
+  // HEAD 알림은 이 화면이 읽은 HEAD와 다를 때만 다시 연다(열기 바로 전의 커밋이 늦게 알려진 것은 거른다).
+  const stale = changed || headMoved(movedTo, meta ? meta.head : undefined, fatal !== null || progress.kind === "failed");
+  useEffect(() => {
+    if (!stale || busy || !onReload) return;
+    const view = editor.current?.view;
+    onReload(view ? cursorLine() : line, view ? (searchStateOf(view) ?? undefined) : search);
+    // 다시 열면 App이 key를 바꿔 새 컴포넌트가 된다. cursorLine은 ref만 읽는다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stale, busy]);
 
   const openCard = (n: number, anchor: DOMRect, pinned: boolean) => {
     const sha = model.current?.sha(n);
@@ -224,12 +269,17 @@ export function BlameView({
     editor.current?.view.focus();
   };
 
-  /** 이동할 곳을 받아 App에 넘긴다. 없으면(null) 알린다. */
+  /**
+   * 이동할 곳을 받아 App에 넘긴다. 없으면(null) 알린다. 답을 기다리는 동안(큰 저장소의 `<`는 몇 초 걸린다) 이 화면을
+   * 닫았거나(`q`, 새 `plx` 호출) 다른 화면을 위에 열었거나, Quick Open·팔레트 같은 창을 열었으면(그 창에 치던 글자가
+   * 새 화면의 키가 된다) 이동하지 않는다.
+   */
   const navigate = (request: Promise<Navigation | null>, none = "") => {
     if (navigating.current) return;
     navigating.current = true;
     request
       .then((navigation) => {
+        if (!mounted.current || !latest.current.active || latest.current.overlay) return;
         if (navigation) onNavigate(navigation);
         else if (none) showToast(none);
       })
@@ -335,7 +385,7 @@ export function BlameView({
     },
     history() {
       const m = latest.current.meta;
-      if (!m) showToast("아직 파일을 여는 중이다");
+      if (!m) notOpened();
       else onNavigate({ kind: "history", target: { repo: m.repo, path: m.path, rev: m.rev } });
       return true;
     },
@@ -343,7 +393,8 @@ export function BlameView({
       const m = latest.current.meta;
       const view = editor.current?.view;
       if (!m || !view) {
-        showToast(m?.binary ? "바이너리 파일은 라인 히스토리를 보지 않는다" : "아직 파일을 여는 중이다");
+        if (m?.binary) showToast("바이너리 파일은 라인 히스토리를 보지 않는다");
+        else notOpened();
         return true;
       }
       // 선택한 줄들(끝이 줄 맨 앞이면 그 줄은 뺀다), 선택이 없으면 커서 줄
@@ -358,7 +409,7 @@ export function BlameView({
     graph() {
       const m = latest.current.meta;
       if (!m) {
-        showToast("아직 파일을 여는 중이다");
+        notOpened();
         return true;
       }
       // 커서 줄의 커밋(미커밋 줄이면 이 리비전, 작업트리면 HEAD)을 골라서 연다.
@@ -386,7 +437,7 @@ export function BlameView({
     },
     openEditor() {
       const m = latest.current.meta;
-      if (!m) showToast("아직 파일을 여는 중이다");
+      if (!m) notOpened();
       else openInEditor({ repo: m.repo, path: m.path, rev: m.rev, line: cursorLine() }).then(showToast);
       return true;
     },
@@ -546,7 +597,9 @@ export function BlameView({
                 help: () => actions.current.help(),
                 escape: () => actions.current.escape(),
               },
+              onSearchPanel: setSearching,
             });
+            if (search) restoreSearch(editor.current.view, search);
             editor.current.view.focus();
             setProgress({ kind: "streaming", blamed: 0 });
           } else {
@@ -600,7 +653,8 @@ export function BlameView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 다시 맨 위 화면이 되면(뒤로 와서) 키 입력을 받게 에디터에 포커스를 준다. 숨길 때는 떠 있는 것을 닫는다.
+  // 다시 맨 위 화면이 되면(뒤로 와서) 키 입력을 받게 에디터에 포커스를 준다. 숨길 때는 떠 있는 것을 닫는다(숨은
+  // 화면에 남은 창은 돌아왔을 때 포커스 없이 떠 있어 Esc로도 닫히지 않았다).
   useEffect(() => {
     if (active) {
       editor.current?.view.focus();
@@ -608,27 +662,33 @@ export function BlameView({
       window.clearTimeout(timers.current.show);
       setHover(null);
       setHelp(false);
+      setWorktrees(false);
+      quickOpen.close();
+      palette.close();
     }
+    // close는 상태만 바꾼다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
-  // 에디터 밖(카드, 머리줄)에 포커스가 있어도 q·?·Esc는 먹게 한다.
+  // 코드 뷰 밖(머리줄·카드·버튼을 누른 뒤, 클립보드 대신 쓰기 뒤)에 포커스가 있어도 화면 키가 먹게 한다.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!latest.current.active || routeKey(e, actions.current) !== "view") return;
+      const target = e.target as HTMLElement | null;
       // 코드 뷰 안의 키는 코드 뷰의 키맵이 받는다.
-      if ((e.target as HTMLElement | null)?.closest(".cm-editor")) return;
-      // W는 코드 뷰가 없는 화면(바이너리, 오류)에서도 먹는다.
-      const handled =
-        e.key === "q"
-          ? actions.current.back()
-          : e.key === "?"
-            ? actions.current.help()
-            : e.key === "H"
-              ? actions.current.history()
-              : e.key === "W"
-                ? actions.current.worktrees()
-                : e.key === "Escape" && actions.current.escape();
-      if (handled) e.preventDefault();
+      if (target?.closest(".cm-editor")) return;
+      // 버튼에 포커스가 있으면 Enter·Space는 버튼이 받는다.
+      if (target?.closest("button") && (e.key === "Enter" || e.key === " ")) return;
+      const view = editor.current?.view;
+      if (view) {
+        // 코드 뷰의 키맵으로 처리하고 포커스를 돌려준다. 키가 입력 칸(검색 패널)을 열어 포커스를 가져갔으면 둔다.
+        if (!runScopeHandlers(view, e, "editor")) return;
+        e.preventDefault();
+        if (!document.activeElement?.closest("input, textarea, .cm-editor")) view.focus();
+        return;
+      }
+      const action = NO_EDITOR_KEYS.get(e.key);
+      if (action && actions.current[action]()) e.preventDefault();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -672,6 +732,11 @@ export function BlameView({
         {depth > 1 && (
           <span className="badge" title="q로 앞 화면으로 돌아간다">
             뒤로 q · {depth - 1}
+          </span>
+        )}
+        {stale && (
+          <span className="badge warn" title="파일이나 HEAD가 바뀌었다. 열린 창·검색을 닫으면 다시 연다">
+            바뀜
           </span>
         )}
         <span className="blame-status" aria-live="polite">
