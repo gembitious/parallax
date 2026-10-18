@@ -33,6 +33,8 @@ export type PlxRequest = {
   args: string[];
   cwd: string;
   t0Ms: number;
+  /** 호출한 plx 프로세스가 main에 들어온 시각. 모르면 0 */
+  mainMs: number;
   recvMs: number;
   cold: boolean;
 };

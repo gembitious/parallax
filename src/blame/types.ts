@@ -57,6 +57,8 @@ export type BlameMeta = {
   path: string;
   /** 고정 리비전의 커밋 sha. 작업트리 blame이면 null */
   rev: string | null;
+  /** 작업트리 blame이 기준으로 삼은 HEAD 커밋. 고정 리비전이거나 커밋이 없는 저장소면 null */
+  head: string | null;
   content: Decoded | null;
   binary: boolean;
 };

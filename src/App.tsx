@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { appInfo, onRequest, scriptStartMs, type AppInfo } from "./boot";
 import { BlameView } from "./blame/BlameView";
 import { CommitView } from "./commit/CommitView";
 import { GraphView } from "./graph/GraphView";
@@ -17,11 +17,10 @@ import {
   type Shown,
   type StackEntry,
   type ViewAction,
+  type ViewState,
 } from "./nav";
-import { afterPaint, getPerfInfo, initPerf, nowMs, phasesBetween, record } from "./perf";
+import { afterPaint, bootMarks, getPerfInfo, nowMs, phasesBetween, record } from "./perf";
 import type { SearchState } from "./blame/editor";
-
-type AppInfo = { version: string; coreVersion: string };
 
 // docs/MILESTONES.md 성능 예산
 const COLD_BUDGET_MS = 1000;
@@ -40,7 +39,9 @@ function recordShown({ request, receivedMs }: Shown, committedMs: number, painte
       phases: phasesBetween([
         ["프로세스", request.t0Ms],
         ["Tauri·WebView", getPerfInfo().mainStartMs],
-        ["JS·첫 렌더", performance.timeOrigin],
+        ["JS 읽기", performance.timeOrigin],
+        ["JS 실행", scriptStartMs],
+        ["시작 IPC", bootMarks.modulesMs],
         ["내용", receivedMs],
         [paint, committedMs],
         ["", end],
@@ -54,7 +55,13 @@ function recordShown({ request, receivedMs }: Shown, committedMs: number, painte
       budgetMs: PLX_BUDGET_MS,
       totalMs: end - request.t0Ms,
       phases: phasesBetween([
-        ["plx 실행·전달", request.t0Ms],
+        // plx 실행: 실행 파일을 띄우고 main까지(동적 라이브러리 싣기), 전달: 인자 검사·저장소 열어 보기·소켓으로 넘기기
+        ...(request.mainMs > request.t0Ms
+          ? ([
+              ["plx 실행", request.t0Ms],
+              ["전달", request.mainMs],
+            ] as [string, number][])
+          : ([["plx 실행·전달", request.t0Ms]] as [string, number][])),
         ["이벤트", request.recvMs],
         ["내용", receivedMs],
         [paint, committedMs],
@@ -67,9 +74,14 @@ function recordShown({ request, receivedMs }: Shown, committedMs: number, painte
 
 const hideWindow = () => invoke("hide_window").catch((e) => console.error("창 숨기기 실패", e));
 
-export default function App() {
+const NOTHING: ViewState = { shown: null, stack: [] };
+const firstState = (request: PlxRequest | null): ViewState =>
+  request ? viewReducer(NOTHING, { type: "request", request, receivedMs: nowMs() }) : NOTHING;
+
+/** initial: 첫 렌더에 띄울 요청(boot.ts가 물어 둔 것) */
+export default function App({ initial }: { initial: PlxRequest | null }) {
   const [info, setInfo] = useState<AppInfo | null>(null);
-  const [{ shown, stack }, dispatch] = useReducer(viewReducer, { shown: null, stack: [] });
+  const [{ shown, stack }, dispatch] = useReducer(viewReducer, initial, firstState);
   const shownRef = useRef<Shown | null>(null);
   shownRef.current = shown;
   const readySent = useRef(false);
@@ -102,36 +114,21 @@ export default function App() {
 
   useEffect(() => {
     let disposed = false;
-    let unlisten: (() => void) | undefined;
-    const accept = (request: PlxRequest) => {
+    appInfo.then(
+      (appInfo) => !disposed && setInfo(appInfo),
+      (e) => console.error("앱 정보를 받지 못했다", e),
+    );
+    // 띄울 화면이 없으면(Finder·시작 메뉴로 띄움) 첫 화면 안내를 보인다.
+    if (!initial) markReady();
+    const stop = onRequest((request) => {
       setNotices(false);
       dispatch({ type: "request", request, receivedMs: nowMs() });
-    };
-    (async () => {
-      await initPerf();
-      // 먼저 듣기 시작한 뒤 놓친 요청을 가져온다. 순서를 바꾸면 그 사이에 온 요청을 잃는다.
-      unlisten = await listen<PlxRequest>("plx-request", (e) => accept(e.payload));
-      if (disposed) {
-        unlisten();
-        return;
-      }
-      const [latest, appInfo] = await Promise.all([
-        call<PlxRequest | null>("current_request"),
-        call<AppInfo>("app_info"),
-      ]);
-      if (disposed) return;
-      setInfo(appInfo);
-      if (latest) accept(latest);
-      else markReady();
-    })().catch((e) => {
-      console.error("초기화 실패", e);
-      markReady();
     });
     return () => {
       disposed = true;
-      unlisten?.();
+      stop();
     };
-    // markReady는 ref만 쓰므로 의존성이 없다.
+    // 첫 렌더의 요청만 본다. markReady는 ref만 쓴다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
