@@ -19,7 +19,8 @@ GitLens의 핵심 흐름(줄 → 커밋 → 부모 리비전 blame → 파일·�
    - refs·커밋·트리·blob 읽기, 리비전 워크, 트리 diff → `gix` (프로세스 생성 없음. 윈도우에서 특히 중요)
    - blame → `git blame --incremental`, 파일 히스토리 → `git log`, 라인 히스토리 → `git log -L`
      (git의 changed-path Bloom 필터 혜택을 그대로 받는다)
-   - `gix-blame`은 실험 플래그 뒤에만 둔다. git 결과와의 골든 테스트를 통과하기 전에는 기본값으로 바꾸지 않는다.
+   - `gix-blame`은 쓰지 않는다(2026-10-18 검토: 흘려보내지 않고 git과 다른 줄이 있다, 결정 기록).
+     git 결과와의 골든 테스트를 통과하기 전에는 앱에 넣지 않는다.
 3. **불변 결과는 영구 캐시.** 특정 커밋 기준 blame·이력은 바뀌지 않는다 → (저장소, 커밋 sha, 경로) 키로 디스크 캐시.
    작업트리 blame만 (HEAD sha, 파일 내용 해시) 키를 쓴다(읽은 내용을 `git blame --contents -`로 준다).
    blame 결과를 바꾸는 설정(`blame.ignoreRevsFile`, `.mailmap`, 줄 끝)도 키에 넣고, 얕은 클론은 캐시하지 않는다.
@@ -58,7 +59,8 @@ scripts/           설치·확인 스크립트 (macOS shim, 앱 자동 확인 ch
 .github/workflows/ CI: Windows·macOS·Linux에서 검사(포맷·clippy·테스트)와 앱 확인(릴리스 빌드 + check-app.sh)
 src/               React UI
 bench/             참조 저장소 준비 스크립트, git 측정 하네스(plx-bench), 앱 지연 측정, 측정 결과(results.md)
-fixtures/          테스트 저장소 생성 스크립트 (rename, 이동, merge, CRLF, 한글 경로·내용)
+fixtures/          테스트 저장소 생성 스크립트 (rename, 이동, merge, CRLF, 한글 경로·내용),
+                   git-ai가 노트를 쓴 저장소 번들과 `git-ai blame` 기대값(git-ai/)
 docs/              MILESTONES.md
 ```
 
@@ -71,6 +73,7 @@ docs/              MILESTONES.md
 - **플랫폼:** Windows(Git Bash)와 macOS 모두 1급 지원. 한쪽에서만 확인한 기능은 완료로 치지 않는다.
 - **읽기 전용:** 저장소를 바꾸는 git 명령은 호출하지 않는다. 유일한 예외는 사용자가 확인한 "가속 설정"(commit-graph 작성).
 - **파서 정확성:** git 출력 파서마다 fixtures 기반 골든 테스트(`git blame --porcelain` 등 git 결과와 비교)를 둔다.
+  외부 입력(git 출력, AI 노트, 디스크 캐시, CLI 인자, 검색어)을 읽는 파서는 퍼징 테스트(`tests/fuzz.rs`)에도 넣는다.
 - **라이선스:** 코드는 MIT OR Apache-2.0이다(`LICENSE-MIT`, `LICENSE-APACHE`). git처럼 GPL·LGPL인 프로젝트의 코드는
   다른 언어로 옮기지도 않는다: 동작은 문서와 그 도구의 출력(골든 테스트)으로 맞춘다. MIT·Apache 같은 허용 라이선스의
   코드를 옮기면 그 파일 맨 위에 원래 저작권 고지를 둔다(`plx_core::fuzzy`의 fzf). 새 의존성은 이 두 라이선스와 함께
@@ -91,6 +94,8 @@ docs/              MILESTONES.md
   `PLX_CHECK_RECORD=<이름>`이면 지연 표를 `bench/results.md`에 넣는다. CI도 이 스크립트를 돌린다.
 - 앱 지연만 측정: `bench/app-latency.sh [실행 파일] [반복 횟수]` → 콜드 스타트, plx 호출 → 첫 페인트, blame 첫 줄 표시
 - git baseline: `bench/setup.sh`(참조 저장소 준비, 한 번) → `bench/run.sh [이름]`(측정 → `bench/results.md`)
+- gix-blame 다시 재기(gix를 올릴 때): `cargo run -p plx-bench --release --features gix-blame -- --repos bench/repos
+  --cases bench/cases-gix-blame.txt` → 결과는 `bench/results.md`의 "gix-blame 전환 검토"에 옮긴다
 
 ## 작업 방식
 - 적당한 작업 단위마다 PR을 만든다. 앞 PR이 아직 머지되지 않았으면 그 브랜치 위에 쌓고 PR 설명에 머지 순서를 적는다.
@@ -220,8 +225,10 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
 - 2026-10-15: AI 출처(M5)는 git-ai가 커밋마다 붙이는 `refs/notes/ai` 노트(Git AI Standard v3.0.0, `authorship/3.0.0`)를
   읽어 blame에 겹친다(`plx_core::ai_notes`). 노트는 그 커밋 버전의 줄 번호라 `git-ai blame`과 같이 blame 블록의 원래 커밋·
   원래 경로·원래 줄로 찾고, 뒤 항목이 이기며 메타데이터에 없는 키는 건너뛴다(`s_…::t_…` 세션, `h_` 사람, 16자 옛
-  프롬프트는 다른 노트에서도 찾는다). 규칙은 git-ai 저장소의 표준 문서와 `get_line_attribution`을 읽어 맞췄다(git-ai를
-  빌드·실행하지는 않았다). 노트 트리는 gix로 직접 읽고(fanout 무관, git 스폰 없음) notes 참조가 바뀌면 다시 읽는다.
+  프롬프트는 다른 노트에서도 찾는다). 규칙은 git-ai 저장소의 표준 문서와 `get_line_attribution`을 읽어 맞췄다.
+  2026-10-18: git-ai 1.7.6과 1.3.4(옛 형식 노트)를 빌드해 그 테스트 도구로 저장소 20개(rename, cherry-pick, amend,
+  merge, 한글 경로 등을 두 형식으로)를 만들었고, 줄마다 에이전트가 1.7.6의 `git-ai blame --json`과 같음을 골든 테스트로
+  둔다(`fixtures/git-ai`). 노트 트리는 gix로 직접 읽고(fanout 무관, git 스폰 없음) notes 참조가 바뀌면 다시 읽는다.
   해석한 노트는 blob id로 기억해(git-ai는 커밋마다 참조를 옮기지만 그대로인 노트는 blob도 같다) 바뀐 노트만 다시 읽고,
   옛 프롬프트 표도 새 노트만 더한다(노트가 빠지거나 고쳐지면 처음부터 다시 모은다).
   아직 커밋하지 않은 줄의 AI 작업 상태(`.git/ai`)는 git-ai 내부 형식이라 보지 않는다.
@@ -341,3 +348,16 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
   모듈을 실행하는 동안 오가게 하고, 첫 렌더는 답을 받은 뒤 요청한 화면으로 바로 한다. 듣기 전에 온 요청은 듣기 시작한 뒤
   current_request를 한 번 더 물어 받는다. 화면별로 나눠 불러오기는 blame 화면이 CodeMirror 대부분을 써서 덜 수 있는 것이
   첫 묶음의 12% 남짓이라 하지 않았다.
+- 2026-10-18: gix-blame 전환 검토. blame은 git CLI를 그대로 쓰고 gix-blame은 실험 플래그로도 앱에 넣지 않는다.
+  gix 0.89(gix-blame 0.19)를 참조 저장소의 blame 대상 네 파일에서 git과 나란히 쟀다(bench/results.md,
+  `bench/cases-gix-blame.txt`). 결과를 한꺼번에 내 첫 줄이 0.85~7.2초 뒤다(git `--incremental`은 첫 블록 10~20ms).
+  Bloom 필터를 읽지 않아 전체 시간도 git(Bloom 있음)의 1.9~4.2배다. 줄의 0.1~0.9%는 git과 다른 커밋을 가리킨다.
+  빈 줄·`}`·되풀이된 주석처럼 같은 내용의 줄을 어느 변경에 맞추느냐(slider)가 git의 xdiff와 달라서다.
+  fixtures 18개 파일은 모두 같았다. 첫 줄 예산(git 첫 출력 + 30ms)과 골든 테스트를 지킬 수 없다.
+  측정 항목은 plx-bench의 `gix-blame`(`--features gix-blame`, 앱·CI 빌드에는 들어가지 않는다)으로 남겨 gix를 올리면 다시 잰다.
+- 2026-10-18: 요청 하나의 패닉은 그 요청의 오류로 끝낸다(`plx_core::requests::catch`). 패닉해도 프로세스는 살지만
+  (`panic = "abort"`를 뺐다) 흘려보내는 요청(blame·히스토리·라인 히스토리·그래프)은 끝 이벤트가 오지 않아 화면이 "읽는 중"에
+  멈췄다. 이제 "plx 내부 오류(버그): …"로 끝나고 요청 등록부도 지운다. 앱이 끝날 때까지 두는 저장소별 캐시 가운데 잠금을 쥔 채
+  파일을 읽는 둘(Quick Open 파일 목록, AI 노트)은 패닉이 지나간 잠금을 비우고 다시 쓴다(`requests::lock_or_reset`). 전에는
+  앱을 다시 띄울 때까지 그 저장소의 검색·AI 표시가 모두 실패했다. 외부 입력을 읽는 파서 여덟은 고정 시드 변이 퍼징으로 본다
+  (`tests/fuzz.rs`, CI는 대상마다 3,000번. 대상마다 30만~100만 번 돌려 본 것도 패닉이 없었다).
