@@ -1,0 +1,23 @@
+{
+  "files": {
+    "src/lib.rs": {
+      "lines": {
+        "2": "e5eb4f484be67f82",
+        "4": "e5eb4f484be67f82"
+      },
+      "prompts": {
+        "e5eb4f484be67f82": {
+          "agent_id": {
+            "id": "ai-thread-1792301825391272498",
+            "model": "unknown",
+            "tool": "mock_ai"
+          },
+          "human_author": "Test User <test@example.com>"
+        }
+      }
+    }
+  },
+  "git_ai_version": "1.7.6",
+  "head": "b2b0f096243dcf43220db00d742fee078a07c9b3",
+  "notes_git_ai_version": "1.3.4"
+}

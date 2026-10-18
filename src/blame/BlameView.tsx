@@ -12,7 +12,7 @@ import { blameChanged } from "./gutter";
 import { BlameModel } from "./model";
 import { aiSummary, type AiAttribution, type AiItem } from "./ai";
 import type { Navigation } from "../nav";
-import { watchFile, watchRepo } from "../watch";
+import { headMoved, watchFile, watchRepo } from "../watch";
 import { WorktreePicker } from "../worktree/WorktreePicker";
 import { useQuickOpen } from "../quickopen/QuickOpen";
 import { commonCommands, usePalette, type Command } from "../palette/Palette";
@@ -145,6 +145,8 @@ export function BlameView({
   const [searching, setSearching] = useState(false);
   /** 파일이나 HEAD가 바뀌어 다시 열어야 한다(열린 창·검색을 닫을 때까지 미뤘다) */
   const [changed, setChanged] = useState(false);
+  /** HEAD가 움직였다는 마지막 알림의 HEAD(없었으면 undefined) */
+  const [movedTo, setMovedTo] = useState<string | null | undefined>(undefined);
   // 저장소를 아직 모르면(meta 전) 연 파일 경로로 찾는다(저장소 안의 아무 경로면 된다).
   const quickOpen = useQuickOpen({
     repo: meta?.repo ?? target.repo ?? path,
@@ -225,7 +227,7 @@ export function BlameView({
   useEffect(() => {
     if (rev !== null || !onReload) return;
     const stopRepo = watchRepo(target.repo ?? path, (change) => {
-      if (change.headChanged) setChanged(true);
+      if (change.headChanged) setMovedTo(change.head);
     });
     const stopFile = watchFile(target.repo ? `${target.repo}/${path}` : path, () => setChanged(true));
     return () => {
@@ -240,13 +242,15 @@ export function BlameView({
   // 열려 있으면 닫을 때까지 미룬다: 바로 열면 그 창과 치던 글자가 사라지고 남은 글자가 화면 키가 된다(`o`가 에디터를
   // 띄우고 `q`가 창을 숨겼다). 검색어는 새 화면으로 넘긴다(`n`/`N`이 이어서 찾는다).
   const busy = active && (overlay || !!hover?.pinned || searching);
+  // HEAD 알림은 이 화면이 읽은 HEAD와 다를 때만 다시 연다(열기 바로 전의 커밋이 늦게 알려진 것은 거른다).
+  const stale = changed || headMoved(movedTo, meta ? meta.head : undefined, fatal !== null || progress.kind === "failed");
   useEffect(() => {
-    if (!changed || busy || !onReload) return;
+    if (!stale || busy || !onReload) return;
     const view = editor.current?.view;
     onReload(view ? cursorLine() : line, view ? (searchStateOf(view) ?? undefined) : search);
     // 다시 열면 App이 key를 바꿔 새 컴포넌트가 된다. cursorLine은 ref만 읽는다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [changed, busy]);
+  }, [stale, busy]);
 
   const openCard = (n: number, anchor: DOMRect, pinned: boolean) => {
     const sha = model.current?.sha(n);
@@ -730,7 +734,7 @@ export function BlameView({
             뒤로 q · {depth - 1}
           </span>
         )}
-        {changed && (
+        {stale && (
           <span className="badge warn" title="파일이나 HEAD가 바뀌었다. 열린 창·검색을 닫으면 다시 연다">
             바뀜
           </span>
