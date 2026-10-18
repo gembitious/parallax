@@ -1,16 +1,28 @@
 // 파일 히스토리: 파일을 바꾼 커밋 목록(가상 스크롤). 이름을 바꾸기 전 구간은 옛 이름으로 이어진다.
 // 라인 히스토리(`lines`)면 그 줄 범위를 바꾼 커밋 목록과, 고른 커밋이 그 범위를 어떻게 바꿨는지(hunk)를 아래에 보인다.
 // 키: j/k 이동, Enter 커밋 상세(이 파일 diff만), b 그 리비전 blame, , 바꾸기 전 리비전 blame, y sha 복사,
-//     / 검색, n/N 다음·이전 결과, q 뒤로, ? 도움말.
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+//     / 검색, n/N 다음·이전 결과, G 그래프, q 뒤로, ? 도움말.
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Help } from "../Help";
+import { WorktreePicker } from "../worktree/WorktreePicker";
+import { call } from "../ipc";
+import { useQuickOpen } from "../quickopen/QuickOpen";
+import { commonCommands, usePalette, type Command } from "../palette/Palette";
+import { isComposing, routeKey } from "../keys";
+import { openInEditor } from "../editor";
+import { toggleHud } from "../Hud";
+import { historySwitch } from "../worktree/switch";
 import { copyText } from "../clipboard";
 import { formatCount, formatDate, parseTz, relativeTime, shortSha } from "../blame/format";
 import { STATUS_LETTER, STATUS_NAME } from "../commit/types";
-import type { Navigation } from "../nav";
-import { afterPaint, nowMs, record } from "../perf";
+import { lastName, type Navigation } from "../nav";
+import { headMoved, watchRepo } from "../watch";
+import { afterPaint, getPerfInfo, nowMs, record } from "../perf";
+import { ScrollMeter } from "../scrollMeter";
+import { useMounted } from "../mounted";
+import { drawWindow, insideDrawn, type DrawnRange } from "../scrollWindow";
 import { Acceleration } from "./Acceleration";
-import { findMatch, formerPaths, matches, scrollToRow, visibleRange } from "./list";
+import { findMatch, formerPaths, matches, scrollToRow } from "./list";
 import { openHistory } from "./session";
 import {
   PAGE,
@@ -35,6 +47,13 @@ type Props = {
   onShown?(committedMs: number): void;
   onBack(): void;
   onNavigate(navigation: Navigation): void;
+  /** 다시 열기 전 화면의 검색어(`n`/`N`이 이어서 찾는다) */
+  query?: string;
+  /**
+   * 저장소가 바뀌었다(HEAD부터 거슬러 오르는 히스토리의 HEAD 이동): 이 화면을 새로 연다. 라인 히스토리는 줄 범위를
+   * 새 작업트리의 줄로 옮겨 넘긴다(못 옮기면 없다). 검색어는 새 화면으로 넘긴다.
+   */
+  onReload?(lines?: LineRange, query?: string): void;
 };
 
 type Progress =
@@ -49,7 +68,18 @@ const TOAST_MS = 1800;
 const PAGE_SLACK_MS = 30;
 const CACHE_HIT_BUDGET_MS = 16;
 
-export function HistoryView({ target, lines = null, active, depth, cold = false, onShown, onBack, onNavigate }: Props) {
+export function HistoryView({
+  target,
+  lines = null,
+  active,
+  depth,
+  cold = false,
+  query: carriedQuery,
+  onShown,
+  onBack,
+  onNavigate,
+  onReload,
+}: Props) {
   const [meta, setMeta] = useState<HistoryMeta | null>(null);
   /** 받은 커밋. 수천 개가 쌓이므로 배열은 고치고 길이만 상태로 둔다. */
   const entries = useRef<LogEntry[]>([]);
@@ -57,10 +87,17 @@ export function HistoryView({ target, lines = null, active, depth, cold = false,
   const [progress, setProgress] = useState<Progress>({ kind: "loading" });
   const [selected, setSelected] = useState(0);
   const [viewport, setViewport] = useState({ top: 0, height: 0 });
-  const [search, setSearch] = useState({ open: false, query: "" });
+  const [search, setSearch] = useState({ open: false, query: carriedQuery ?? "" });
   const [help, setHelp] = useState(false);
+  const [worktrees, setWorktrees] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const quickOpen = useQuickOpen({
+    repo: meta?.repo ?? target.repo ?? target.path,
+    current: meta?.path ?? null,
+    onNavigate,
+    onClosed: () => listRef.current?.focus({ preventScroll: true }),
+  });
   /** 숨겼다 다시 보일 때 되돌릴 스크롤 위치(숨긴 요소의 스크롤은 브라우저마다 남지 않을 수 있다) */
   const savedTop = useRef(0);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -73,8 +110,49 @@ export function HistoryView({ target, lines = null, active, depth, cold = false,
     page: null as Promise<number | null> | null,
     reported: false,
   });
-  const latest = useRef({ active, meta, selected, help, search, count });
-  latest.current = { active, meta, selected, help, search, count };
+  const [accelRequest, setAccelRequest] = useState(0);
+  // 명령 팔레트: 키로 하는 일 모두와 머리줄의 가속 설정 버튼. 함수들은 아래에 있다(누를 때 부른다).
+  const commands: Command[] = [
+    { label: "커밋 상세 (이 파일 diff)", keys: "Enter", run: () => openCommit() },
+    { label: "이 리비전의 파일 blame", keys: "b", run: () => openBlame(false) },
+    { label: "바꾸기 전 리비전의 파일 blame", keys: ",", run: () => openBlame(true) },
+    { label: "커밋 그래프 (고른 커밋)", keys: "G", run: () => openGraph() },
+    { label: "커밋 sha 복사", keys: "y", run: () => copySha() },
+    { label: "검색 (요약·작성자·sha·경로)", keys: "/", run: () => openSearch() },
+    { label: "다음 검색 결과", keys: "n", run: () => findNext(1) },
+    { label: "이전 검색 결과", keys: "N", run: () => findNext(-1) },
+    { label: "처음 커밋으로", keys: "Home", run: () => select(0) },
+    { label: "마지막 커밋으로", keys: "End", run: () => select(latest.current.count - 1) },
+    { label: "에디터로 열기", keys: "o", detail: "작업트리 파일", run: () => openEditor() },
+    { label: "가속 설정 (commit-graph·Bloom 필터)", detail: "히스토리를 빠르게", run: () => setAccelRequest((n) => n + 1) },
+    ...commonCommands({
+      files: quickOpen.open,
+      worktrees: () => setWorktrees(true),
+      help: () => setHelp(true),
+      back: onBack,
+      hud: getPerfInfo().enabled ? toggleHud : undefined,
+    }),
+  ];
+  const palette = usePalette(commands, () => listRef.current?.focus({ preventScroll: true }));
+  const mounted = useMounted();
+  /** 가속 설정 확인 창이 열려 있다 */
+  const [accelDialog, setAccelDialog] = useState(false);
+  /** 키를 가져가는 창(도움말·워크트리·Quick Open·팔레트·가속 설정 확인)이 열려 있다 */
+  const overlay = help || worktrees || quickOpen.isOpen || palette.isOpen || accelDialog;
+  /** 다시 열기를 미룬다: 보이는 화면에 창이나 검색 칸이 열려 있다 */
+  const busy = active && (overlay || search.open);
+  const snapshot = { active, meta, selected, help, search, count, overlay, busy, openFiles: quickOpen.open, palette: palette.open };
+  const latest = useRef(snapshot);
+  latest.current = snapshot;
+  // 스크롤 프레임 측정(성능 HUD가 켜져 있을 때만)
+  const scrollMeter = useRef<ScrollMeter | null>(null);
+  scrollMeter.current ??= new ScrollMeter(
+    () => `${lines ? "라인 히스토리" : "히스토리"} ${lastName(latest.current.meta?.path ?? target.path)}`,
+    ROW_HEIGHT,
+  );
+  useEffect(() => () => scrollMeter.current?.dispose(), []);
+  /** 지금 그린 행 범위: 이 안의 스크롤은 다시 렌더하지 않는다(src/scrollWindow.ts) */
+  const drawnRange = useRef<DrawnRange>({ start: 0, end: 0, height: 0 });
 
   const showToast = (message: string) => {
     setToast(message);
@@ -90,6 +168,7 @@ export function HistoryView({ target, lines = null, active, depth, cold = false,
           const { kind: _kind, ...m } = event;
           setMeta(m);
           setProgress({ kind: "streaming" });
+          call("files_touch", { repo: m.repo, path: m.path }).catch(() => {});
           break;
         }
         case "entries":
@@ -113,6 +192,47 @@ export function HistoryView({ target, lines = null, active, depth, cold = false,
     // 요청마다 새 컴포넌트다(App이 key를 준다).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // HEAD부터 거슬러 오르는 히스토리: HEAD가 바뀌면(새 커밋 등) 다시 연다. 고정 리비전은 바뀌지 않는다.
+  // 열기를 시작할 때 요청 대상으로 구독한다(meta를 기다리면 다시 열다 실패한 화면은 더는 바뀌지 않는다).
+  // 알림의 HEAD가 이 화면이 거슬러 오르기 시작한 커밋과 같으면 다시 열지 않는다(열기 바로 전의 커밋이 늦게 알려진 것).
+  const [movedTo, setMovedTo] = useState<string | null | undefined>(undefined);
+  const changed = headMoved(movedTo, meta ? meta.start : undefined, progress.kind === "failed");
+  useEffect(() => {
+    if (target.rev !== null || !onReload) return;
+    return watchRepo(target.repo ?? target.path, (change) => {
+      if (change.headChanged) setMovedTo(change.head);
+    });
+    // 요청마다 새 컴포넌트다(App이 key를 준다).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 다시 열기는 화면을 새로 만든다. 보이는 화면에 창(도움말·워크트리·Quick Open·팔레트)이나 검색 칸이 열려 있으면
+  // 닫을 때까지 미룬다: 바로 열면 치던 글자가 사라지고 남은 글자가 화면 키가 된다. 검색어는 새 화면으로 넘긴다.
+  // 라인 히스토리의 줄 범위는 시작 커밋 버전의 줄이라, 새 작업트리의 줄로 옮겨 다시 연다(위에 줄이 늘어도 같은 코드).
+  useEffect(() => {
+    if (!changed || busy || !onReload) return;
+    const query = latest.current.search.query || undefined;
+    const m = latest.current.meta;
+    if (!lines || !m?.lines || !m.start) {
+      onReload(undefined, query);
+      return;
+    }
+    const from = { rev: m.start, path: m.path };
+    const to = { rev: null, path: m.path };
+    const map = (line: number) => call<number>("blame_map_line", { repo: m.repo, from, to, line });
+    // 줄을 옮기는 동안 창을 열었으면 다시 열지 않는다(닫으면 이 효과가 다시 돈다).
+    Promise.all([map(m.lines.start), map(m.lines.end)]).then(
+      ([start, end]) => {
+        if (!latest.current.busy) onReload({ start, end: Math.max(start, end) }, query);
+      },
+      () => {
+        if (!latest.current.busy) onReload(undefined, query);
+      },
+    );
+    // 다시 열면 App이 key를 바꿔 새 컴포넌트가 된다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [changed, busy]);
 
   // 첫 화면과 첫 50개(적으면 전부)를 그린 시각
   useLayoutEffect(() => {
@@ -181,9 +301,15 @@ export function HistoryView({ target, lines = null, active, depth, cold = false,
       setViewport({ top: list.scrollTop, height: list.clientHeight });
       list.focus({ preventScroll: true });
     } else {
+      // 숨을 때 떠 있는 창은 닫는다(돌아왔을 때 포커스 없이 남지 않게).
       setHelp(false);
       setSearch((s) => ({ ...s, open: false }));
+      setWorktrees(false);
+      quickOpen.close();
+      palette.close();
     }
+    // close는 상태만 바꾼다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
   useEffect(() => {
@@ -250,6 +376,22 @@ export function HistoryView({ target, lines = null, active, depth, cold = false,
     }
   };
 
+  const openGraph = () => {
+    const at = current();
+    if (at) onNavigate({ kind: "graph", repo: at.m.repo, rev: at.e.sha });
+  };
+
+  /** 작업트리 파일을 에디터로(라인 히스토리면 그 범위의 첫 줄). 저장소 전체 히스토리면 작업트리 폴더. */
+  const openEditor = () => {
+    const m = latest.current.meta;
+    if (!m) {
+      showToast("아직 히스토리를 여는 중이다");
+      return;
+    }
+    const path = m.path === "." ? null : m.path;
+    openInEditor({ repo: m.repo, path, rev: m.rev, line: lines?.start ?? null }).then(showToast);
+  };
+
   const copySha = () => {
     const at = current();
     if (!at) return;
@@ -257,6 +399,12 @@ export function HistoryView({ target, lines = null, active, depth, cold = false,
       () => showToast(`복사했다: ${shortSha(at.e.sha)}`),
       (e: unknown) => showToast(String(e)),
     );
+  };
+
+  /** 검색 칸을 연다. 이미 열려 있으면(목록을 눌러 포커스가 떠났다) 그리로 포커스를 옮긴다. */
+  const openSearch = () => {
+    setSearch((s) => ({ ...s, open: true }));
+    searchRef.current?.focus();
   };
 
   const findNext = (direction: 1 | -1, from = latest.current.selected) => {
@@ -270,8 +418,8 @@ export function HistoryView({ target, lines = null, active, depth, cold = false,
   // 키: 화면이 맨 위일 때만. 검색 입력 중이면 넘긴다(입력 칸이 Enter·Esc를 따로 다룬다).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!latest.current.active || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
-      if ((e.target as HTMLElement | null)?.closest("input, textarea")) return;
+      const { active: on, openFiles, palette: openPalette } = latest.current;
+      if (!on || routeKey(e, { files: openFiles, palette: openPalette }) !== "view") return;
       const { selected: at, help: helpOpen } = latest.current;
       let handled = true;
       switch (e.key) {
@@ -309,7 +457,7 @@ export function HistoryView({ target, lines = null, active, depth, cold = false,
           copySha();
           break;
         case "/":
-          setSearch((s) => ({ ...s, open: true }));
+          openSearch();
           break;
         case "n":
           findNext(1);
@@ -317,8 +465,17 @@ export function HistoryView({ target, lines = null, active, depth, cold = false,
         case "N":
           findNext(-1);
           break;
+        case "G":
+          openGraph();
+          break;
+        case "o":
+          openEditor();
+          break;
         case "q":
           onBack();
+          break;
+        case "W":
+          setWorktrees(true);
           break;
         case "?":
           setHelp(true);
@@ -338,7 +495,11 @@ export function HistoryView({ target, lines = null, active, depth, cold = false,
   }, []);
 
   const all = entries.current;
-  const { start, end } = visibleRange(viewport.top, viewport.height, ROW_HEIGHT, count);
+  const { start, end } = drawWindow(viewport.top, viewport.height, ROW_HEIGHT, count);
+  useLayoutEffect(() => {
+    drawnRange.current = { start, end, height: viewport.height };
+    scrollMeter.current?.drawn(false);
+  });
   const path = meta?.path ?? target.path;
   const range = meta?.lines ?? lines;
   const former = progress.kind === "done" ? formerPaths(all, path) : [];
@@ -370,7 +531,20 @@ export function HistoryView({ target, lines = null, active, depth, cold = false,
             뒤로 q · {depth - 1}
           </span>
         )}
-        {meta && <Acceleration repo={meta.repo} onDone={showToast} />}
+        {changed && (
+          <span className="badge warn" title="HEAD가 바뀌었다. 열린 창·검색을 닫으면 다시 연다">
+            바뀜
+          </span>
+        )}
+        {meta && (
+          <Acceleration
+            repo={meta.repo}
+            request={accelRequest}
+            active={active}
+            onDone={showToast}
+            onDialog={setAccelDialog}
+          />
+        )}
         <span className="blame-status">
           {progress.kind === "loading" && "여는 중…"}
           {progress.kind === "streaming" && `읽는 중… 커밋 ${formatCount(count)}개`}
@@ -391,6 +565,8 @@ export function HistoryView({ target, lines = null, active, depth, cold = false,
             aria-label="히스토리 검색"
             onChange={(e) => setSearch({ open: true, query: e.target.value })}
             onKeyDown={(e) => {
+              // IME 조합 중의 Enter·Esc는 조합을 끝내는 키다(Quick Open·팔레트와 같다).
+              if (isComposing(e.nativeEvent)) return;
               if (e.key === "Enter") {
                 e.preventDefault();
                 findNext(e.shiftKey ? -1 : 1);
@@ -412,6 +588,13 @@ export function HistoryView({ target, lines = null, active, depth, cold = false,
         onScroll={(e) => {
           const list = e.currentTarget;
           if (latest.current.active) savedTop.current = list.scrollTop;
+          const meter = scrollMeter.current;
+          meter?.scrolled(list.scrollTop);
+          // 미리 그린 범위 안이면 브라우저가 옮기기만 한다(다시 그리지 않는다).
+          if (insideDrawn(list.scrollTop, list.clientHeight, ROW_HEIGHT, latest.current.count, drawnRange.current)) {
+            meter?.drawn(false);
+            return;
+          }
           setViewport({ top: list.scrollTop, height: list.clientHeight });
         }}
       >
@@ -466,6 +649,28 @@ export function HistoryView({ target, lines = null, active, depth, cold = false,
         </footer>
       )}
       {help && <Help view="history" onClose={() => setHelp(false)} />}
+      {worktrees && meta && (
+        <WorktreePicker
+          repo={meta.repo}
+          onClose={() => setWorktrees(false)}
+          onPick={(worktree) => {
+            setWorktrees(false);
+            // 리비전에서 시작한 히스토리는 그대로, HEAD에서 시작한 것은 그 워크트리의 HEAD에서(라인 히스토리면 줄 범위를
+            // 그 워크트리의 작업트리 줄로 옮긴다: src/worktree/switch.ts).
+            const mapLine = (from: { rev: string; path: string }, line: number) =>
+              call<number>("blame_map_line", { repo: worktree.path, from, to: { rev: null, path: from.path }, line });
+            void historySwitch(worktree, meta, async (from, range) => {
+              const [start, end] = await Promise.all([mapLine(from, range.start), mapLine(from, range.end)]);
+              return { start, end: Math.max(start, end) };
+            }).then((next) => {
+              // 줄을 옮기는 동안 이 화면을 닫았거나 다른 화면·창을 열었으면 가지 않는다.
+              if (next && mounted.current && latest.current.active && !latest.current.overlay) onNavigate(next);
+            });
+          }}
+        />
+      )}
+      {quickOpen.overlay}
+      {palette.overlay}
       {toast && (
         <div className="toast" role="status">
           {toast}
@@ -475,7 +680,8 @@ export function HistoryView({ target, lines = null, active, depth, cold = false,
   );
 }
 
-function Row({ entry, path, nowMs }: { entry: LogEntry; path: string; nowMs: number }) {
+/** 행 글. 범위를 다시 그릴 때 이미 그린 행은 건너뛴다. */
+const Row = memo(function Row({ entry, path, nowMs }: { entry: LogEntry; path: string; nowMs: number }) {
   const status = entry.status;
   return (
     <>
@@ -509,7 +715,7 @@ function Row({ entry, path, nowMs }: { entry: LogEntry; path: string; nowMs: num
       </span>
     </>
   );
-}
+});
 
 /** 라인 히스토리: 고른 커밋이 그 줄 범위를 어떻게 바꿨는지(옛·새 줄 번호와 함께) */
 function Hunks({ entry }: { entry: LogEntry }) {

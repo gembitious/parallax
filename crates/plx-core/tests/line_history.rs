@@ -5,7 +5,7 @@ mod common;
 use std::path::Path;
 use std::sync::Arc;
 
-use common::{encoding, git, git_text, history};
+use common::{commit_all, encoding, git, git_text, history, scratch_repo, ten_lines};
 use plx_core::cache::DiskCache;
 use plx_core::commit::FileStatus;
 use plx_core::history::{HistoryEvent, HistoryMeta, HistorySessions, HistoryStats, LineRange};
@@ -41,7 +41,8 @@ fn reference(repo: &Path, rev: &str, path: &str, start: u32, end: u32) -> Refere
             let mut hunks: Vec<(String, Vec<String>)> = Vec::new();
             for line in lines {
                 if let Some(p) = line.strip_prefix("+++ b/") {
-                    new_path = p.to_owned();
+                    // git 2.54부터의 보통 diff 출력기는 공백이 든 경로 뒤에 TAB을 붙인다(경로가 아니다).
+                    new_path = p.strip_suffix('\t').unwrap_or(p).to_owned();
                 } else if line.starts_with("@@ ") {
                     hunks.push((normalize_header(line), Vec::new()));
                 } else if let Some((_, body)) = hunks.last_mut()
@@ -308,4 +309,29 @@ fn finished_line_history_is_cached() {
     assert_eq!(first, second);
     let (_, _, stats) = run_with(&sessions, &path, Some("HEAD"), 1, 2).unwrap();
     assert!(!stats.cached, "범위가 다르면 다른 결과");
+}
+
+/// CRLF 작업트리(`core.autocrlf=true`, Git for Windows 기본값)의 줄도 HEAD 버전의 같은 줄로 옮긴다.
+/// 그대로 비교하면 모든 줄이 바뀐 줄이라 1번 줄의 이력을 보였다.
+#[test]
+fn crlf_worktree_lines_map_to_head() {
+    let dir = scratch_repo("line-history-crlf");
+    std::fs::write(dir.join("f.txt"), ten_lines(&[])).unwrap();
+    commit_all(&dir, "add f");
+    std::fs::write(dir.join("f.txt"), ten_lines(&[6])).unwrap();
+    commit_all(&dir, "edit line 6");
+    git(&dir, &["config", "core.autocrlf", "true"]);
+    std::fs::remove_file(dir.join("f.txt")).unwrap();
+    git(&dir, &["checkout", "--", "f.txt"]);
+    assert!(
+        std::fs::read(dir.join("f.txt"))
+            .unwrap()
+            .windows(2)
+            .any(|w| w == b"\r\n")
+    );
+
+    let (meta, entries, _) = run(&dir.join("f.txt"), None, 6, 6).unwrap();
+    assert_eq!(meta.lines, Some(LineRange { start: 6, end: 6 }));
+    let summaries: Vec<&str> = entries.iter().map(|e| e.summary.as_str()).collect();
+    assert_eq!(summaries, ["edit line 6", "add f"]);
 }

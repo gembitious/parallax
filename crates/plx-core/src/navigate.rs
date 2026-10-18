@@ -30,18 +30,15 @@ pub enum Direction {
     Newer,
 }
 
-/// 버전의 내용. 그 버전에 파일이 없으면 `None`.
+/// 버전의 내용. 그 버전에 파일이 없으면 `None`. 작업트리 파일은 git에 넣을 때의 모양(clean)이다:
+/// 줄 끝이 CRLF인 작업트리(Git for Windows 기본값)도 blob과 줄 단위로 비교한다.
 pub fn content(repo: &Repo, version: &Version) -> Result<Option<Vec<u8>>> {
     match &version.rev {
         Some(rev) => {
             let commit = repo.resolve_commit(rev)?;
             repo.blob_at(commit, &version.path)
         }
-        None => match std::fs::read(repo.workdir().join(&version.path)) {
-            Ok(bytes) => Ok(Some(bytes)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(Error(format!("파일을 읽지 못했다 ({}): {e}", version.path))),
-        },
+        None => repo.worktree_clean(&version.path),
     }
 }
 
@@ -147,6 +144,44 @@ fn newer(repo: &Repo, current: &Version) -> Result<Option<Version>> {
     )
 }
 
+/// `rev`의 `path` 파일이 작업트리에서는 어느 경로인가(그 뒤의 rename을 따라간다). 작업트리에 그 경로가 그대로
+/// 있으면 그것이고, 지워졌으면 `None`. rename마다 git을 두 번 띄운다(경로가 없어진 커밋 찾기, 그 커밋의 rename).
+pub fn worktree_path(repo: &Repo, rev: &str, path: &str) -> Result<Option<String>> {
+    let exists = |path: &str| repo.workdir().join(path).is_file();
+    let mut rev = rev.to_owned();
+    let mut path = path.to_owned();
+    // rename 고리가 끝없이 돌지 않게(A → B → A …) 한도를 둔다.
+    for _ in 0..64 {
+        if exists(&path) {
+            return Ok(Some(path));
+        }
+        let range = format!("{rev}..HEAD");
+        let gone = log(
+            repo,
+            &[
+                "--reverse",
+                "--ancestry-path",
+                "--diff-filter=D",
+                &range,
+                "--",
+                &path,
+            ],
+            &path,
+        )?;
+        let Some(commit) = gone.into_iter().next().and_then(|v| v.rev) else {
+            return Ok(None); // HEAD까지 지운 적이 없는데 작업트리에 없다(커밋하지 않고 지웠다)
+        };
+        match renamed_to(repo, &commit, &path)? {
+            Some(to) => {
+                rev = commit;
+                path = to;
+            }
+            None => return Ok(None), // 지웠다
+        }
+    }
+    Ok(None)
+}
+
 /// `commit`이 `path`를 다른 이름으로 옮겼다면 새 이름.
 fn renamed_to(repo: &Repo, commit: &str, path: &str) -> Result<Option<String>> {
     let parent = format!("{commit}^");
@@ -180,7 +215,14 @@ fn renamed_to(repo: &Repo, commit: &str, path: &str) -> Result<Option<String>> {
 
 /// `git log --name-status -z`로 파일을 바꾼 커밋과 그때의 경로. 경로를 알 수 없는 항목(merge 등)은 앞 경로를 쓴다.
 fn log(repo: &Repo, args: &[&str], path: &str) -> Result<Vec<Version>> {
-    let mut command = vec!["log", "-z", "--format=%x01%H", "--name-status"];
+    // 경로는 파일 이름 그대로다(`[slug]` 같은 글자를 글롭으로 보지 않는다).
+    let mut command = vec![
+        "--literal-pathspecs",
+        "log",
+        "-z",
+        "--format=%x01%H",
+        "--name-status",
+    ];
     command.extend_from_slice(args);
     let out = git::output(repo.workdir(), &command).map_err(|e| Error(e.to_string()))?;
     Ok(parse_log(&out, path))
