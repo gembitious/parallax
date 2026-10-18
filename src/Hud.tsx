@@ -1,4 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
+import { isHudKey } from "./keys";
 import { clearEntries, getEntries, getPerfInfo, subscribe, type Entry } from "./perf";
 import { runProbe } from "./probe";
 
@@ -47,6 +48,13 @@ function Row({ entry }: { entry: Entry }) {
 }
 
 /** 개발 빌드(또는 PLX_PERF=1)에서 요청별 소요 시간(ms)을 보여 준다. ` 키로 켜고 끈다. */
+const TOGGLE_EVENT = "plx:hud-toggle";
+
+/** HUD를 보이거나 숨긴다(명령 팔레트). `` ` `` 키와 같다. */
+export function toggleHud(): void {
+  window.dispatchEvent(new Event(TOGGLE_EVENT));
+}
+
 export function Hud() {
   const info = useSyncExternalStore(subscribe, getPerfInfo);
   const entries = useSyncExternalStore(subscribe, getEntries);
@@ -54,15 +62,20 @@ export function Hud() {
   const [probing, setProbing] = useState(false);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "`" || e.ctrlKey || e.metaKey || e.altKey) return;
+    const toggle = () =>
       setVisible((v) => {
         writeVisible(!v);
         return !v;
       });
+    const onKey = (e: KeyboardEvent) => {
+      if (isHudKey(e)) toggle();
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener(TOGGLE_EVENT, toggle);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener(TOGGLE_EVENT, toggle);
+    };
   }, []);
 
   if (!info.enabled || !visible) return null;

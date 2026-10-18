@@ -3,14 +3,16 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use plx_core::ai_notes::{AiAttribution, AiItem, AiNotes};
 use plx_core::blame_session::{SessionEvent, Sessions};
 use plx_core::cache::DiskCache;
-use plx_core::commit::{self, CommitDetail, FileVersions};
+use plx_core::commit::{self, CommitDetail, FileStat, FileVersions, StatRequest};
 use plx_core::commit_graph::{self, GraphStatus, Progress};
+use plx_core::files::{FileLists, FileSearch};
 use plx_core::graph::{GraphEvent, GraphOptions, GraphSessions, GraphWindow};
 use plx_core::history::{HistoryEvent, HistorySessions, LineRange};
 use plx_core::navigate::{self, Direction, Version};
-use plx_core::repo::{CommitInfo, RepoCache};
+use plx_core::repo::{CommitInfo, FilePath, RepoCache};
 use plx_core::watch::{Change, Watchers};
 use serde::Serialize;
 use tauri::State;
@@ -26,6 +28,8 @@ pub struct GitState {
     histories: HistorySessions,
     graphs: GraphSessions,
     watchers: Watchers,
+    files: FileLists,
+    ai: AiNotes,
     cache: Option<Arc<DiskCache>>,
 }
 
@@ -56,6 +60,8 @@ impl GitState {
             histories,
             graphs,
             watchers: Watchers::new(on_change),
+            files: FileLists::new(),
+            ai: AiNotes::new(),
             cache,
         }
     }
@@ -73,14 +79,6 @@ impl GitState {
     }
 }
 
-/// `repo`가 있으면 `path`는 그 저장소 기준 경로이고, 없으면 절대 경로다.
-fn resolve(repo: Option<&str>, path: &str) -> PathBuf {
-    match repo {
-        Some(repo) => Path::new(repo).join(path),
-        None => PathBuf::from(path),
-    }
-}
-
 /// 파일 blame을 시작하고 요청 id를 바로 돌려준다. 결과는 `on_event`로 온다
 /// (`meta` → `chunk`* → `done`·`error`·`cancelled`). `rev`가 없으면 작업트리 파일이다.
 #[tauri::command]
@@ -93,10 +91,11 @@ pub async fn blame_open(
 ) -> Result<u64, String> {
     let git = git.inner().clone();
     let id = git.blames.register();
-    let path = resolve(repo.as_deref(), &path);
+    // `repo`가 있으면 `path`는 그 저장소 기준 경로(git이 준 경로라 그대로 쓴다), 없으면 터미널에서 준 절대 경로다.
+    let file = FilePath::from_request(repo.as_deref(), &path);
     tauri::async_runtime::spawn_blocking(move || {
         git.blames
-            .run(id, &git.repos, &path, rev.as_deref(), |event| {
+            .run(id, &git.repos, file, rev.as_deref(), |event| {
                 on_event.send(event).is_ok()
             });
     });
@@ -121,10 +120,11 @@ pub async fn history_open(
 ) -> Result<u64, String> {
     let git = git.inner().clone();
     let id = git.histories.register();
-    let path = resolve(repo.as_deref(), &path);
+    // `repo`가 있으면 `path`는 그 저장소 기준 경로(git이 준 경로라 그대로 쓴다), 없으면 터미널에서 준 절대 경로다.
+    let file = FilePath::from_request(repo.as_deref(), &path);
     tauri::async_runtime::spawn_blocking(move || {
         git.histories
-            .run(id, &git.repos, &path, rev.as_deref(), |event| {
+            .run(id, &git.repos, file, rev.as_deref(), |event| {
                 on_event.send(event).is_ok()
             });
     });
@@ -147,12 +147,13 @@ pub async fn line_history_open(
 ) -> Result<u64, String> {
     let git = git.inner().clone();
     let id = git.histories.register();
-    let path = resolve(repo.as_deref(), &path);
+    // `repo`가 있으면 `path`는 그 저장소 기준 경로(git이 준 경로라 그대로 쓴다), 없으면 터미널에서 준 절대 경로다.
+    let file = FilePath::from_request(repo.as_deref(), &path);
     tauri::async_runtime::spawn_blocking(move || {
         git.histories.run_lines(
             id,
             &git.repos,
-            &path,
+            file,
             rev.as_deref(),
             LineRange { start, end },
             |event| on_event.send(event).is_ok(),
@@ -300,6 +301,100 @@ pub async fn worktrees(
     .map_err(|e| e.to_string())?
 }
 
+/// Quick Open: 추적 파일을 `query`로 찾아 점수 순 앞 `limit`개(기본 100). 같은 저장소에 새 검색이 오면
+/// 이 검색은 "취소했다" 오류로 끝난다. 빈 검색어는 최근 연 파일(`files_touch`)부터 보인다.
+#[tauri::command]
+pub async fn files_search(
+    git: State<'_, Arc<GitState>>,
+    repo: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<FileSearch, String> {
+    let git = git.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = git
+            .repos
+            .for_path(Path::new(&repo))
+            .map_err(|e| e.to_string())?;
+        git.files.search(&repo, &query, limit.unwrap_or(100))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 파일(저장소 기준 경로)을 최근 연 파일로 기억한다. blame·히스토리 화면이 열 때 부른다.
+#[tauri::command]
+pub async fn files_touch(
+    git: State<'_, Arc<GitState>>,
+    repo: String,
+    path: String,
+) -> Result<(), String> {
+    blocking(git, move |git| {
+        let repo = git.repos.for_path(Path::new(&repo))?;
+        git.files.touch(&repo, &path);
+        Ok(())
+    })
+    .await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Opened {
+    /// 에디터 이름(VS Code, Zed …)
+    editor: String,
+    /// 연 줄(리비전의 줄을 작업트리 파일의 줄로 옮긴 것). 폴더면 `null`.
+    line: Option<u32>,
+}
+
+/// 작업트리 파일을 에디터(`PLX_EDITOR`, PATH의 code·zed …)로 연다. `path`(저장소 기준)가 없으면 작업트리 폴더를
+/// 연다. `rev`의 `line`은 작업트리 파일의 줄로 옮긴다. 환경 변수는 마지막 `plx` 호출의 셸 값을 먼저 본다.
+/// 저장소는 바꾸지 않는다.
+#[tauri::command]
+pub async fn open_in_editor(
+    git: State<'_, Arc<GitState>>,
+    requests: State<'_, Arc<crate::instance::Requests>>,
+    repo: String,
+    path: Option<String>,
+    rev: Option<String>,
+    line: Option<u32>,
+) -> Result<Opened, String> {
+    let git = git.inner().clone();
+    let env = requests.editor_env();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = git
+            .repos
+            .for_path(Path::new(&repo))
+            .map_err(|e| e.to_string())?;
+        let target = plx_core::editor::locate(&repo, path.as_deref(), rev.as_deref(), line)
+            .map_err(|e| e.to_string())?;
+        let editor = plx_core::editor::Editor::find(&env)?;
+        editor
+            .open(&target)
+            .map_err(|e| format!("{}를 띄우지 못했다: {e}", editor.name))?;
+        Ok(Opened {
+            editor: editor.name,
+            line: target.line,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// blame 줄의 AI 출처(git-ai의 `refs/notes/ai`): (커밋, 그 커밋에서의 경로)마다 에이전트·사람이 쓴 줄 구간
+/// (그 커밋 버전의 줄). 저장소에 노트가 없으면 `notes: false`.
+#[tauri::command]
+pub async fn ai_attribution(
+    git: State<'_, Arc<GitState>>,
+    repo: String,
+    items: Vec<AiItem>,
+) -> Result<AiAttribution, String> {
+    blocking(git, move |git| {
+        let repo = git.repos.for_path(Path::new(&repo))?;
+        git.ai.attribution(&repo, &items)
+    })
+    .await
+}
+
 /// 감시 구독(저장소·파일)을 끝낸다. 이미 끝났으면 `false`. OS 감시를 버리는 일(macOS는 스레드를 기다린다)이
 /// 메인 스레드를 막지 않게 비동기 명령이다.
 #[tauri::command]
@@ -348,17 +443,40 @@ pub async fn commit_detail(
     .await
 }
 
-/// 파일 하나의 두 버전(diff 화면). blob id가 없으면 빈 쪽이다(추가·삭제).
+/// `commit_detail`이 시간 안에 세지 못한 파일들의 줄 수(요청 순서대로). 큰 커밋은 목록을 먼저 보이고 이것을 받는다.
+#[tauri::command]
+pub async fn file_stats(
+    git: State<'_, Arc<GitState>>,
+    repo: String,
+    files: Vec<StatRequest>,
+) -> Result<Vec<FileStat>, String> {
+    blocking(git, move |git| {
+        let repo = git.repos.for_path(Path::new(&repo))?;
+        commit::file_stats(&repo, &files)
+    })
+    .await
+}
+
+/// 파일 하나의 두 버전(diff 화면). blob id가 없으면 빈 쪽이다(추가·삭제). `path`는 `diff` 속성을 볼 경로,
+/// `full`이면 큰 파일도 내용을 보낸다.
 #[tauri::command]
 pub async fn file_versions(
     git: State<'_, Arc<GitState>>,
     repo: String,
     old_id: Option<String>,
     new_id: Option<String>,
+    path: Option<String>,
+    full: Option<bool>,
 ) -> Result<FileVersions, String> {
     blocking(git, move |git| {
         let repo = git.repos.for_path(Path::new(&repo))?;
-        commit::file_versions(&repo, old_id.as_deref(), new_id.as_deref())
+        commit::file_versions(
+            &repo,
+            old_id.as_deref(),
+            new_id.as_deref(),
+            path.as_deref(),
+            full.unwrap_or(false),
+        )
     })
     .await
 }
