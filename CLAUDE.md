@@ -222,9 +222,9 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
   읽어 blame에 겹친다(`plx_core::ai_notes`). 노트는 그 커밋 버전의 줄 번호라 `git-ai blame`과 같이 blame 블록의 원래 커밋·
   원래 경로·원래 줄로 찾고, 뒤 항목이 이기며 메타데이터에 없는 키는 건너뛴다(`s_…::t_…` 세션, `h_` 사람, 16자 옛
   프롬프트는 다른 노트에서도 찾는다). 규칙은 git-ai 저장소의 표준 문서와 `get_line_attribution`을 읽어 맞췄다.
-  2026-10-18: git-ai 1.7.6을 빌드해 그 테스트 도구로 저장소 10개(rename, cherry-pick, amend, merge, 한글 경로 등)를
-  만들었고, 줄마다 에이전트가 `git-ai blame --json`과 같음을 골든 테스트로 둔다(`fixtures/git-ai`). 노트 트리는
-  gix로 직접 읽고(fanout 무관, git 스폰 없음) notes 참조가 바뀌면 다시 읽는다.
+  2026-10-18: git-ai 1.7.6과 1.3.4(옛 형식 노트)를 빌드해 그 테스트 도구로 저장소 20개(rename, cherry-pick, amend,
+  merge, 한글 경로 등을 두 형식으로)를 만들었고, 줄마다 에이전트가 1.7.6의 `git-ai blame --json`과 같음을 골든 테스트로
+  둔다(`fixtures/git-ai`). 노트 트리는 gix로 직접 읽고(fanout 무관, git 스폰 없음) notes 참조가 바뀌면 다시 읽는다.
   해석한 노트는 blob id로 기억해(git-ai는 커밋마다 참조를 옮기지만 그대로인 노트는 blob도 같다) 바뀐 노트만 다시 읽고,
   옛 프롬프트 표도 새 노트만 더한다(노트가 빠지거나 고쳐지면 처음부터 다시 모은다).
   아직 커밋하지 않은 줄의 AI 작업 상태(`.git/ai`)는 git-ai 내부 형식이라 보지 않는다.

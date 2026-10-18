@@ -157,7 +157,7 @@ fn plx_golden_shifted() {
     save(&repo, "shifted", &["list.txt"]);
 }
 
-/// 곁가지의 AI 커밋을 본줄기로 cherry-pick한다(git-ai가 새 커밋에 노트를 옮긴다).
+/// 곁가지의 AI 커밋을 앞서 간 본줄기로 cherry-pick한다(git-ai가 새 커밋에 노트를 옮긴다).
 #[test]
 fn plx_golden_cherry_pick() {
     let repo = TestRepo::new();
@@ -170,6 +170,10 @@ fn plx_golden_cherry_pick() {
     repo.stage_all_and_commit("agent feature").unwrap();
     let feature = repo.git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
     repo.git(&["checkout", &main_branch]).unwrap();
+    // 본줄기를 한 커밋 앞으로 보낸다(같은 부모 위의 cherry-pick은 시각까지 같아 원래 커밋과 sha가 같아진다).
+    let mut main_only = repo.filename("main-only.txt");
+    main_only.set_contents(crate::lines!["main side".human()]);
+    repo.stage_all_and_commit("human on main").unwrap();
     repo.git(&["cherry-pick", &feature]).unwrap();
     save(&repo, "cherry_pick", &["file.txt"]);
 }

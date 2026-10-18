@@ -110,9 +110,10 @@ Windows·macOS의 성능 HUD(`그래프 … 스크롤`)로 확인한다(bench/re
       받아들인 줄 수, 머리줄에 AI 줄 수 — Windows·macOS 실기 확인 필요
 
 **완료 기준:** `git-ai blame` 결과와 줄 단위로 일치.
-→ git-ai 1.7.6을 빌드해 그 테스트 도구로 만든 저장소 10개(rename, cherry-pick, amend, merge, 한글 경로 등)에서 줄마다
-에이전트(도구·대화 id·모델·시킨 사람)가 `git-ai blame --json`과 같다(`crates/plx-core/tests/git_ai_golden.rs`,
-`fixtures/git-ai`, CI 세 플랫폼). 실제 에이전트(Claude Code 등)가 쓴 노트의 화면 표시는 `docs/MANUAL_CHECKS.md` 13번으로 본다.
+→ git-ai 1.7.6과 1.3.4(옛 형식 노트)의 테스트 도구로 만든 저장소 20개(rename, cherry-pick, amend, merge, 한글 경로 등을
+두 형식으로)에서 줄마다 에이전트(도구·대화 id·모델·시킨 사람)가 1.7.6의 `git-ai blame --json`과 같다
+(`crates/plx-core/tests/git_ai_golden.rs`, `fixtures/git-ai`, CI 세 플랫폼). 실제 에이전트(Claude Code 등)가 쓴 노트의
+화면 표시는 `docs/MANUAL_CHECKS.md` 13번으로 본다.
 
 ## 하지 않는 것
 편집 · LSP · 내장 터미널 · 스테이징/커밋/푸시 · PR 등 원격 호스팅 연동.

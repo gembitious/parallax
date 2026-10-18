@@ -20,8 +20,8 @@ CI(`.github/workflows/ci.yml`)가 Windows·macOS·Linux에서 빌드, 테스트,
 - 다른 터미널의 커밋이 열린 그래프에 2초 안에 반영되고(Linux 약 0.2초), 고친 파일이 열린 작업트리 blame에 반영된다
 - 그래프의 순서·부모·레인 연결은 `git log --topo-order`와 대조하는 테스트가 있다(fixtures, 원격·얕은 클론, commit-graph 유무)
 - 릴리스 빌드가 오픈 소스 라이선스 고지를 만들어 실행 파일에 넣는다(파일이 있는지까지. 창은 아래 1-12)
-- AI 출처: git-ai 1.7.6이 노트를 쓴 저장소 10개(rename, cherry-pick, amend, merge, 한글 경로 등)에서 줄마다 에이전트가
-  `git-ai blame --json`과 같다(`fixtures/git-ai`). 화면 표시는 아래 13
+- AI 출처: git-ai 1.7.6·1.3.4(옛 형식)가 노트를 쓴 저장소 20개(rename, cherry-pick, amend, merge, 한글 경로 등)에서 줄마다
+  에이전트가 1.7.6의 `git-ai blame --json`과 같다(`fixtures/git-ai`). 화면 표시는 아래 13
 - 지연 측정: 콜드 스타트, plx 호출 → 첫 페인트, blame 첫 줄 표시(처음·캐시), 커밋 상세, 파일 히스토리 첫 50개(처음·캐시),
   커밋 그래프 첫 화면.
   결과는 Actions 실행 화면의 Summary에 있다

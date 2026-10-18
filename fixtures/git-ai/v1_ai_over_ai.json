@@ -1,0 +1,41 @@
+{
+  "files": {
+    "app.py": {
+      "lines": {
+        "1-2": "8177303ad2f7294a",
+        "3": "ad43b891b664de59",
+        "4": "14dd298d7f8c721c",
+        "5-6": "8177303ad2f7294a"
+      },
+      "prompts": {
+        "14dd298d7f8c721c": {
+          "agent_id": {
+            "id": "ai-thread-1792301825441940444",
+            "model": "unknown",
+            "tool": "mock_ai"
+          },
+          "human_author": "Test User <test@example.com>"
+        },
+        "8177303ad2f7294a": {
+          "agent_id": {
+            "id": "ai-thread-1792301825202074968",
+            "model": "unknown",
+            "tool": "mock_ai"
+          },
+          "human_author": "Test User <test@example.com>"
+        },
+        "ad43b891b664de59": {
+          "agent_id": {
+            "id": "ai-thread-1792301825392566246",
+            "model": "unknown",
+            "tool": "mock_ai"
+          },
+          "human_author": "Test User <test@example.com>"
+        }
+      }
+    }
+  },
+  "git_ai_version": "1.7.6",
+  "head": "7d8179b585d99dff9b74e9ff7ff24e16e7a81bee",
+  "notes_git_ai_version": "1.3.4"
+}

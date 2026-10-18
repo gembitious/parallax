@@ -1,6 +1,7 @@
-//! AI 출처(M5)의 골든 테스트: git-ai가 실제로 쓴 노트가 든 저장소(`fixtures/git-ai/*.bundle`)에서, 줄마다 우리가 찾은
-//! 에이전트가 `git-ai blame --json`과 같은지 본다. 우리 쪽은 앱과 같은 길이다: git blame의 원래 커밋·원래 경로·원래 줄로
-//! (커밋, 경로)의 노트 구간을 찾는다(화면의 `AiOverlay.indexAt`). 번들과 기대값을 만드는 법은 `fixtures/git-ai/README.md`.
+//! AI 출처(M5)의 골든 테스트: git-ai가 실제로 쓴 노트가 든 저장소(`fixtures/git-ai/*.bundle`, 1.7.6의 새 형식과
+//! 1.3.4의 옛 형식)에서, 줄마다 우리가 찾은 에이전트가 git-ai 1.7.6의 `git-ai blame --json`과 같은지 본다.
+//! 우리 쪽은 앱과 같은 길이다: git blame의 원래 커밋·원래 경로·원래 줄로 (커밋, 경로)의 노트 구간을 찾는다
+//! (화면의 `AiOverlay.indexAt`). 번들과 기대값을 만드는 법은 `fixtures/git-ai/README.md`.
 
 mod common;
 
@@ -15,7 +16,11 @@ use serde::Deserialize;
 
 #[derive(Deserialize)]
 struct Expected {
+    /// 기대값을 낸 git-ai(blame)
     git_ai_version: String,
+    /// 노트를 쓴 git-ai(없으면 `git_ai_version`과 같다)
+    #[serde(default)]
+    notes_git_ai_version: Option<String>,
     head: String,
     files: BTreeMap<String, ExpectedFile>,
 }
@@ -150,7 +155,7 @@ fn ai_lines_match_git_ai_blame() {
         })
         .collect();
     names.sort();
-    assert!(names.len() >= 10, "시나리오가 모자란다: {names:?}");
+    assert!(names.len() >= 20, "시나리오가 모자란다: {names:?}");
     let mut ai_lines = 0;
     for name in &names {
         let text = std::fs::read_to_string(dir().join(format!("{name}.json"))).unwrap();
@@ -163,9 +168,13 @@ fn ai_lines_match_git_ai_blame() {
                 assert_eq!(
                     ours,
                     theirs,
-                    "{name} {path} ({}): git-ai {} blame과 다르다",
+                    "{name} {path} ({}): git-ai {} blame과 다르다(노트는 {})",
                     rev.unwrap_or("작업트리"),
-                    expected.git_ai_version
+                    expected.git_ai_version,
+                    expected
+                        .notes_git_ai_version
+                        .as_deref()
+                        .unwrap_or(&expected.git_ai_version)
                 );
                 ai_lines += theirs.iter().flatten().count();
             }
