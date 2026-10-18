@@ -18,12 +18,13 @@ export type Command = {
 
 /**
  * 화면에 팔레트를 붙인다. `open()`으로 열고 `overlay`를 화면 끝에 그린다. 고르면 닫은 뒤 그 명령을 실행하고,
- * 그냥 닫으면 `onClosed`(화면에 포커스를 돌려준다)를 부른다. `commands`는 렌더마다 새로 만들어도 된다.
+ * 그냥 닫으면 `onClosed`(화면에 포커스를 돌려준다)를 부른다. `close()`는 화면이 숨을 때 닫는다(포커스는 그대로).
+ * `commands`는 렌더마다 새로 만들어도 된다.
  */
 export function usePalette(
   commands: Command[],
   onClosed?: () => void,
-): { open(): void; isOpen: boolean; overlay: ReactNode } {
+): { open(): void; close(): void; isOpen: boolean; overlay: ReactNode } {
   const [isOpen, setOpen] = useState(false);
   const overlay = isOpen ? (
     <Palette
@@ -39,7 +40,7 @@ export function usePalette(
       }}
     />
   ) : null;
-  return { open: () => setOpen(true), isOpen, overlay };
+  return { open: () => setOpen(true), close: () => setOpen(false), isOpen, overlay };
 }
 
 function Palette({

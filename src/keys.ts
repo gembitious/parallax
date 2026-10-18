@@ -28,3 +28,18 @@ export function routeKey(e: KeyLike, open: GlobalKeys): "done" | "skip" | "view"
   if (e.ctrlKey || e.metaKey || e.altKey) return "skip";
   return (e.target as Element | null)?.closest?.("input, textarea") ? "skip" : "view";
 }
+
+/**
+ * IME가 글자를 조합하는 중에 친 키(조합을 끝내는 Enter·Esc 등). 화면의 동작으로 받지 않는다. WebKit은
+ * compositionend 뒤에 keydown을 보내 isComposing이 꺼진 채 keyCode 229로 온다.
+ */
+export const isComposing = (e: Pick<KeyboardEvent, "isComposing" | "keyCode">) => e.isComposing || e.keyCode === 229;
+
+/**
+ * 성능 HUD를 켜고 끄는 `` ` ``. 입력란(검색 칸)에서 친 글자, IME 조합 중인 키, 다른 곳이 먹은 키는 아니다.
+ * 코드 뷰(blame)는 입력란이 아니다.
+ */
+export function isHudKey(e: KeyLike & Pick<KeyboardEvent, "isComposing" | "keyCode">): boolean {
+  if (e.key !== "`" || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented || isComposing(e)) return false;
+  return !(e.target as Element | null)?.closest?.("input, textarea");
+}

@@ -1,0 +1,37 @@
+{
+  "files": {
+    "a.txt": {
+      "lines": {
+        "2": "s_6f536339d5c6fd::t_1d9410e9e37f71"
+      },
+      "prompts": {
+        "s_6f536339d5c6fd::t_1d9410e9e37f71": {
+          "agent_id": {
+            "id": "ai-thread-1792301147148283926",
+            "model": "unknown",
+            "tool": "mock_ai"
+          },
+          "human_author": "Test User <test@example.com>"
+        }
+      }
+    },
+    "sub/b.txt": {
+      "lines": {
+        "1": "s_46514f83d79239::t_b6d00cad810c5e",
+        "3": "s_46514f83d79239::t_b6d00cad810c5e"
+      },
+      "prompts": {
+        "s_46514f83d79239::t_b6d00cad810c5e": {
+          "agent_id": {
+            "id": "ai-thread-1792301147195677122",
+            "model": "unknown",
+            "tool": "mock_ai"
+          },
+          "human_author": "Test User <test@example.com>"
+        }
+      }
+    }
+  },
+  "git_ai_version": "1.7.6",
+  "head": "d15230b58cf0682eb35358c83f70c4ccc6acf10c"
+}

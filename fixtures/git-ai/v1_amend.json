@@ -1,0 +1,31 @@
+{
+  "files": {
+    "main.go": {
+      "lines": {
+        "2-3": "a70c4f2521ba1032",
+        "4-5": "83065d542fde337f"
+      },
+      "prompts": {
+        "83065d542fde337f": {
+          "agent_id": {
+            "id": "ai-thread-1792301825594351834",
+            "model": "unknown",
+            "tool": "mock_ai"
+          },
+          "human_author": null
+        },
+        "a70c4f2521ba1032": {
+          "agent_id": {
+            "id": "ai-thread-1792301825395999575",
+            "model": "unknown",
+            "tool": "mock_ai"
+          },
+          "human_author": "Test User <test@example.com>"
+        }
+      }
+    }
+  },
+  "git_ai_version": "1.7.6",
+  "head": "ae211a36a7f52c17452d70ff387b12798d4978a3",
+  "notes_git_ai_version": "1.3.4"
+}
