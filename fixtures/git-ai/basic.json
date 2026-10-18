@@ -1,0 +1,22 @@
+{
+  "files": {
+    "src/lib.rs": {
+      "lines": {
+        "2": "s_73caef4881426e::t_5d9403e18318b4",
+        "4": "s_73caef4881426e::t_5d9403e18318b4"
+      },
+      "prompts": {
+        "s_73caef4881426e::t_5d9403e18318b4": {
+          "agent_id": {
+            "id": "ai-thread-1792301146250716169",
+            "model": "unknown",
+            "tool": "mock_ai"
+          },
+          "human_author": "Test User <test@example.com>"
+        }
+      }
+    }
+  },
+  "git_ai_version": "1.7.6",
+  "head": "bf36eb02769115bbf93dec031c9e6e9c7aee5d49"
+}

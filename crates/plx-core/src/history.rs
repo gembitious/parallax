@@ -29,7 +29,7 @@ use crate::line_log::LineLogStream;
 use crate::linemap::LineMap;
 use crate::log::{EntrySource, LogEntry, LogError, LogStream};
 use crate::repo::{FilePath, Repo, RepoCache};
-use crate::requests::Requests;
+use crate::requests::{self, Requests};
 use crate::text;
 
 /// 성능 예산의 "첫 50개"
@@ -312,7 +312,11 @@ impl HistorySessions {
         rev: Option<&str>,
         mut on_event: impl FnMut(HistoryEvent) -> bool,
     ) {
-        let end = self.drive(id, repos, &file.into(), rev, &mut on_event);
+        let file = file.into();
+        let end = requests::catch(
+            || self.drive(id, repos, &file, rev, &mut on_event),
+            |message| HistoryEvent::Error { message },
+        );
         self.requests.finish(id);
         on_event(end);
     }
@@ -327,7 +331,11 @@ impl HistorySessions {
         lines: LineRange,
         mut on_event: impl FnMut(HistoryEvent) -> bool,
     ) {
-        let end = self.drive_lines(id, repos, &file.into(), rev, lines, &mut on_event);
+        let file = file.into();
+        let end = requests::catch(
+            || self.drive_lines(id, repos, &file, rev, lines, &mut on_event),
+            |message| HistoryEvent::Error { message },
+        );
         self.requests.finish(id);
         on_event(end);
     }

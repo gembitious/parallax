@@ -410,9 +410,21 @@ impl Repo {
     /// 리비전 표현(`HEAD~2`, 태그, sha 일부 등)을 커밋으로 푼다.
     pub fn resolve_commit(&self, rev: &str) -> Result<ObjectId> {
         let repo = self.local();
-        let id = repo
-            .rev_parse_single(rev)
-            .map_err(|e| err(&format!("리비전을 찾을 수 없다 ({rev})"), e))?;
+        let id = repo.rev_parse_single(rev).map_err(|e| {
+            // 커밋이 하나도 없으면(HEAD가 아직 없는 브랜치를 가리킨다) gix는 HEAD를 "rev-spec is malformed"라고 답한다.
+            if (rev.starts_with("HEAD") || rev.starts_with('@'))
+                && let Ok(head) = repo.head()
+                && head.is_unborn()
+            {
+                let branch = head
+                    .referent_name()
+                    .map_or_else(|| "HEAD".to_owned(), |name| name.shorten().to_string());
+                return Error(format!(
+                    "커밋이 아직 없다({rev}): HEAD가 가리키는 {branch} 브랜치에 커밋이 하나도 없다"
+                ));
+            }
+            err(&format!("리비전을 찾을 수 없다 ({rev})"), e)
+        })?;
         let commit = id
             .object()
             .and_then(|object| object.peel_to_commit())
