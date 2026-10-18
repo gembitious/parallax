@@ -1,4 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
+import { isHudKey } from "./keys";
 import { clearEntries, getEntries, getPerfInfo, subscribe, type Entry } from "./perf";
 import { runProbe } from "./probe";
 
@@ -67,8 +68,7 @@ export function Hud() {
         return !v;
       });
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "`" || e.ctrlKey || e.metaKey || e.altKey) return;
-      toggle();
+      if (isHudKey(e)) toggle();
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener(TOGGLE_EVENT, toggle);
