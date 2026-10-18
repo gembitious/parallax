@@ -38,6 +38,8 @@ export type BlameStats = {
   totalMs: number;
   blocks: number;
   commits: number;
+  /** git을 띄우지 않고 캐시에서 읽었다 */
+  cached: boolean;
 };
 
 /** plx-core/src/text.rs Decoded */
@@ -55,6 +57,8 @@ export type BlameMeta = {
   path: string;
   /** 고정 리비전의 커밋 sha. 작업트리 blame이면 null */
   rev: string | null;
+  /** 작업트리 blame이 기준으로 삼은 HEAD 커밋. 고정 리비전이거나 커밋이 없는 저장소면 null */
+  head: string | null;
   content: Decoded | null;
   binary: boolean;
 };
@@ -80,3 +84,9 @@ export type CommitInfo = {
   committer: Person;
   changedFiles: number;
 };
+
+/** plx-core/src/navigate.rs Version: 파일의 한 버전. rev가 null이면 작업트리 */
+export type Version = { rev: string | null; path: string };
+
+/** src-tauri/src/git.rs Neighbor */
+export type Neighbor = { version: Version; line: number };
