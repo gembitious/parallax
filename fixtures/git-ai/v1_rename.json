@@ -1,0 +1,22 @@
+{
+  "files": {
+    "doc/new.md": {
+      "lines": {
+        "2-3": "aa6d09f451d14b12"
+      },
+      "prompts": {
+        "aa6d09f451d14b12": {
+          "agent_id": {
+            "id": "ai-thread-1792301825920837853",
+            "model": "unknown",
+            "tool": "mock_ai"
+          },
+          "human_author": "Test User <test@example.com>"
+        }
+      }
+    }
+  },
+  "git_ai_version": "1.7.6",
+  "head": "dd22cd4a5d546a78e0914ba2bafeebe41a83d708",
+  "notes_git_ai_version": "1.3.4"
+}

@@ -17,7 +17,7 @@ import { displayText } from "../blame/BlameView";
 import { formatDate, relativeTime, shortSha } from "../blame/format";
 import { call } from "../ipc";
 import type { Navigation } from "../nav";
-import { afterPaint, getPerfInfo, nowMs, record } from "../perf";
+import { afterPaint, getPerfInfo, longFrameIn, nowMs, record } from "../perf";
 import { scrollToRow } from "../history/list";
 import { drawWindow, insideDrawn, type DrawnRange } from "../scrollWindow";
 import {
@@ -124,7 +124,15 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
   const quickOpen = useQuickOpen({ repo, current: null, onNavigate, onClosed: focusDiff });
   const toastTimer = useRef(0);
   /** 첫 파일까지의 측정: 상세 도착 → 목록 표시 → 첫 파일(diff나 알림) 표시 */
-  const timing = useRef({ t0: nowMs(), detailMs: NaN, listPainted: null as Promise<number | null> | null, reported: false });
+  // 첫 파일의 두 버전이 온 때(versionsMs)와 diff 뷰를 만든 때(diffMs)도 남겨 '첫 파일 표시'가 어디서 늘었는지 본다.
+  const timing = useRef({
+    t0: nowMs(),
+    detailMs: NaN,
+    versionsMs: NaN,
+    diffMs: NaN,
+    listPainted: null as Promise<number | null> | null,
+    reported: false,
+  });
   const detail = useMemo(() => narrowed(full, narrow ? path : null), [full, narrow, path]);
   const hasDetail = full !== null;
   const file: FileChange | undefined = detail?.files[selected];
@@ -252,7 +260,10 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
     put(key, "loading");
     call<FileVersions>("file_versions", { repo, oldId: f.oldId, newId: f.newId, path: f.path, full: large })
       .then(
-        (v) => put(key, v),
+        (v) => {
+          if (Number.isNaN(timing.current.versionsMs)) timing.current.versionsMs = nowMs();
+          put(key, v);
+        },
         (e: unknown) => put(key, { error: String(e) }),
       )
       .finally(() => {
@@ -283,6 +294,7 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
     const parent = diffParent.current;
     if (!parent || !file || !texts) return;
     const view = createDiffView(parent, { path: file.path, old: texts.old, new: texts.new, mode });
+    if (Number.isNaN(timing.current.diffMs)) timing.current.diffMs = nowMs();
     diff.current = view;
     if (latest.current.active) view.focus();
     return () => {
@@ -310,9 +322,11 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
         phases: [
           { label: "상세 도착", ms: t.detailMs - t.t0 },
           { label: "목록 표시", ms: (list ?? NaN) - t.t0 },
+          { label: "버전 도착", ms: t.versionsMs - t.t0 },
+          { label: "diff 만듦", ms: t.diffMs - t.t0 },
           { label: "첫 파일 표시", ms: end - t.t0 },
         ].filter((p) => Number.isFinite(p.ms)),
-        detail: `파일 ${latest.current.full?.files.length ?? 0}개 · ${what}`,
+        detail: [`파일 ${latest.current.full?.files.length ?? 0}개`, what, longFrameIn(t.t0, end)].filter(Boolean).join(" · "),
         ok: painted !== null,
       });
     });

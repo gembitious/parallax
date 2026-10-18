@@ -1,7 +1,7 @@
 # parallax 마일스톤
 
-**M0~M5 구현 완료** (모두 Windows·macOS 화면 확인 대기. 그래프 스크롤 60fps는 GPU가 있는 Windows·macOS에서 재고,
-M5는 실제 git-ai와의 대조가 남음) — 마일스톤을 끝낼 때마다 이 줄과 체크박스를 갱신한다.
+**M0~M5 구현 완료** (모두 Windows·macOS 화면 확인 대기. 그래프 스크롤 60fps는 GPU가 있는 Windows·macOS에서 잰다)
+— 마일스톤을 끝낼 때마다 이 줄과 체크박스를 갱신한다.
 
 ## 성능 예산
 baseline은 M0에서 같은 머신·같은 저장소로 git CLI를 직접 잰 값이다. 이력 질의 목표는 "baseline + 우리 오버헤드"로 정의한다.
@@ -110,8 +110,10 @@ Windows·macOS의 성능 HUD(`그래프 … 스크롤`)로 확인한다(bench/re
       받아들인 줄 수, 머리줄에 AI 줄 수 — Windows·macOS 실기 확인 필요
 
 **완료 기준:** `git-ai blame` 결과와 줄 단위로 일치.
-→ 같은 규칙(원래 커밋·원래 경로·원래 줄, 뒤 항목 우선, 없는 키 건너뛰기)을 표준 예제와 손으로 만든 노트로 확인했다.
-실제 `git-ai blame`과의 대조는 git-ai를 쓰는 저장소에서 `docs/MANUAL_CHECKS.md` 13번으로 한다.
+→ git-ai 1.7.6과 1.3.4(옛 형식 노트)의 테스트 도구로 만든 저장소 20개(rename, cherry-pick, amend, merge, 한글 경로 등을
+두 형식으로)에서 줄마다 에이전트(도구·대화 id·모델·시킨 사람)가 1.7.6의 `git-ai blame --json`과 같다
+(`crates/plx-core/tests/git_ai_golden.rs`, `fixtures/git-ai`, CI 세 플랫폼). 실제 에이전트(Claude Code 등)가 쓴 노트의
+화면 표시는 `docs/MANUAL_CHECKS.md` 13번으로 본다.
 
 ## 하지 않는 것
 편집 · LSP · 내장 터미널 · 스테이징/커밋/푸시 · PR 등 원격 호스팅 연동.
@@ -120,7 +122,7 @@ Windows·macOS의 성능 HUD(`그래프 … 스크롤`)로 확인한다(bench/re
 ## 리스크와 대응
 | 리스크 | 대응 |
 |---|---|
-| gix-blame 결과가 git과 다름 (diff slider 처리 차이) | 골든 테스트 통과 전 기본값 금지 |
+| gix-blame 결과가 git과 다름 (diff slider 처리 차이) | 골든 테스트 통과 전 기본값 금지. 2026-10-18 측정: 줄의 0.1~0.9%가 다르고 흘려보내지 않아 쓰지 않는다(CLAUDE.md 결정 기록) |
 | 윈도우 프로세스 생성 비용 | gix 인프로세스 우선, 스폰 횟수 측정 |
 | WebView 콜드 스타트 | 상주로 회피, 콜드 스타트는 1s 예산만 지킴 |
 | 한글 경로·내용 | `core.quotepath=false`, `-z`, 바이트 파싱, fixtures 회귀 테스트 |

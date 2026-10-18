@@ -9,7 +9,7 @@ import { formatCount, formatDate, relativeTime, shortSha } from "../blame/format
 import { Acceleration } from "../history/Acceleration";
 import { scrollToRow, visibleRange } from "../history/list";
 import { lastName, type Navigation } from "../nav";
-import { afterPaint, getPerfInfo, nowMs, record } from "../perf";
+import { afterPaint, getPerfInfo, longFrameIn, nowMs, record } from "../perf";
 import { drawRows, graphWidth, readPalette, ROW_HEIGHT, type Palette, type Visible } from "./draw";
 import { reloadFocus, type Focus } from "./focus";
 import { CHUNK, RowCache, rowWidth } from "./rows";
@@ -113,8 +113,15 @@ const OVERSCAN = 60;
 const RETRY_MS = 1000;
 /** 한 행에 보이는 이름표 수(나머지는 +N) */
 const MAX_LABELS = 3;
-
-/** 세션을 열고 고를 행: 그 리비전, HEAD, 또는 맨 위(다시 읽을 때 맨 위를 보고 있었다) */
+/**
+ * 레인 캔버스의 문맥 설정. WebKit(macOS·Linux)에는 CPU 캔버스(willReadFrequently, 픽셀을 읽지는 않는다)를 청한다.
+ * GPU 캔버스를 처음 쓸 때 준비하느라 앱이 뜬 뒤 첫 그래프가 늦었다(macOS CI 0.9~3.1초 → CPU 캔버스로 0.27~0.56초).
+ * 레인은 선과 점뿐이고 그리는 범위가 바뀔 때만 다시 그려 CPU로 충분하다. Chromium(Windows WebView2)은 기본(GPU 캔버스)으로
+ * 둔다: CPU 캔버스로 빨라지지 않았다(CI 첫 그래프의 그린 뒤 화면까지 CPU 77·111ms, GPU 97·98·101ms, bench/results.md).
+ */
+const CANVAS_SETTINGS: CanvasRenderingContext2DSettings | undefined = /\bChrome\//.test(navigator.userAgent)
+  ? undefined
+  : { willReadFrequently: true };
 
 /** 마지막으로 한 검색(n/N이 되풀이한다). 경로 검색은 일치 행들을 한 번 구해 둔다. */
 type Found = { kind: "text"; text: string } | { kind: "path"; path: string; rows: number[]; set: ReadonlySet<number> };
@@ -191,6 +198,9 @@ function GraphPane({
     t0: nowMs(),
     metaMs: NaN,
     pageMs: NaN,
+    /** 첫 화면의 레인을 캔버스에 그린 때와 그리는 데 든 시간 */
+    lanesMs: NaN,
+    lanesDrawMs: NaN,
     shown: false,
     painted: null as Promise<number | null> | null,
     reported: false,
@@ -430,6 +440,7 @@ function GraphPane({
       const phases = [
         { label: "참조", ms: t.metaMs - t.t0 },
         { label: "첫 화면 보냄", ms: t.pageMs - t.t0 },
+        { label: "레인 그림", ms: t.lanesMs - t.t0 },
         { label: "표시", ms: end - t.t0 },
         { label: "레이아웃 끝", ms: stats.totalMs },
       ].filter((p) => Number.isFinite(p.ms));
@@ -444,7 +455,13 @@ function GraphPane({
         totalMs: end - t.t0,
         budgetMs: cold ? undefined : FIRST_SCREEN_BUDGET_MS,
         phases,
-        detail: `커밋 ${stats.rows} · 레인 ${stats.width} · DAG ${stats.loadMs.toFixed(1)}ms (${sources.join(", ") || "없음"})`,
+        detail: [
+          `커밋 ${stats.rows} · 레인 ${stats.width} · DAG ${stats.loadMs.toFixed(1)}ms (${sources.join(", ") || "없음"})`,
+          Number.isFinite(t.lanesDrawMs) && `캔버스 ${t.lanesDrawMs.toFixed(1)}ms`,
+          longFrameIn(t.t0, end),
+        ]
+          .filter(Boolean)
+          .join(" · "),
         ok: painted !== null,
       });
     });
@@ -759,13 +776,20 @@ function GraphPane({
         canvas.style.width = `${width}px`;
         canvas.style.height = `${height}px`;
       }
-      const ctx = canvas.getContext("2d");
+      const ctx = canvas.getContext("2d", CANVAS_SETTINGS);
       if (ctx) {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, width, height);
         drawRows(ctx, visible, start * ROW_HEIGHT, width, palette, meta?.head ?? null);
       }
-      canvasMs = nowMs() - t0;
+      const drawnAt = nowMs();
+      canvasMs = drawnAt - t0;
+      // 첫 화면의 레인(성능 HUD): '표시'가 그리기에서 늘었는지, 그린 뒤 페인트를 기다린 것인지 나눠 본다.
+      const t = timing.current;
+      if (t.shown && Number.isNaN(t.lanesMs)) {
+        t.lanesMs = drawnAt;
+        t.lanesDrawMs = canvasMs;
+      }
     }
     // 스크롤 측정: 지금 보이는 행 가운데 아직 오지 않은 것이 있었나
     const list = listRef.current;
