@@ -1,4 +1,6 @@
 // `?` 도움말. 키맵은 CLAUDE.md를 따른다. 아직 없는 기능은 어느 마일스톤에서 붙는지 적는다.
+import { openNotices } from "./notices/Notices";
+
 type Key = { keys: string; what: string; note?: string; planned?: boolean };
 
 const COMMON: Key[] = [
@@ -32,6 +34,7 @@ const KEYS: Record<HelpView, Key[]> = {
     { keys: "/", what: "검색" },
     { keys: "n / N", what: "다음·이전 검색 결과" },
     { keys: "i", what: "커밋 카드 보이기·닫기", note: "거터 클릭으로도 고정" },
+    { keys: "✦ 보라 줄", what: "AI가 쓴 줄 (git-ai 노트)", note: "카드에 에이전트·모델·시킨 사람" },
     { keys: "H", what: "파일 히스토리 (이 리비전부터)" },
     { keys: "L", what: "라인 히스토리 (선택한 줄, 없으면 커서 줄)" },
     { keys: "G", what: "커밋 그래프 (이 줄의 커밋을 골라서)" },
@@ -89,6 +92,19 @@ export function Help({ view, onClose }: { view: HelpView; onClose(): void }) {
             ))}
           </tbody>
         </table>
+        <p className="muted help-footer">
+          <button
+            type="button"
+            className="link"
+            onClick={() => {
+              onClose();
+              openNotices();
+            }}
+          >
+            오픈 소스 라이선스
+          </button>{" "}
+          · 명령 팔레트에서도 연다
+        </p>
       </div>
     </div>
   );

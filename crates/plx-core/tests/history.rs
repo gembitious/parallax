@@ -7,7 +7,7 @@ mod common;
 use std::path::Path;
 use std::sync::Arc;
 
-use common::{encoding, git, git_text, history};
+use common::{commit_at, encoding, git, git_at, git_text, history, scratch_repo};
 use plx_core::cache::DiskCache;
 use plx_core::commit::FileStatus;
 use plx_core::history::{HistoryEvent, HistoryMeta, HistorySessions, HistoryStats};
@@ -397,7 +397,7 @@ fn cancel_before_and_during_a_request() {
     let id = sessions.register();
     assert!(sessions.cancel(id));
     let mut events = Vec::new();
-    sessions.run(id, &repos, &dir.join("src/lib.rs"), None, |e| {
+    sessions.run(id, &repos, dir.join("src/lib.rs"), None, |e| {
         events.push(e);
         true
     });
@@ -551,4 +551,311 @@ fn renames_on_two_branches_join_in_one_older_segment() {
         ]
     );
     assert_eq!(result.stats.segments, 2);
+}
+
+// ---------------------------------------------------------------- 리뷰에서 찾은 경우(회귀 테스트)
+
+/// (요약, 상태, 경로, 옛 경로)
+fn summaries(entries: &[LogEntry]) -> Vec<(&str, Option<FileStatus>, &str, Option<&str>)> {
+    entries
+        .iter()
+        .map(|e| {
+            (
+                e.summary.as_str(),
+                e.status,
+                e.path.as_str(),
+                e.old_path.as_deref(),
+            )
+        })
+        .collect()
+}
+
+/// 여덟 줄짜리 파일 내용
+fn eight(tag: &str) -> String {
+    (1..=8)
+        .map(|i| format!("{tag} line {i}: the quick brown fox jumps over the lazy dog\n"))
+        .collect()
+}
+
+const T0: i64 = 1_700_000_000;
+
+/// 저장소 전체(`plx log .`)는 `git log`와 같다: 빈 커밋, `-s ours`로 합친 곁가지와 그 merge도 나온다.
+#[test]
+fn whole_repo_history_is_git_log() {
+    let dir = scratch_repo("history-whole");
+    std::fs::write(dir.join("a.txt"), "a\n").unwrap();
+    commit_at(&dir, "add a", T0);
+    commit_at(&dir, "empty commit", T0 + 60);
+    git(&dir, &["checkout", "-q", "-b", "side"]);
+    std::fs::write(dir.join("s.txt"), "s\n").unwrap();
+    commit_at(&dir, "side: add s", T0 + 120);
+    git(&dir, &["checkout", "-q", "main"]);
+    git_at(
+        &dir,
+        &[
+            "merge",
+            "-q",
+            "-s",
+            "ours",
+            "--no-ff",
+            "side",
+            "-m",
+            "merge side with ours",
+        ],
+        T0 + 180,
+    );
+    let result = run(&dir, None);
+    assert_eq!(result.meta.path, ".");
+    assert_eq!(shas(&result.entries), log_shas(&dir, &[]));
+    assert_eq!(result.entries.len(), 4);
+}
+
+/// 곁가지에서 a → b로 옮기는 동안 본줄기가 a를 고쳤다. merge한 b의 이력에 본줄기의 수정도 든다
+/// (git blame도 그 줄을 본줄기의 커밋으로 본다).
+#[test]
+fn rename_on_a_branch_keeps_mainline_edits() {
+    let dir = scratch_repo("history-branch-rename");
+    std::fs::write(dir.join("a.txt"), eight("base")).unwrap();
+    commit_at(&dir, "add a", T0);
+    git(&dir, &["checkout", "-q", "-b", "side"]);
+    git(&dir, &["mv", "a.txt", "b.txt"]);
+    commit_at(&dir, "side: rename a to b", T0 + 60);
+    git(&dir, &["checkout", "-q", "main"]);
+    let edited = eight("base").replacen("base line 1:", "main edited line 1,", 1);
+    std::fs::write(dir.join("a.txt"), edited).unwrap();
+    commit_at(&dir, "main: edit a line 1", T0 + 120);
+    git_at(
+        &dir,
+        &["merge", "-q", "--no-ff", "side", "-m", "merge side"],
+        T0 + 180,
+    );
+    let blame = git_text(&dir, &["blame", "--porcelain", "--", "b.txt"]);
+    assert!(
+        blame.contains("summary main: edit a line 1"),
+        "git blame이 보는 커밋"
+    );
+
+    let result = run(&dir.join("b.txt"), None);
+    assert_eq!(
+        summaries(&result.entries),
+        [
+            ("merge side", None, "b.txt", None),
+            (
+                "side: rename a to b",
+                Some(FileStatus::Renamed),
+                "b.txt",
+                Some("a.txt")
+            ),
+            (
+                "main: edit a line 1",
+                Some(FileStatus::Modified),
+                "a.txt",
+                None
+            ),
+            ("add a", Some(FileStatus::Added), "a.txt", None),
+        ]
+    );
+}
+
+/// 한 구간에 옛 이름이 둘이다(c → a, a를 지움, b → a): 둘 다 따라가고 커밋 순서도 git과 같다.
+#[test]
+fn every_old_name_in_a_segment_is_followed() {
+    let dir = scratch_repo("history-two-names");
+    std::fs::write(dir.join("c.txt"), eight("c")).unwrap();
+    commit_at(&dir, "add c", T0);
+    git(&dir, &["mv", "c.txt", "a.txt"]);
+    commit_at(&dir, "rename c to a", T0 + 60);
+    std::fs::write(dir.join("a.txt"), eight("c") + "more\n").unwrap();
+    commit_at(&dir, "edit a", T0 + 120);
+    git(&dir, &["rm", "-q", "a.txt"]);
+    commit_at(&dir, "delete a", T0 + 180);
+    std::fs::write(dir.join("b.txt"), eight("b")).unwrap();
+    commit_at(&dir, "add b", T0 + 240);
+    std::fs::write(dir.join("b.txt"), eight("b") + "more\n").unwrap();
+    commit_at(&dir, "edit b", T0 + 300);
+    git(&dir, &["mv", "b.txt", "a.txt"]);
+    commit_at(&dir, "rename b to a", T0 + 360);
+
+    let result = run(&dir.join("a.txt"), None);
+    assert_eq!(
+        summaries(&result.entries),
+        [
+            (
+                "rename b to a",
+                Some(FileStatus::Renamed),
+                "a.txt",
+                Some("b.txt")
+            ),
+            ("edit b", Some(FileStatus::Modified), "b.txt", None),
+            ("add b", Some(FileStatus::Added), "b.txt", None),
+            ("delete a", Some(FileStatus::Deleted), "a.txt", None),
+            ("edit a", Some(FileStatus::Modified), "a.txt", None),
+            (
+                "rename c to a",
+                Some(FileStatus::Renamed),
+                "a.txt",
+                Some("c.txt")
+            ),
+            ("add c", Some(FileStatus::Added), "c.txt", None),
+        ]
+    );
+}
+
+/// a → b → a: 커밋 순서와 rename 상태가 `git log --follow`와 같다(같은 이름의 앞 파일은 옛 이름 쪽 뒤에 나온다).
+#[test]
+fn rename_back_and_forth_keeps_order_and_status() {
+    let dir = scratch_repo("history-back-and-forth");
+    std::fs::write(dir.join("a.txt"), eight("a")).unwrap();
+    commit_at(&dir, "add a", T0);
+    std::fs::write(dir.join("a.txt"), eight("a") + "e1\n").unwrap();
+    commit_at(&dir, "edit a (before)", T0 + 60);
+    git(&dir, &["mv", "a.txt", "b.txt"]);
+    commit_at(&dir, "rename a to b", T0 + 120);
+    std::fs::write(dir.join("b.txt"), eight("a") + "e1\ne2\n").unwrap();
+    commit_at(&dir, "edit b", T0 + 180);
+    git(&dir, &["mv", "b.txt", "a.txt"]);
+    commit_at(&dir, "rename b to a", T0 + 240);
+    std::fs::write(dir.join("a.txt"), eight("a") + "e1\ne2\ne3\n").unwrap();
+    commit_at(&dir, "edit a (after)", T0 + 300);
+
+    let result = run(&dir.join("a.txt"), None);
+    let follow = git_text(&dir, &["log", "--follow", "--format=%s", "--", "a.txt"]);
+    let got: Vec<&str> = result.entries.iter().map(|e| e.summary.as_str()).collect();
+    assert_eq!(got, follow.lines().collect::<Vec<_>>());
+    assert_eq!(
+        summaries(&result.entries)[..4],
+        [
+            ("edit a (after)", Some(FileStatus::Modified), "a.txt", None),
+            (
+                "rename b to a",
+                Some(FileStatus::Renamed),
+                "a.txt",
+                Some("b.txt")
+            ),
+            ("edit b", Some(FileStatus::Modified), "b.txt", None),
+            (
+                "rename a to b",
+                Some(FileStatus::Renamed),
+                "b.txt",
+                Some("a.txt")
+            ),
+        ]
+    );
+}
+
+/// 경로의 글롭 글자는 글자 그대로다(`app/[slug]/page.tsx`가 `app/s/page.tsx`의 커밋을 끌어오지 않는다).
+#[test]
+fn glob_characters_in_paths_are_literal() {
+    let dir = scratch_repo("history-glob");
+    std::fs::create_dir_all(dir.join("app/[slug]")).unwrap();
+    std::fs::create_dir_all(dir.join("app/s")).unwrap();
+    std::fs::write(dir.join("app/[slug]/page.tsx"), "slug\n").unwrap();
+    commit_at(&dir, "add slug page", T0);
+    std::fs::write(dir.join("app/s/page.tsx"), "s\n").unwrap();
+    commit_at(&dir, "add s page", T0 + 60);
+    std::fs::write(dir.join("app/s/page.tsx"), "s2\n").unwrap();
+    commit_at(&dir, "edit s page", T0 + 120);
+
+    let result = run(&dir.join("app/[slug]/page.tsx"), None);
+    let got: Vec<&str> = result.entries.iter().map(|e| e.summary.as_str()).collect();
+    assert_eq!(got, ["add slug page"]);
+}
+
+/// 캐시한 히스토리도 작성자 이름을 바꾸는 `.mailmap`과 부모를 바꾸는 `git replace`를 따른다.
+#[test]
+fn cached_history_follows_mailmap_and_replaced_parents() {
+    let dir = scratch_repo("history-mailmap");
+    git(&dir, &["config", "user.name", "kim"]);
+    git(&dir, &["config", "user.email", "kim@old.example"]);
+    for i in 0..3 {
+        std::fs::write(dir.join("f.txt"), format!("{i}\n")).unwrap();
+        commit_at(&dir, &format!("c{i}"), T0 + i * 60);
+    }
+    let cache_dir = tempfile::tempdir().unwrap();
+    let sessions = HistorySessions::with_cache(Arc::new(DiskCache::new(
+        cache_dir.path().to_path_buf(),
+        1 << 30,
+    )));
+    let file = dir.join("f.txt");
+    let first = run_with(&sessions, &file, None);
+    assert_eq!(first.entries[0].author, "kim");
+    assert!(run_with(&sessions, &file, None).stats.cached);
+
+    std::fs::write(
+        dir.join(".mailmap"),
+        "Kim Gaebal <kim@new.example> <kim@old.example>\n",
+    )
+    .unwrap();
+    let mapped = run_with(&sessions, &file, None);
+    assert!(!mapped.stats.cached, "mailmap이 바뀌면 다른 열쇠");
+    assert_eq!(mapped.entries[0].author, "Kim Gaebal");
+    assert_eq!(mapped.entries[0].author_mail, "kim@new.example");
+    assert!(run_with(&sessions, &file, None).stats.cached);
+
+    git(&dir, &["replace", "--graft", "HEAD", "HEAD~2"]);
+    let replaced = run_with(&sessions, &file, None);
+    assert_eq!(
+        shas(&replaced.entries),
+        git_text(&dir, &["log", "--format=%H", "--", "f.txt"])
+            .lines()
+            .collect::<Vec<_>>(),
+        "git처럼 바꾼 부모를 따른다"
+    );
+    assert_eq!(replaced.entries.len(), 2);
+    assert!(
+        !run_with(&sessions, &file, None).stats.cached,
+        "바꾸는 참조가 있으면 넣지 않는다(참조를 지우면 결과가 바뀐다)"
+    );
+}
+
+/// 얕은 클론과 부분 클론(옛 이름을 찾을 blob이 없다)의 결과는 캐시에 넣지 않는다:
+/// 이력을 더 받으면(`fetch --unshallow`) 결과가 바뀌고, 부분 클론은 rename을 잇지 못한 결과다.
+#[test]
+fn incomplete_histories_are_not_cached() {
+    let src = scratch_repo("history-incomplete-source");
+    git(&src, &["config", "uploadpack.allowFilter", "true"]);
+    std::fs::write(src.join("old.txt"), eight("old")).unwrap();
+    commit_at(&src, "add old", T0);
+    git(&src, &["mv", "old.txt", "new.txt"]);
+    std::fs::write(src.join("new.txt"), eight("old") + "tweak\n").unwrap();
+    commit_at(&src, "rename old to new with edit", T0 + 60);
+    for i in 0..3 {
+        std::fs::write(src.join("new.txt"), eight("old") + &"more\n".repeat(i + 2)).unwrap();
+        commit_at(&src, &format!("edit new {i}"), T0 + 120 + i as i64 * 60);
+    }
+    let url = format!("file://{}", src.to_string_lossy().replace('\\', "/"));
+    let clone = |name: &str, args: &[&str]| {
+        let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut all = vec!["clone", "-q"];
+        all.extend_from_slice(args);
+        let target = dir.to_string_lossy().into_owned();
+        all.extend([url.as_str(), target.as_str()]);
+        git(&src, &all);
+        dir
+    };
+    let cache_dir = tempfile::tempdir().unwrap();
+    let sessions = HistorySessions::with_cache(Arc::new(DiskCache::new(
+        cache_dir.path().to_path_buf(),
+        1 << 30,
+    )));
+
+    let shallow = clone("scratch-history-shallow", &["--depth", "2"]);
+    let first = run_with(&sessions, &shallow.join("new.txt"), None);
+    assert_eq!(first.entries.len(), 2);
+    let again = run_with(&sessions, &shallow.join("new.txt"), None);
+    assert!(!again.stats.cached, "얕은 클론은 넣지 않는다");
+    git(&shallow, &["fetch", "-q", "--unshallow"]);
+    let full = run_with(&sessions, &shallow.join("new.txt"), None);
+    assert_eq!(full.entries.len(), 5, "이력을 다 받으면 rename 앞까지");
+
+    let partial = clone(
+        "scratch-history-partial",
+        &["--filter=blob:none", "--no-checkout"],
+    );
+    // 작업트리 없이도 경로는 저장소 기준으로 준다(blob을 받지 않게 체크아웃하지 않았다).
+    let first = run_with(&sessions, &partial.join("new.txt"), None);
+    assert!(!first.entries.is_empty());
+    let again = run_with(&sessions, &partial.join("new.txt"), None);
+    assert!(!again.stats.cached, "rename을 잇지 못한 결과는 넣지 않는다");
 }
