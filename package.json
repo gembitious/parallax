@@ -2,10 +2,12 @@
   "name": "parallax",
   "private": true,
   "version": "0.1.0",
+  "license": "MIT OR Apache-2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "notices": "node scripts/third-party-notices.mjs",
     "test": "vitest run",
     "preview": "vite preview",
     "tauri": "tauri"

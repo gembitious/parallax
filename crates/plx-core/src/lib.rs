@@ -22,6 +22,7 @@ pub mod line_log;
 pub mod linemap;
 pub mod log;
 pub mod navigate;
+pub mod renames;
 pub mod repo;
 pub mod requests;
 pub mod similarity;

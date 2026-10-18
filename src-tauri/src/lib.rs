@@ -29,6 +29,8 @@ pub fn run() {
     let requests = Arc::new(instance::Requests::default());
     // 실행 중인 인스턴스가 있으면 여기서 넘기고 끝난다. Tauri 초기화는 상주 인스턴스만 한다.
     let server = instance::start(t_main_ms, requests.clone());
+    // WebView를 만드는 동안 git을 한 번 띄워 둔다: 첫 blame의 git이 실행 파일을 처음 여는 값을 치르지 않는다.
+    std::thread::spawn(plx_core::git::warm_up);
 
     let app = tauri::Builder::default()
         .manage(requests.clone())
@@ -61,6 +63,7 @@ pub fn run() {
             git::commit_info,
             git::commit_detail,
             git::file_versions,
+            git::file_stats,
             instance::current_request,
             window::app_ready,
             window::hide_window,

@@ -1,7 +1,7 @@
 # 측정 항목: 저장소 종류 대상
 # 종류: spawn | blame | log | follow | line-log | show | graph | plx-blame | plx-show | plx-log | plx-line-log | plx-graph
-#       | plx-files
-#       (bench/src/main.rs의 Kind)
+#       | plx-files | gix-blame
+#       (bench/src/main.rs의 Kind. gix-blame은 `--features gix-blame`으로 빌드해야 해 bench/cases-gix-blame.txt에 따로 둔다)
 # plx-*는 git 대신 앱의 blame 요청·커밋 상세·파일·라인 히스토리·커밋 그래프를 돌린다(같은 대상의 git 줄과 비교).
 # plx-graph의 대상은 범위(head: 클론 시점과 무관한 HEAD 이력만), +table은 앱 캐시의 커밋 표를 미리 채운 두 번째 열기.
 # plx-files는 Quick Open이고 대상은 검색어다(commit-graph와 무관해 두 열이 같다).
@@ -26,6 +26,8 @@ git     line-log  1000,1060:diff.c
 git     plx-line-log 1000,1060:diff.c
 git     show      HEAD
 git     plx-show  HEAD
+git     show      1f010d6bdf                   # .txt → .adoc: 파일 919개(rename 906개)
+git     plx-show  1f010d6bdf
 git     graph     -
 git     plx-graph head                         # 커밋 82,327개
 git     plx-graph head+table

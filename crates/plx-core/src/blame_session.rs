@@ -2,10 +2,13 @@
 //!
 //! 순서: 저장소 찾기 → 저장소 기준 경로 → 리비전은 git blame을 먼저 띄우고 그동안 blob을 읽고, 작업트리는 파일을
 //! 읽어 그 내용으로 git blame을 띄움(`--contents -`) → [`BlameMeta`] → [`Blame::stream`]으로 블록 묶음.
+//! git은 따로 스레드에서 띄워 내용을 프로세스 생성(콜드 스타트의 첫 git은 CI의 macOS VM에서 0.9초)보다 먼저 보낸다.
 //! 화면은 내용을 먼저 그리고 거터를 점진적으로 채운다.
 //! 요청은 [`Sessions`]에 id로 등록하고, 화면이 다른 파일·리비전으로 넘어가면 그 id로 취소한다.
 
+use std::io;
 use std::sync::Arc;
+use std::thread::JoinHandle;
 use std::time::Instant;
 
 use serde::Serialize;
@@ -13,7 +16,7 @@ use serde::Serialize;
 use crate::blame::{Blame, BlameBlock, BlameCommit, BlameError, Chunk, Stats};
 use crate::cache::{CacheKey, DiskCache};
 use crate::repo::{FilePath, Repo, RepoCache};
-use crate::requests::Requests;
+use crate::requests::{self, Requests};
 use crate::text::{self, Decoded};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -25,6 +28,9 @@ pub struct BlameMeta {
     pub path: String,
     /// 고정 리비전이면 그 커밋 sha. 작업트리 blame이면 없다.
     pub rev: Option<String>,
+    /// 작업트리 blame이 기준으로 삼은 HEAD 커밋. 고정 리비전이거나 커밋이 없는 저장소면 없다. 화면은 이것으로
+    /// 열기 전에 일어난 HEAD 변화의 늦은 알림을 거른다(이미 그 HEAD로 읽었다).
+    pub head: Option<String>,
     /// 바이너리 파일이면 없다.
     pub content: Option<Decoded>,
     pub binary: bool,
@@ -62,10 +68,28 @@ impl SessionEvent {
     }
 }
 
+/// 따로 스레드에서 띄우는 git blame. 내용을 보낸 뒤 기다린다. 버리면(실패, 바이너리, 취소) 스레드가 띄운 git을
+/// 거둔다([`Blame`]의 Drop).
+struct Spawning(JoinHandle<io::Result<Blame>>);
+
+impl Spawning {
+    fn new(spawn: impl FnOnce() -> io::Result<Blame> + Send + 'static) -> Spawning {
+        Spawning(std::thread::spawn(spawn))
+    }
+
+    fn wait(self) -> Result<Blame, String> {
+        match self.0.join() {
+            Ok(Ok(blame)) => Ok(blame),
+            Ok(Err(e)) => Err(format!("git blame 실행 실패: {e}")),
+            Err(_) => Err("git blame 실행 실패".to_owned()),
+        }
+    }
+}
+
 /// 내용 다음에 보낼 blame.
 enum Source {
     /// git blame을 돌린다. 끝까지 오면 열쇠로 캐시에 넣는다.
-    Git(Blame, Option<CacheKey>),
+    Git(Spawning, Option<CacheKey>),
     /// 캐시에서 읽었다.
     Cached(Chunk),
     /// 추적하지 않는 작업트리 파일(HEAD에도 인덱스에도 없다). 모든 줄이 커밋 안 됨이다.
@@ -93,20 +117,19 @@ fn start(
         return start_worktree(&repo, cache, &rel);
     };
     let sha = commit.to_string();
-    // 얕은 클론은 이력을 더 받으면 결과가 바뀐다.
+    // 얕은 클론(이력을 더 받으면)과 부모를 바꾼 저장소(`git replace`)는 결과가 바뀐다.
     let key = cache
-        .filter(|_| !repo.is_shallow())
+        .filter(|_| repo.cacheable())
         .map(|_| CacheKey::commit(repo.workdir(), &sha, &rel, &repo.blame_settings()));
     let cached = key
         .as_ref()
         .zip(cache)
         .and_then(|(key, cache)| cache.get(key));
     // blob을 읽는 동안 git이 일을 시작하도록 먼저 띄운다.
-    let blame = cached
-        .is_none()
-        .then(|| Blame::spawn(repo.workdir(), &rel, Some(&sha)))
-        .transpose()
-        .map_err(|e| format!("git blame 실행 실패: {e}"))?;
+    let blame = cached.is_none().then(|| {
+        let (dir, path, rev) = (repo.workdir().to_owned(), rel.clone(), sha.clone());
+        Spawning::new(move || Blame::spawn(&dir, &path, Some(&rev)))
+    });
     // 실패하거나 바이너리면 git은 버린다(Drop이 끝내고 거둔다).
     let bytes = repo
         .blob_at(commit, &rel)
@@ -124,6 +147,7 @@ fn start(
         repo: repo.workdir().to_string_lossy().into_owned(),
         path: rel,
         rev: Some(sha),
+        head: None,
         content,
         binary,
     };
@@ -143,17 +167,18 @@ fn start_worktree(
         .ok_or_else(|| format!("작업트리에 {rel} 파일이 없다"))?;
     let binary = text::is_binary(&bytes);
     let content = (!binary).then(|| text::decode(&bytes));
+    let head = repo.head().map_err(|e| e.to_string())?;
     let meta = |content| BlameMeta {
         repo: repo.workdir().to_string_lossy().into_owned(),
         path: rel.clone(),
         rev: None,
+        head: head.map(|id| id.to_string()),
         content,
         binary,
     };
     let Some(decoded) = content else {
         return Ok((meta(None), Source::Nothing));
     };
-    let head = repo.head().map_err(|e| e.to_string())?;
     let in_head = match head {
         Some(head) => repo.has_file(head, &rel).map_err(|e| e.to_string())?,
         None => false,
@@ -167,7 +192,7 @@ fn start_worktree(
     }
     // 인덱스에만 있는 파일의 결과는 인덱스에 따라서도 바뀌므로 넣지 않는다.
     let key = match head {
-        Some(head) if in_head && cache.is_some() && !repo.is_shallow() => Some(CacheKey::worktree(
+        Some(head) if in_head && cache.is_some() && repo.cacheable() => Some(CacheKey::worktree(
             repo.workdir(),
             &head.to_string(),
             &rel,
@@ -184,8 +209,8 @@ fn start_worktree(
     {
         return Ok((meta(Some(decoded)), Source::Cached(chunk)));
     }
-    let blame = Blame::spawn_contents(repo.workdir(), &rel, bytes)
-        .map_err(|e| format!("git blame 실행 실패: {e}"))?;
+    let (dir, path) = (repo.workdir().to_owned(), rel.clone());
+    let blame = Spawning::new(move || Blame::spawn_contents(&dir, &path, bytes));
     Ok((meta(Some(decoded)), Source::Git(blame, key)))
 }
 
@@ -272,7 +297,11 @@ impl Sessions {
         rev: Option<&str>,
         mut on_event: impl FnMut(SessionEvent) -> bool,
     ) {
-        let end = self.drive(id, repos, &file.into(), rev, &mut on_event);
+        let file = file.into();
+        let end = requests::catch(
+            || self.drive(id, repos, &file, rev, &mut on_event),
+            |message| SessionEvent::Error { message },
+        );
         self.requests.finish(id);
         on_event(end);
     }
@@ -293,18 +322,19 @@ impl Sessions {
             Ok(started) => started,
             Err(message) => return SessionEvent::Error { message },
         };
-        // 시작하는 동안 취소가 왔으면 끝낸다(git은 Drop이 끝낸다). 아니면 이제부터 취소는 git을 바로 끝낸다.
-        let attached = match &source {
-            Source::Git(blame, _) => self.requests.attach(id, blame.canceller()),
-            _ => !self.requests.is_cancelled(id),
-        };
-        if !attached {
+        // 시작하는 동안 취소가 왔으면 끝낸다(띄우던 git은 Drop이 끝낸다).
+        if self.requests.is_cancelled(id) {
             return SessionEvent::Cancelled;
         }
         let meta_ms = started.elapsed().as_secs_f64() * 1000.0;
         let sent = on_event(SessionEvent::Meta(meta));
         let (blame, key) = match source {
-            Source::Git(blame, key) => (blame, key),
+            Source::Git(spawning, key) => match spawning.wait() {
+                // 내용을 보내는 동안 취소가 왔으면 끝낸다. 아니면 이제부터 취소는 git을 바로 끝낸다.
+                Ok(blame) if self.requests.attach(id, blame.canceller()) => (blame, key),
+                Ok(_) => return SessionEvent::Cancelled,
+                Err(message) => return SessionEvent::Error { message },
+            },
             Source::Cached(chunk) => return whole(chunk, true, sent, meta_ms, on_event),
             Source::Uncommitted(chunk) => return whole(chunk, false, sent, meta_ms, on_event),
             Source::Nothing => {
@@ -315,7 +345,9 @@ impl Sessions {
             }
         };
         let canceller = blame.canceller();
-        if !sent {
+        // 받는 쪽이 사라졌다. git이 이미 다 냈어도(마지막 묶음에서 알았다) 끝은 취소다.
+        let mut gone = !sent;
+        if gone {
             canceller.cancel();
         }
         // 캐시에 넣을 결과를 모은다.
@@ -325,18 +357,24 @@ impl Sessions {
                 all.commits.extend_from_slice(&chunk.commits);
                 all.blocks.extend_from_slice(&chunk.blocks);
             }
-            if !on_event(SessionEvent::Chunk(chunk)) {
+            if !gone && !on_event(SessionEvent::Chunk(chunk)) {
+                gone = true;
                 canceller.cancel();
             }
         });
         match result {
             Ok(stats) => {
+                // 다 받은 결과는 받는 쪽이 사라졌어도 넣어 둔다(다음에 열 때 쓴다).
                 if let (Some(cache), Some(key), Some(all)) = (self.cache(), &key, &all)
                     && let Err(e) = cache.put(key, all)
                 {
                     eprintln!("plx: blame 캐시에 쓰지 못했다: {e}");
                 }
-                SessionEvent::Done { meta_ms, stats }
+                if gone {
+                    SessionEvent::Cancelled
+                } else {
+                    SessionEvent::Done { meta_ms, stats }
+                }
             }
             Err(BlameError::Cancelled) => SessionEvent::Cancelled,
             Err(e) => SessionEvent::Error {
@@ -360,7 +398,7 @@ fn whole(
         cached,
         ..Stats::default()
     };
-    if sent && !on_event(SessionEvent::Chunk(chunk)) {
+    if !sent || !on_event(SessionEvent::Chunk(chunk)) {
         return SessionEvent::Cancelled;
     }
     SessionEvent::Done { meta_ms, stats }
