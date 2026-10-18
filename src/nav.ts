@@ -1,5 +1,6 @@
-// 화면 상태: 받은 plx 요청과 탐색 스택(blame·커밋 상세·파일 히스토리). 순수 함수라 단위 테스트한다(nav.test.ts).
+// 화면 상태: 받은 plx 요청과 탐색 스택(blame·커밋 상세·파일 히스토리·그래프). 순수 함수라 단위 테스트한다(nav.test.ts).
 import { shortSha } from "./blame/format";
+import type { SearchState } from "./blame/editor";
 import type { BlameTarget } from "./blame/session";
 import type { HistoryTarget, LineRange } from "./history/types";
 
@@ -12,7 +13,9 @@ export type Navigation =
   /** 커밋 상세·히스토리 → 그 리비전의 파일 blame */
   | { kind: "file"; target: BlameTarget; line: number | null }
   /** blame → 파일 히스토리(`H`), `lines`가 있으면 라인 히스토리(`L`) */
-  | { kind: "history"; target: HistoryTarget; lines?: LineRange };
+  | { kind: "history"; target: HistoryTarget; lines?: LineRange }
+  /** 어느 화면에서든 → 커밋 그래프(`G`). `rev`가 있으면 그 커밋을 골라 둔다. */
+  | { kind: "graph"; repo: string; rev: string | null };
 
 /** 열 뷰. plx-core/src/cli.rs의 Request와 같은 모양. */
 export type ViewRequest =
@@ -30,6 +33,8 @@ export type PlxRequest = {
   args: string[];
   cwd: string;
   t0Ms: number;
+  /** 호출한 plx 프로세스가 main에 들어온 시각. 모르면 0 */
+  mainMs: number;
   recvMs: number;
   cold: boolean;
 };
@@ -38,7 +43,7 @@ export type PlxRequest = {
 export type Shown = { request: PlxRequest; receivedMs: number };
 
 /** 탐색 스택의 화면 하나. 아래 화면은 숨긴 채 살려 둬 뒤로 오면 커서·스크롤이 그대로다. */
-export type StackEntry = BlameEntry | CommitEntry | HistoryEntry;
+export type StackEntry = BlameEntry | CommitEntry | HistoryEntry | GraphEntry;
 
 export type BlameEntry = {
   key: number;
@@ -47,6 +52,8 @@ export type BlameEntry = {
   line: number | null;
   /** 이 화면으로 온 방법 */
   via: "request" | "parent" | "older" | "newer" | "file";
+  /** 다시 열기(reload) 전 화면의 검색 */
+  search?: SearchState;
 };
 
 export type CommitEntry = {
@@ -69,6 +76,18 @@ export type HistoryEntry = {
   /** 있으면 그 줄 범위의 라인 히스토리 */
   lines: LineRange | null;
   via: "request" | "history";
+  /** 다시 열기(reload) 전 화면의 검색어(`n`/`N`이 이어서 찾는다) */
+  query?: string;
+};
+
+export type GraphEntry = {
+  key: number;
+  view: "graph";
+  /** 저장소 안의 아무 경로(작업트리 또는 plx 호출의 cwd) */
+  repo: string;
+  /** 처음 고를 커밋 */
+  focus: string | null;
+  via: "request" | "graph";
 };
 
 export type ViewState = { shown: Shown | null; stack: StackEntry[] };
@@ -76,7 +95,12 @@ export type ViewState = { shown: Shown | null; stack: StackEntry[] };
 export type ViewAction =
   | { type: "request"; request: PlxRequest; receivedMs: number }
   | { type: "navigate"; navigation: Navigation }
-  | { type: "back" };
+  | { type: "back" }
+  /**
+   * 저장소가 바뀌어(HEAD 이동) `key` 화면을 새로 연다. blame은 `line` 줄로, 라인 히스토리는 `lines`(새 작업트리의 줄로
+   * 옮긴 범위)로. 스택 자리는 그대로다. 화면의 검색(blame `search`, 히스토리 `query`)은 새 화면으로 넘긴다.
+   */
+  | { type: "reload"; key: number; line?: number | null; lines?: LineRange; search?: SearchState; query?: string };
 
 /** 탐색 스택이 이보다 깊어지면 가장 아래 화면부터 버린다. */
 export const MAX_STACK = 30;
@@ -90,7 +114,7 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
       const { request } = action;
       const view = request.request;
       const key = nextEntryKey++;
-      const root: StackEntry | null =
+      const root: StackEntry =
         view.kind === "blame"
           ? { key, view: "blame", target: { repo: null, path: view.path, rev: null }, line: view.line, via: "request" }
           : view.kind === "show"
@@ -103,8 +127,8 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
                   lines: view.kind === "lineLog" ? { start: view.start, end: view.end } : null,
                   via: "request",
                 }
-              : null;
-      return { shown: { request, receivedMs: action.receivedMs }, stack: root ? [root] : [] };
+              : { key, view: "graph", repo: request.cwd, focus: null, via: "request" };
+      return { shown: { request, receivedMs: action.receivedMs }, stack: [root] };
     }
     case "navigate": {
       const { navigation } = action;
@@ -122,11 +146,27 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
             }
           : navigation.kind === "history"
             ? { key, view: "history", target: navigation.target, lines: navigation.lines ?? null, via: "history" }
-            : { key, view: "blame", target: navigation.target, line: navigation.line, via: navigation.kind };
+            : navigation.kind === "graph"
+              ? { key, view: "graph", repo: navigation.repo, focus: navigation.rev, via: "graph" }
+              : { key, view: "blame", target: navigation.target, line: navigation.line, via: navigation.kind };
       return { ...state, stack: [...state.stack, entry].slice(-MAX_STACK) };
     }
     case "back":
       return state.stack.length > 1 ? { ...state, stack: state.stack.slice(0, -1) } : state;
+    case "reload": {
+      const index = state.stack.findIndex((entry) => entry.key === action.key);
+      if (index < 0) return state;
+      const entry = state.stack[index];
+      const key = nextEntryKey++;
+      const stack = state.stack.slice();
+      stack[index] =
+        entry.view === "blame"
+          ? { ...entry, key, line: action.line !== undefined ? action.line : entry.line, search: action.search }
+          : entry.view === "history"
+            ? { ...entry, key, lines: entry.lines && action.lines ? action.lines : entry.lines, query: action.query }
+            : { ...entry, key };
+      return { ...state, stack };
+    }
   }
 }
 
@@ -134,13 +174,27 @@ export function viewReducer(state: ViewState, action: ViewAction): ViewState {
 export const backDirectionOf = (via: StackEntry["via"]) =>
   via === "older" ? "newer" : via === "newer" ? "older" : undefined;
 
+/**
+ * 스택의 `index`번 화면에서 돌아가는 방향 키. 맨 아래 화면에는 돌아갈 곳이 없다: 스택이 MAX_STACK을 넘어 아래를
+ * 버리면 `<`로 온 화면이 맨 아래가 되는데, 그때 `>`는 새 화면(다음 리비전)을 연다.
+ */
+export const backDirectionAt = (stack: readonly StackEntry[], index: number) =>
+  index > 0 ? backDirectionOf(stack[index].via) : undefined;
+
 /** 탐색으로 연 화면의 창 제목. 경로는 저장소 기준이다. */
 export function titleOf(entry: StackEntry): string {
   if (entry.view === "commit") return `커밋 ${shortSha(entry.rev)}`;
+  if (entry.view === "graph") return `그래프 ${lastName(entry.repo)}`;
   const { target } = entry;
   const at = target.rev ? ` @${shortSha(target.rev)}` : "";
   if (entry.view === "blame") return `blame ${target.path}${at}`;
   return entry.lines
     ? `라인 히스토리 ${target.path}:${entry.lines.start}-${entry.lines.end}${at}`
     : `히스토리 ${target.path}${at}`;
+}
+
+/** 경로의 마지막 이름(Windows 경로도) */
+export function lastName(path: string): string {
+  const trimmed = path.replace(/[\\/]+$/, "");
+  return trimmed.slice(Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\")) + 1) || trimmed || path;
 }
