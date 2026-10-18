@@ -2,6 +2,8 @@
 node_modules/
 dist/
 dist-ssr/
+# 릴리스 빌드가 만드는 오픈 소스 라이선스 고지(npm run notices)
+/public/third-party-notices.txt
 *.local
 *.log
 

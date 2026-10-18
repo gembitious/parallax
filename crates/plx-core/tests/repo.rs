@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{encoding, git, git_text, history};
+use common::{encoding, git, git_text, history, scratch_repo};
 use plx_core::repo::Repo;
 
 #[test]
@@ -178,4 +178,22 @@ fn commit_info_decodes_korean_and_euc_kr() {
         .unwrap();
     assert_eq!(korean.author.name, "김개발");
     assert_eq!(korean.summary, "한글 파일 수정");
+}
+
+/// 커밋이 하나도 없는 저장소에서 HEAD를 물으면 그렇다고 알린다(`plx show HEAD`가 터미널에 쓰는 문장이다).
+#[test]
+fn head_of_a_repository_without_commits() {
+    let dir = scratch_repo("repo-unborn");
+    let repo = Repo::discover(&dir).unwrap();
+    for rev in ["HEAD", "HEAD~1", "@"] {
+        assert_eq!(
+            repo.resolve_commit(rev).unwrap_err().to_string(),
+            format!("커밋이 아직 없다({rev}): HEAD가 가리키는 main 브랜치에 커밋이 하나도 없다")
+        );
+    }
+    let other = repo.resolve_commit("no-such-ref").unwrap_err().to_string();
+    assert!(
+        other.starts_with("리비전을 찾을 수 없다 (no-such-ref)"),
+        "{other}"
+    );
 }

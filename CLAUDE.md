@@ -19,7 +19,8 @@ GitLens의 핵심 흐름(줄 → 커밋 → 부모 리비전 blame → 파일·�
    - refs·커밋·트리·blob 읽기, 리비전 워크, 트리 diff → `gix` (프로세스 생성 없음. 윈도우에서 특히 중요)
    - blame → `git blame --incremental`, 파일 히스토리 → `git log`, 라인 히스토리 → `git log -L`
      (git의 changed-path Bloom 필터 혜택을 그대로 받는다)
-   - `gix-blame`은 실험 플래그 뒤에만 둔다. git 결과와의 골든 테스트를 통과하기 전에는 기본값으로 바꾸지 않는다.
+   - `gix-blame`은 쓰지 않는다(2026-10-18 검토: 흘려보내지 않고 git과 다른 줄이 있다, 결정 기록).
+     git 결과와의 골든 테스트를 통과하기 전에는 앱에 넣지 않는다.
 3. **불변 결과는 영구 캐시.** 특정 커밋 기준 blame·이력은 바뀌지 않는다 → (저장소, 커밋 sha, 경로) 키로 디스크 캐시.
    작업트리 blame만 (HEAD sha, 파일 내용 해시) 키를 쓴다(읽은 내용을 `git blame --contents -`로 준다).
    blame 결과를 바꾸는 설정(`blame.ignoreRevsFile`, `.mailmap`, 줄 끝)도 키에 넣고, 얕은 클론은 캐시하지 않는다.
@@ -54,11 +55,12 @@ GitLens의 핵심 흐름(줄 → 커밋 → 부모 리비전 blame → 파일·�
 crates/plx-core/   gix·git CLI 래퍼, 출력 파서, 캐시, 그래프 레인 레이아웃, plx 인자 파서, 인스턴스 간 전달(로컬 소켓)
                    (UI 무관, 단위 테스트 필수)
 src-tauri/         Tauri 명령·채널, 단일 인스턴스·CLI 호출을 창·트레이에 연결
-scripts/           설치·확인 스크립트 (macOS shim, 앱 자동 확인 check-app.sh)
+scripts/           설치·확인 스크립트 (macOS shim, 앱 자동 확인 check-app.sh), 오픈 소스 라이선스 고지 생성
 .github/workflows/ CI: Windows·macOS·Linux에서 검사(포맷·clippy·테스트)와 앱 확인(릴리스 빌드 + check-app.sh)
 src/               React UI
 bench/             참조 저장소 준비 스크립트, git 측정 하네스(plx-bench), 앱 지연 측정, 측정 결과(results.md)
-fixtures/          테스트 저장소 생성 스크립트 (rename, 이동, merge, CRLF, 한글 경로·내용)
+fixtures/          테스트 저장소 생성 스크립트 (rename, 이동, merge, CRLF, 한글 경로·내용),
+                   git-ai가 노트를 쓴 저장소 번들과 `git-ai blame` 기대값(git-ai/)
 docs/              MILESTONES.md
 ```
 
@@ -71,6 +73,7 @@ docs/              MILESTONES.md
 - **플랫폼:** Windows(Git Bash)와 macOS 모두 1급 지원. 한쪽에서만 확인한 기능은 완료로 치지 않는다.
 - **읽기 전용:** 저장소를 바꾸는 git 명령은 호출하지 않는다. 유일한 예외는 사용자가 확인한 "가속 설정"(commit-graph 작성).
 - **파서 정확성:** git 출력 파서마다 fixtures 기반 골든 테스트(`git blame --porcelain` 등 git 결과와 비교)를 둔다.
+  외부 입력(git 출력, AI 노트, 디스크 캐시, CLI 인자, 검색어)을 읽는 파서는 퍼징 테스트(`tests/fuzz.rs`)에도 넣는다.
 - **라이선스:** 코드는 MIT OR Apache-2.0이다(`LICENSE-MIT`, `LICENSE-APACHE`). git처럼 GPL·LGPL인 프로젝트의 코드는
   다른 언어로 옮기지도 않는다: 동작은 문서와 그 도구의 출력(골든 테스트)으로 맞춘다. MIT·Apache 같은 허용 라이선스의
   코드를 옮기면 그 파일 맨 위에 원래 저작권 고지를 둔다(`plx_core::fuzzy`의 fzf). 새 의존성은 이 두 라이선스와 함께
@@ -84,11 +87,15 @@ docs/              MILESTONES.md
 - 코어 테스트: `cargo test -p plx-core` / 전체: `cargo test --workspace`
   (fixtures 결정성 테스트가 `fixtures/make-repos.sh`를 실행하므로 bash와 git이 필요하다. Windows는 Git for Windows의 bash, `PLX_BASH`로 지정 가능)
 - 테스트 저장소 만들기: `fixtures/make-repos.sh <출력 디렉터리>` → `history`, `encoding` 저장소 (어느 플랫폼에서든 같은 sha)
+- 오픈 소스 라이선스 고지: `npm run notices` → `public/third-party-notices.txt`(릴리스 빌드가 먼저 돌려 실행 파일에 넣는다.
+  앱에서는 명령 팔레트·도움말·첫 화면의 "오픈 소스 라이선스"로 본다. 개발 빌드에는 없다)
 - 앱 자동 확인(릴리스 빌드 후): `scripts/check-app.sh [실행 파일]` → 단일 인스턴스 전달·CLI 오류·동시 실행·분리 실행,
   blame이 끝까지 와서 거터를 그리는지(한글 경로 저장소 포함) 확인과 지연 측정.
   `PLX_CHECK_RECORD=<이름>`이면 지연 표를 `bench/results.md`에 넣는다. CI도 이 스크립트를 돌린다.
 - 앱 지연만 측정: `bench/app-latency.sh [실행 파일] [반복 횟수]` → 콜드 스타트, plx 호출 → 첫 페인트, blame 첫 줄 표시
 - git baseline: `bench/setup.sh`(참조 저장소 준비, 한 번) → `bench/run.sh [이름]`(측정 → `bench/results.md`)
+- gix-blame 다시 재기(gix를 올릴 때): `cargo run -p plx-bench --release --features gix-blame -- --repos bench/repos
+  --cases bench/cases-gix-blame.txt` → 결과는 `bench/results.md`의 "gix-blame 전환 검토"에 옮긴다
 
 ## 작업 방식
 - 적당한 작업 단위마다 PR을 만든다. 앞 PR이 아직 머지되지 않았으면 그 브랜치 위에 쌓고 PR 설명에 머지 순서를 적는다.
@@ -96,7 +103,8 @@ docs/              MILESTONES.md
   CI가 확인한 기능은 그 플랫폼에서 확인한 것으로 친다. 화면을 봐야 하는 확인(창 포커스, 닫기 = 숨기기, 트레이 등)은
   PR 설명의 "수동 확인"에 남기고, 사용자가 따라 할 단계는 `docs/MANUAL_CHECKS.md`에 모아 갱신한다.
 - 저장소가 공개라 표준 러너(Linux·Windows·macOS)는 Actions 사용 시간이 들지 않는다. 동시 실행 수에는 한도가 있어
-  (macOS 5개) 같은 브랜치의 이전 실행은 자동 취소되고, 문서(`*.md`, `docs/`)만 바뀐 푸시는 CI를 돌리지 않는다.
+  (macOS 5개) 같은 PR의 이전 실행은 자동 취소된다. 문서(`*.md`, `docs/`)만 바꾼 PR과 main 푸시는 CI를 돌리지 않는다.
+  PR은 PR 전체의 변경을 보므로, 코드가 든 PR에서는 문서만 고친 푸시도 CI를 다시 돌린다(돌던 실행은 취소된다).
 
 ## CLI 인터페이스 (목표)
 ```
@@ -109,7 +117,8 @@ plx show <rev>               커밋 상세
 `-h`/`--help`, `-V`/`--version`, `--`(뒤 인자를 파일 이름으로: `plx -- log`)도 받는다.
 blame은 작업트리에 있는 파일만 받고(컴파일러·grep 형식 `<file>:<line>:<col>`도 받는다, 열은 버린다), `log`는 삭제된
 경로도 받는다. 잘못된 인자, 저장소 밖의 대상, 없는 리비전(`plx show`)은 상주 인스턴스에 넘기지 않고 호출한 터미널에
-알린 뒤 종료 코드 2로 끝난다(저장소는 앱과 같은 방법으로 열어 본다). 인자도 터미널도 없이 앱으로 띄웠으면(Finder·Dock·
+알린 뒤 종료 코드 2로 끝난다(저장소는 앱과 같은 방법으로 열어 보되 저장소 밖의 시스템 설정은 읽지 않는다). 인자도
+터미널도 없이 앱으로 띄웠으면(Finder·Dock·
 시작 메뉴) 저장소가 아닌 곳이어도 뜨고 첫 화면 안내를 보인다.
 
 macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `scripts/install-macos-shim.sh [앱 경로] [설치 디렉터리]`.
@@ -123,9 +132,12 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
 환경 변수
 - `PLX_DETACH=0|1`: 분리 실행 끄기·강제 (개발 빌드는 기본적으로 분리하지 않는다. `tauri dev`가 자식 프로세스로 잡고 있어야 한다)
 - `PLX_T0`: 호출 시작 시각(epoch ms). 없으면 OS가 plx 프로세스를 만든 시각이 지연 측정 기준점이다.
-- `PLX_PERF=1`: 릴리스 빌드에서도 성능 HUD를 켠다(개발 빌드는 항상 켜짐. `` ` `` 키로 보이기·숨기기).
+- `PLX_PERF=1`: 릴리스 빌드에서도 성능 HUD를 켠다(개발 빌드는 항상 켜짐. 입력란 밖에서 `` ` `` 키로 보이기·숨기기).
   `PLX_PERF_LOG=<파일>`을 함께 주면 끝난 요청을 JSON 한 줄씩 기록한다(`bench/app-latency.sh`가 쓴다).
-- `PLX_CACHE_DIR=<디렉터리>`: blame 캐시 위치(기본: OS 캐시 위치의 `com.gembitious.parallax/blame`, 한도 512MB).
+- `PLX_TRACE=1`: `plx` 호출이 상주 인스턴스에 넘기기까지의 구간(인자 · 인자 검사 · 저장소 열기 · 인스턴스 자리 · 넘기기,
+  ms)을 표준 오류에 쓴다(측정용, `bench/app-latency.sh`가 쓴다).
+- `PLX_CACHE_DIR=<디렉터리>`: 결과 캐시(blame·히스토리·커밋 표) 위치. 그 아래 `results/`에 쓴다(기본: OS 캐시 위치의
+  `com.gembitious.parallax`, 한도 512MB).
   측정·자동 확인 스크립트는 임시 디렉터리를 줘서 사용자 캐시와 섞지 않는다.
 - `PLX_EDITOR`: `o`(에디터로 열기)가 띄울 에디터. 이름·경로(`code`, `zed`, `cursor`, `subl`, `idea` …, 줄 넘기는 법을
   안다) 또는 `{file}`·`{line}`·`{col}`을 넣은 명령 틀(`"my-editor --line {line} {file}"`). 없으면 `VISUAL`·`EDITOR`가
@@ -147,14 +159,14 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
 - 그래프: 어느 화면에서든 `G`는 그 커밋(blame은 커서 줄의 커밋)을 고른 그래프다. 그래프에서 `Enter` 커밋 상세,
   `y` sha 복사, `R` 원격 브랜치 모두 ↔ 로컬 브랜치와 upstream만, `/` 검색(메시지·작성자·sha, `path:경로`는 그 경로를
   바꾼 커밋), `n`/`N` 다음·이전 결과, `Esc` 강조 지우기.
-- 명령 팔레트: 어느 화면에서든 `:`·Ctrl+Shift+P(macOS ⌘⇧P). 그 화면에서 할 수 있는 일(키가 없는 그래프 범위·가속 설정,
-  성능 HUD 포함)을 이름·초성으로 찾아 `Enter`로 실행하고 옆에 단축키를 보인다.
+- 명령 팔레트: 어느 화면에서든 `:`(입력란 밖이면)·Ctrl+Shift+P(macOS ⌘⇧P). 그 화면에서 할 수 있는 일(키가 없는
+  그래프 범위·가속 설정, 성능 HUD 포함)을 이름·초성으로 찾아 `Enter`로 실행하고 옆에 단축키를 보인다.
 - 에디터로 열기 `o`: blame은 커서 줄, 커밋 상세는 고른 파일의 첫 바뀐 줄, 히스토리는 그 파일(라인 히스토리면 범위의
   첫 줄), 그래프는 작업트리 폴더. 리비전의 줄은 작업트리 파일의 줄로 옮기고, 그 뒤 이름이 바뀌었으면 새 이름을 연다.
 - blame의 `i`: 커서 줄의 커밋 카드를 고정해 보이고 다시 누르면 닫는다(마우스의 거터 클릭과 같다).
 - AI 출처: 저장소에 git-ai 노트(`refs/notes/ai`)가 있으면 blame 거터의 AI가 쓴 줄에 보라 줄과 `✦ 도구` 이름이 붙고,
   카드에 에이전트·모델·시킨 사람, 머리줄에 `✦ AI n줄`이 보인다. 따로 켜는 키는 없다.
-- 파일 찾기(Quick Open): 어느 화면에서든 `f`(입력란·코드 뷰 밖이면)·Ctrl+P(macOS ⌘P). 추적 파일을 퍼지 검색한다
+- 파일 찾기(Quick Open): 어느 화면에서든 `f`(입력란 밖이면)·Ctrl+P(macOS ⌘P). 추적 파일을 퍼지 검색한다
   (파일 이름 일치 먼저, 초성 `ㅍㅇ`, 공백으로 나눈 낱말은 모두 맞아야 한다, `파일:줄`이면 그 줄로). `↑`/`↓`·Ctrl+N/J/K로
   고르고 `Enter`는 작업트리 blame, `Shift+Enter`는 파일 히스토리. 빈 검색어는 최근 연 파일부터 보인다.
   작업트리에서 지운(아직 커밋하지 않은) 파일은 "지움" 표시이고 `Enter`는 HEAD 버전 blame이다.
@@ -175,8 +187,7 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
   rename 원본은 그 파일 하나만 git과 같은 기준의 유사도(`plx_core::similarity`, 50%)로 찾는다.
   gix의 rename 추적은 짝 수(추가×삭제)가 1,000을 넘으면 유사도 비교를 건너뛰어 파일을 많이 옮긴 커밋을 놓친다.
 - 2026-10-15: "가속 설정"은 히스토리 머리줄의 버튼을 눌러 확인한 뒤 `git commit-graph write --reachable --changed-paths`만
-  실행한다(`plx_core::commit_graph`). git 2.46 이상이면 `-c commitGraph.changedPathsVersion=2`로 필터 v2를 쓴다
-  (v1은 0x80 이상 바이트가 든 경로, 즉 한글 경로의 해시가 `char` 부호에 따라 달라진다). 저장소 설정은 바꾸지 않는다:
+  실행한다(`plx_core::commit_graph`). 필터 버전은 git에 맡긴다(2026-10-16 리뷰 수정). 저장소 설정은 바꾸지 않는다:
   MILESTONES 초안의 `commitGraph.changedPaths`는 git에 없는 설정이고, `--changed-paths`로 쓴 뒤의 commit-graph 쓰기
   (git gc 포함)는 필터를 유지한다. 상태는 commit-graph 파일 머리(청크 표, BDAT 버전)와 HEAD가 그래프에 있는지로 본다.
 - 2026-10-15: 커밋 그래프는 gix의 topo 워크 대신 시작점에서 닿는 DAG를 직접 읽어 git의 `--topo-order`와 같은
@@ -191,9 +202,12 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
   새 커밋을, 아니면 고른 커밋을 화면의 같은 자리에). 결과 캐시는 커밋 sha·HEAD·파일 내용을 열쇠로 써서
   따로 지울 것이 없다. 화면은 열기를 시작할 때 요청 대상으로 구독하고(다시 열다 실패해도, 예: 체크아웃으로 파일이
   사라져도 감시가 남는다), 구독을 끝낸 뒤 감시를 2초 더 둬 다시 연 화면이 그 변화 때의 지문을 이어받는다(다시 여는
-  사이의 변화를 새 지문에 묻지 않게). 라인 히스토리는 다시 열 때 줄 범위를 새 작업트리의 줄로 옮기고, 다른 화면 아래
-  숨은 그래프는 다시 보일 때 읽는다. 그래프 이름표가 다른 워크트리의 체크아웃에 달라지므로 `<공통>/worktrees`도
-  재귀로 보고(첫 `git worktree add`로 생기면 그때부터), 다른 워크트리의 HEAD를 지문에 넣어 참조 변화로 알린다.
+  사이의 변화를 새 지문에 묻지 않게). 그래서 열기 바로 전의 커밋(`git commit && plx log …`)이 화면이 열린 뒤에 알려질
+  수 있다. blame·히스토리는 알림의 HEAD가 화면이 읽은 HEAD(blame 메타의 `head`, 히스토리의 시작 커밋)와 같으면 다시 열지
+  않는다(2026-10-16, 커밋 직후 `plx log` 10번에 9번 한 번 더 열었다). 라인 히스토리는 다시 열 때 줄 범위를 새
+  작업트리의 줄로 옮기고, 다른 화면 아래 숨은 그래프는 다시 보일 때 읽는다. 그래프 이름표가 다른 워크트리의 체크아웃에
+  달라지므로 `<공통>/worktrees`도 재귀로 보고(첫 `git worktree add`로 생기면 그때부터), 다른 워크트리의 HEAD를 지문에
+  넣어 참조 변화로 알린다.
 - 2026-10-15: Quick Open의 퍼지 매칭은 크레이트(`nucleo-matcher` 0.3.1) 대신 직접 구현한다(`plx_core::fuzzy`).
   점수는 fzf v2(Smith-Waterman, 경계 보너스)와 같은 방식이고, VS Code처럼 낱말이 파일 이름에서 맞으면 경로에서만 맞는
   것보다 언제나 위다(이름 전체 > 확장자 뺀 이름 > 이름 앞부분 > 이름 안 > 경로). 이유: 한글 초성(`ㅍㅇ` → `파일`)과
@@ -211,8 +225,10 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
 - 2026-10-15: AI 출처(M5)는 git-ai가 커밋마다 붙이는 `refs/notes/ai` 노트(Git AI Standard v3.0.0, `authorship/3.0.0`)를
   읽어 blame에 겹친다(`plx_core::ai_notes`). 노트는 그 커밋 버전의 줄 번호라 `git-ai blame`과 같이 blame 블록의 원래 커밋·
   원래 경로·원래 줄로 찾고, 뒤 항목이 이기며 메타데이터에 없는 키는 건너뛴다(`s_…::t_…` 세션, `h_` 사람, 16자 옛
-  프롬프트는 다른 노트에서도 찾는다). 규칙은 git-ai 저장소의 표준 문서와 `get_line_attribution`을 읽어 맞췄다(git-ai를
-  빌드·실행하지는 않았다). 노트 트리는 gix로 직접 읽고(fanout 무관, git 스폰 없음) notes 참조가 바뀌면 다시 읽는다.
+  프롬프트는 다른 노트에서도 찾는다). 규칙은 git-ai 저장소의 표준 문서와 `get_line_attribution`을 읽어 맞췄다.
+  2026-10-18: git-ai 1.7.6과 1.3.4(옛 형식 노트)를 빌드해 그 테스트 도구로 저장소 20개(rename, cherry-pick, amend,
+  merge, 한글 경로 등을 두 형식으로)를 만들었고, 줄마다 에이전트가 1.7.6의 `git-ai blame --json`과 같음을 골든 테스트로
+  둔다(`fixtures/git-ai`). 노트 트리는 gix로 직접 읽고(fanout 무관, git 스폰 없음) notes 참조가 바뀌면 다시 읽는다.
   해석한 노트는 blob id로 기억해(git-ai는 커밋마다 참조를 옮기지만 그대로인 노트는 blob도 같다) 바뀐 노트만 다시 읽고,
   옛 프롬프트 표도 새 노트만 더한다(노트가 빠지거나 고쳐지면 처음부터 다시 모은다).
   아직 커밋하지 않은 줄의 AI 작업 상태(`.git/ai`)는 git-ai 내부 형식이라 보지 않는다.
@@ -233,13 +249,21 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
   디렉터리를 옮긴다(상대 경로로 준 `PLX_CACHE_DIR`·`PLX_PERF_LOG`는 먼저 절대 경로로). 요청을 보내고 응답을 받기는
   5초 한도다(Windows pipe에는 읽기 시간 제한이 없어 스레드로 기다린다). 터미널에 쓰는 문장의 제어 문자는 바꿔 쓴다.
   넘기기 전에 대상 저장소를 앱과 같은 `Repo::discover`로 열어 보고 실패는 터미널에 알린다(인자도 터미널도 없는 앱 실행은
-  예외: 알릴 곳이 없고 작업 디렉터리가 `/`라 뜨지 못하게 된다).
+  예외: 알릴 곳이 없고 작업 디렉터리가 `/`라 뜨지 못하게 된다). 이 확인은 저장소 밖의 시스템·git 설치 설정을 읽지
+  않는다(`Repo::discover_for_check`, 2026-10-16 측정 뒤): Windows에서는 시스템 설정의 자리를 gix가 git을 띄워 찾아
+  (`EXEPATH`가 없으면) plx 호출마다 30~50ms였다(CI의 PLX_TRACE: 저장소 열기 53.5ms, macOS·Linux 1ms 안). 저장소인지,
+  리비전이 있는지는 시스템 설정과 상관없다. 상주 앱은 프로세스마다 한 번이라 그대로 모두 읽는다.
 - 2026-10-16: 커밋 그래프는 orrery(gembitious/orrery)의 SVG 렌더링을 재사용하지 않고 캔버스로 그린다. orrery는 git 상태
   전이를 보여 주는 모형이라 커밋·선·이름표마다 SVG 요소를 만들고(커밋 수십 개), 선을 자식 → 부모 곡선 하나로 그려
   보이는 행만 잘라 그릴 수 없으며, 레인을 커밋 시각 순서(시뮬레이션 시계)로 정한다. 우리는 수십만 커밋을 git의 topo
   순서로 보이고, 레인을 행마다 반 칸 선으로 나눠 행 하나만 보고 그린다. 화면 위아래 1,000px(화면 높이까지)만 그리고
   행과 레인 캔버스를 스크롤 내용 안에 둬, 그 안의 스크롤은 브라우저가 옮기기만 한다(bench/results.md: 휠 프레임의
   약 2/3에 JS가 없다). HEAD가 브랜치에 붙었는지(detached면 `HEAD` 이름표)는 orrery처럼 구분해 보인다.
+  WebKit(macOS·Linux)에서는 레인 캔버스에 CPU 캔버스(`willReadFrequently`)를 청한다. macOS WebKit은 GPU 캔버스를 처음 쓸
+  때 준비하느라 앱이 뜬 뒤 처음 연 그래프가 CI에서 0.9~3.1초였다(그리기에 메인 스레드 0.16~0.38초, 그 뒤 화면까지
+  1.0~2.7초). CPU 캔버스로 0.27~0.56초다(프로세스에서 처음 그리는 0.18~0.38초는 남는다). 레인은 24개까지만 그려 CPU로
+  충분하고, Linux의 git/git 스크롤은 프레임 간격이 오히려 줄었다. Chromium(Windows)은 기본(GPU 캔버스)으로 둔다: CPU
+  캔버스로 빨라지지 않았다(CI 첫 그래프의 그린 뒤 화면까지 CPU 77·111ms, GPU 97·98·101ms, bench/results.md).
 - 2026-10-16: blame 파이프라인 리뷰 수정. 화면이 준 경로는 저장소 기준 경로 그대로 쓰고(`repo::FilePath::InRepo`),
   터미널에서 준 절대 경로만 실제 경로(심볼릭 링크·대소문자)로 푼다. 이유: 리비전의 경로를 오늘의 파일 시스템으로 풀면
   그 사이 대소문자만 바꾼 rename이나 심볼릭 링크로 바뀐 파일이 다른 파일이 된다. 작업트리 파일을 blob과 비교하거나 줄을
@@ -285,3 +309,55 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
   그만큼 붙은 짝만 다를 수 있다. 속도는 측정 잡음 안이다(bench/results.md). 옛 커밋과 PR 기록에는 옮긴 코드가 남는다
   (PR은 지울 수 없다). fzf(MIT)를 따른 퍼지 점수는 fzf의 고지를 `plx_core::fuzzy` 맨 위에 둔다. 바이너리를 배포하기 전에
   의존성의 저작권 고지를 앱에 묶고 Tauri 기본 아이콘을 바꾼다(docs/MILESTONES.md "리스크와 대응").
+- 2026-10-16: 바이너리에 넣는 제3자 저작권 고지는 `scripts/third-party-notices.mjs`가 릴리스 빌드마다 만든다(`tauri build`의
+  beforeBuildCommand. cargo-about 같은 도구를 더하지 않는다: Node와 `cargo metadata`로 충분하다). 실행 파일에 링크되는
+  크레이트(Windows·macOS·Linux × x86_64·aarch64의 합, 빌드·테스트 의존성 제외)와 dev가 아닌 npm 패키지마다 패키지에 든
+  라이선스·NOTICE 파일을 그대로 싣고, 같은 문구는 한 번만 싣는다. 파일이 없는 패키지는 같은 저장소·같은 라이선스 표기인
+  다른 패키지의 파일, 아니면 선언한 라이선스로 채운다(MIT는 작성자로 저작권 줄을 만들고, Apache-2.0·MPL-2.0처럼 저작권
+  줄이 없는 것은 표준 문구). 그래도 못 채우면 빌드를 실패시킨다. 결과(크레이트 402개·npm 57개, 문구 223개, 732KB)는
+  Vite가 dist로 옮겨 실행 파일에 묻히고, 앱의 "오픈 소스 라이선스" 창이 읽는다. 커밋하지 않는다(의존성을 바꿀 때 따로
+  갱신할 것이 없다). 창은 App이 그리고 열려 있는 동안 키를 모두 먹는다(화면들은 window에서 키를 받는다).
+- 2026-10-16: 가속 설정·결과 캐시 리뷰 수정. 필터 v2를 강제하지 않는다(`-c commitGraph.changedPathsVersion=2`를 뺐다).
+  git 기본값대로 그래프에 있는 버전, 없으면 v1이다. 이유: git 2.39~2.45는 v2 그래프를 다시 쓰다(gc, fetch.writeCommitGraph)
+  SIGSEGV로 죽는다. Finder로 띄운 macOS 앱의 `/usr/bin/git`(Apple Git 2.39), Ubuntu 24.04(2.43)처럼 흔한 git이고 앱이
+  쓰는 git도 띄운 방법에 따라 다르다. v1의 한글 경로 해시는 `char`가 부호 있는 플랫폼(x86-64, Windows·macOS의 ARM64)끼리
+  같고, Linux ARM64와 .git을 나눠 쓸 때만 어긋난다(확인 창에 알린다). 그래프에 v2가 있는데 git이 2.46보다 낮으면 쓰지 않는다.
+  상태는 git이 보는 대로 본다: 객체 디렉터리마다(저장소, alternates) 단일 파일을 사슬보다 먼저, 층마다 BDAT 머리(버전,
+  해시 수, 비트)가 맨 위 층과 같아야 필터로 친다. git이 commit-graph를 쓰지 않는 저장소(얕은 클론, grafts, `git replace`,
+  `core.commitGraph=false`)와 필터를 읽지 않는 설정, 트리를 받지 않은 부분 클론(`--filter=tree:0`: 필터를 만들려면 커밋마다
+  트리를 받아 온다)은 까닭을 보이고 권하지 않는다. 쓰기는 `GIT_NO_LAZY_FETCH=1`로 하고, git이 성공으로 끝나도 필터가 없거나
+  파일이 그대로면(Windows에서 다른 프로그램이 연 파일) 실패로 알린다. 한 저장소에는 한 번에 하나만 쓰고(화면 둘에서
+  눌러도), 상태는 쓰기 시작·끝과 창으로 돌아올 때 다시 읽는다. HEAD가 그래프에 없어도(새 커밋, 브랜치에서 닿지 않는
+  detached HEAD) 가속됨으로 본다(나머지는 필터를 쓴다. 다시 쓰기는 팔레트로). 결과 캐시: 파일·라인 히스토리 열쇠에 mailmap
+  (`%aN`)과 `-L`의 diff·rename 설정을 넣고, `git replace`·grafts가 있으면 얕은 클론처럼 넣지 않는다. 커밋 표(`.bin`)는 값의
+  FNV 해시를 머리에 둬 끝이 0으로 채워진 파일을 버리고, 쓰기에 실패하면 임시 파일을 지우며, 한도 정리는 따로 스레드에서 한다.
+- 2026-10-16: 화면 공통 동작 리뷰 수정. 작업트리 blame·HEAD부터의 히스토리를 다시 열 때(화면을 새로 만든다) 보이는
+  화면에 창(도움말·워크트리·Quick Open·팔레트·고정 카드·가속 설정 확인)이나 검색 칸이 열려 있으면 닫을 때까지 미루고(머리줄에
+  `바뀜`), 검색어는 새 화면으로 넘긴다(`n`/`N`이 이어서 찾는다). 이유: 에이전트가 파일을 저장할 때마다 그 창과 치던
+  글자가 사라지고 남은 글자가 화면 키가 됐다(`o`가 에디터를 띄우고 `q`가 창을 숨겼다). 그래프처럼 제자리에서 다시
+  읽으려면 blame의 에디터·거터·AI 출처를 새로 짜야 해 미루기를 골랐다. 숨은 화면은 그대로 바로 다시 연다. 라이선스
+  창이 떠 있는 동안의 다시 열기도 닫을 때까지 미루고, 그사이 늦게 온 이동은 버린다. 늦게 온 `<`·`>`·`,`의 답은
+  그사이 창을 열었으면 버리고, 화면이 숨을 때는 그 화면의 창을 닫는다(숨은 화면에 남은 창은 돌아왔을 때 포커스 없이
+  떠 있었다).
+- 2026-10-16: 콜드 스타트 측정(bench/results.md, CI 세 플랫폼과 linux-container). WebView를 만드는 구간이 가장 크다(Windows
+  0.43초, macOS CI VM 2.1초, Linux 0.25초)라 앱이 줄일 수 있는 것부터 고쳤다. blame은 git을 따로 스레드에서 띄우고 내용을
+  먼저 보낸다(전에는 git 프로세스를 만든 뒤 내용을 보냈다: CI의 macOS에서 첫 git 실행이 0.9초, Windows 60ms). 상주 앱은
+  뜰 때 WebView를 만드는 동안 git을 한 번 띄워 둔다(`plx_core::git::warm_up`, 그 버전을 기억해 가속 설정이 쓴다).
+  JS·첫 렌더 구간(macOS CI 0.53초)은 나눠 재 보니(linux-container) 묶음을 읽고 실행하는 것은 절반 남짓이고 빈 첫 화면 렌더와
+  차례로 도는 시작 IPC 셋(그중 요청 듣기 37ms)이 나머지였다. 그래서 시작 IPC를 JS 묶음 맨 앞(`src/boot.ts`)에서 함께 보내
+  모듈을 실행하는 동안 오가게 하고, 첫 렌더는 답을 받은 뒤 요청한 화면으로 바로 한다. 듣기 전에 온 요청은 듣기 시작한 뒤
+  current_request를 한 번 더 물어 받는다. 화면별로 나눠 불러오기는 blame 화면이 CodeMirror 대부분을 써서 덜 수 있는 것이
+  첫 묶음의 12% 남짓이라 하지 않았다.
+- 2026-10-18: gix-blame 전환 검토. blame은 git CLI를 그대로 쓰고 gix-blame은 실험 플래그로도 앱에 넣지 않는다.
+  gix 0.89(gix-blame 0.19)를 참조 저장소의 blame 대상 네 파일에서 git과 나란히 쟀다(bench/results.md,
+  `bench/cases-gix-blame.txt`). 결과를 한꺼번에 내 첫 줄이 0.85~7.2초 뒤다(git `--incremental`은 첫 블록 10~20ms).
+  Bloom 필터를 읽지 않아 전체 시간도 git(Bloom 있음)의 1.9~4.2배다. 줄의 0.1~0.9%는 git과 다른 커밋을 가리킨다.
+  빈 줄·`}`·되풀이된 주석처럼 같은 내용의 줄을 어느 변경에 맞추느냐(slider)가 git의 xdiff와 달라서다.
+  fixtures 18개 파일은 모두 같았다. 첫 줄 예산(git 첫 출력 + 30ms)과 골든 테스트를 지킬 수 없다.
+  측정 항목은 plx-bench의 `gix-blame`(`--features gix-blame`, 앱·CI 빌드에는 들어가지 않는다)으로 남겨 gix를 올리면 다시 잰다.
+- 2026-10-18: 요청 하나의 패닉은 그 요청의 오류로 끝낸다(`plx_core::requests::catch`). 패닉해도 프로세스는 살지만
+  (`panic = "abort"`를 뺐다) 흘려보내는 요청(blame·히스토리·라인 히스토리·그래프)은 끝 이벤트가 오지 않아 화면이 "읽는 중"에
+  멈췄다. 이제 "plx 내부 오류(버그): …"로 끝나고 요청 등록부도 지운다. 앱이 끝날 때까지 두는 저장소별 캐시 가운데 잠금을 쥔 채
+  파일을 읽는 둘(Quick Open 파일 목록, AI 노트)은 패닉이 지나간 잠금을 비우고 다시 쓴다(`requests::lock_or_reset`). 전에는
+  앱을 다시 띄울 때까지 그 저장소의 검색·AI 표시가 모두 실패했다. 외부 입력을 읽는 파서 여덟은 고정 시드 변이 퍼징으로 본다
+  (`tests/fuzz.rs`, CI는 대상마다 3,000번. 대상마다 30만~100만 번 돌려 본 것도 패닉이 없었다).
