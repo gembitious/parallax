@@ -20,6 +20,8 @@
   --search-match: #fff8c5;
   --search-current: #f2cc60;
   --blame-active: #0969da0f;
+  --diff-add: #dafbe1;
+  --diff-del: #ffebe9;
 
   /* 커밋 나이 히트맵: 0이 가장 오래됨(차가움), 7이 가장 최근(뜨거움) */
   --heat-0: #dbe4ef;
@@ -31,6 +33,18 @@
   --heat-6: #ec8a3a;
   --heat-7: #e0640a;
   --uncommitted: #1a7f37;
+  /* AI가 쓴 줄(git-ai 노트) */
+  --ai: #8250df;
+
+  /* 그래프 레인 색(plx-core graph::COLORS = 8) */
+  --lane-0: #0969da;
+  --lane-1: #1a7f37;
+  --lane-2: #bc4c00;
+  --lane-3: #8250df;
+  --lane-4: #cf222e;
+  --lane-5: #0e7490;
+  --lane-6: #9a6700;
+  --lane-7: #bf3989;
 
   --syn-keyword: #cf222e;
   --syn-string: #0a3069;
@@ -65,6 +79,8 @@
     --search-match: #bb800926;
     --search-current: #bb800966;
     --blame-active: #4493f814;
+    --diff-add: #2ea04326;
+    --diff-del: #f8514926;
 
     --heat-0: #1e2a3a;
     --heat-1: #24426a;
@@ -75,6 +91,16 @@
     --heat-6: #cc7424;
     --heat-7: #f0883e;
     --uncommitted: #3fb950;
+    --ai: #a371f7;
+
+    --lane-0: #4493f8;
+    --lane-1: #3fb950;
+    --lane-2: #f0883e;
+    --lane-3: #a371f7;
+    --lane-4: #f85149;
+    --lane-5: #39c5cf;
+    --lane-6: #d29922;
+    --lane-7: #db61a2;
 
     --syn-keyword: #ff7b72;
     --syn-string: #a5d6ff;
@@ -357,6 +383,401 @@ button.link {
   text-align: right;
 }
 
+/* ---------------------------------------------------------------- 커밋 상세 */
+
+.commit {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.commit-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+.commit-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: baseline;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.commit-body {
+  flex-basis: 100%;
+  max-height: 20vh;
+  overflow: auto;
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.commit-main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.file-list {
+  position: relative;
+  flex: 0 0 auto;
+  width: min(360px, 35vw);
+  overflow: auto;
+  border-right: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.file-rows {
+  position: relative;
+}
+
+/* 행 높이는 CommitView의 ROW_HEIGHT(22px)와 같다. 보이는 행만 그린다. */
+.file-row {
+  position: absolute;
+  right: 0;
+  left: 0;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 0 10px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.file-row.selected {
+  background: var(--selection);
+}
+
+.file-empty {
+  margin: 0;
+  padding: 4px 10px;
+}
+
+.file-name-cell {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+}
+
+.file-base {
+  flex-shrink: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-name-cell .file-dir {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+}
+
+.file-stat {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.status {
+  flex-shrink: 0;
+  width: 1.4em;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  color: var(--bg);
+  background: var(--muted);
+}
+
+.status-added {
+  background: var(--uncommitted);
+}
+
+.status-deleted {
+  background: var(--danger);
+}
+
+.status-modified {
+  background: var(--accent);
+}
+
+.status-renamed,
+.status-copied {
+  background: var(--syn-function);
+}
+
+.added {
+  color: var(--uncommitted);
+}
+
+.deleted {
+  color: var(--danger);
+}
+
+.diff-pane {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* diff에 보이지 않는 바뀜(모드, 줄 끝, 끝 개행, BOM, 인코딩) */
+.diff-notes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.diff-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.diff-editor {
+  position: absolute;
+  inset: 0;
+}
+
+.diff-editor .cm-mergeView {
+  height: 100%;
+  overflow: auto;
+}
+
+.diff-editor .cm-mergeView .cm-editor {
+  height: auto;
+}
+
+/* ---------------------------------------------------------------- 파일 히스토리 */
+
+.history {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.history-search {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.history-search input {
+  width: 100%;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+
+.history-list {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  outline: none;
+}
+
+.history-rows {
+  position: relative;
+}
+
+/* 행 높이는 HistoryView의 ROW_HEIGHT(24px)와 같다. */
+.history-row {
+  position: absolute;
+  right: 0;
+  left: 0;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 0 12px;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.history-row.match {
+  background: var(--search-match);
+}
+
+.history-row.selected {
+  background: var(--selection);
+}
+
+.history-sha {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.history-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.history-path {
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 35%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--syn-function);
+  font-size: 11px;
+}
+
+.history-author {
+  flex-shrink: 0;
+  width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+}
+
+.history-time {
+  flex-shrink: 0;
+  width: 64px;
+  color: var(--muted);
+  text-align: right;
+}
+
+.status-merge {
+  background: transparent;
+  color: var(--muted);
+}
+
+.line-history .history-list {
+  flex: 1 1 50%;
+}
+
+.history-hunks {
+  flex: 1 1 50%;
+  min-height: 0;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.history-hunks > p {
+  padding: 12px;
+}
+
+.hunk {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  line-height: 20px;
+}
+
+.hunk-header {
+  padding: 0 8px;
+  background: var(--panel);
+  color: var(--syn-meta);
+}
+
+.hunk td.ln {
+  width: 1%;
+  padding: 0 8px;
+  color: var(--muted);
+  text-align: right;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.hunk td.code {
+  padding: 0 8px;
+  white-space: pre;
+}
+
+.hunk tr.add {
+  background: var(--diff-add);
+}
+
+.hunk tr.del {
+  background: var(--diff-del);
+}
+
+.hunk tr.note td.code {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.history-detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: baseline;
+  padding: 4px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 12px;
+}
+
+button.toggle {
+  flex-shrink: 0;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+button.toggle.warn {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+button.toggle.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.help.confirm {
+  max-width: 560px;
+  font-size: 12px;
+}
+
+.help.confirm pre {
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--panel);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.help.confirm ul {
+  padding-left: 18px;
+}
+
+.confirm-buttons {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.confirm-buttons button.toggle {
+  padding: 2px 12px;
+  font-size: 12px;
+}
+
 /* ---------------------------------------------------------------- 카드·도움말·알림 */
 
 .card {
@@ -450,6 +871,36 @@ button.link {
   border-radius: 8px;
   background: var(--bg);
   box-shadow: var(--shadow);
+}
+
+.help-footer {
+  margin: 10px 0 0;
+  font-size: 12px;
+}
+
+/* 오픈 소스 라이선스: 거의 화면 전체, 글만 스크롤한다 */
+.help.notices {
+  display: flex;
+  flex-direction: column;
+  width: min(960px, calc(100vw - 32px));
+  height: calc(100vh - 32px);
+  overflow: hidden;
+}
+
+.notices-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  outline: none;
+}
+
+.notices-body pre {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .help h2 {
@@ -570,4 +1021,291 @@ kbd {
 
 .hud-failed .hud-label {
   text-decoration: line-through;
+}
+
+/* ---------------------------------------------------------------- 커밋 그래프 */
+
+.graph {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.graph-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.graph-list {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  outline: none;
+}
+
+.graph-rows {
+  position: relative;
+}
+
+/* 행 높이는 graph/draw.ts의 ROW_HEIGHT(24px)와 같다. 왼쪽 여백(레인 칸)은 행마다 준다. */
+.graph-row {
+  position: absolute;
+  right: 0;
+  left: 0;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding-right: 12px;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.graph-row.match {
+  background: var(--search-match);
+}
+
+.graph-row.selected {
+  background: var(--selection);
+}
+
+.graph-search {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.graph-search input {
+  flex: 1;
+}
+
+.search-status {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.search-status:empty {
+  display: none;
+}
+
+/* 레인은 목록 위에 겹친 캔버스 하나에 그린다(클릭은 목록이 받는다). */
+.graph-lanes {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+.label {
+  flex-shrink: 0;
+  max-width: 200px;
+  overflow: hidden;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+}
+
+.label-branch {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.label-branch.current,
+.label-head {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+}
+
+.label-tag {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.label-more {
+  border-color: transparent;
+}
+
+.segmented {
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 2px;
+}
+
+/* ---------------------------------------------------------------- 워크트리 고르기 */
+
+.picker {
+  width: min(760px, calc(100vw - 32px));
+  outline: none;
+}
+
+.picker-list {
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.picker-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  align-items: baseline;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: default;
+}
+
+.picker-item.selected {
+  background: var(--selection);
+}
+
+.picker-item.missing {
+  opacity: 0.55;
+}
+
+.picker-name {
+  font-weight: 600;
+}
+
+.picker-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-path {
+  flex-basis: 100%;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 다른 워크트리가 체크아웃한 브랜치·HEAD */
+.label-worktree {
+  border-style: dashed;
+}
+
+.label-wt {
+  margin-left: 4px;
+  opacity: 0.75;
+  font-weight: 400;
+}
+
+/* Quick Open(파일 찾기): 위쪽에 띄워 결과 수가 바뀌어도 입력 칸이 제자리에 있게 한다. */
+.overlay.top {
+  align-items: flex-start;
+  padding-top: 12vh;
+}
+
+.quick-open {
+  display: flex;
+  flex-direction: column;
+  max-height: min(70vh, 640px);
+  overflow: hidden;
+}
+
+.quick-open-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.quick-open-bar input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 14px;
+}
+
+.quick-open-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.quick-open-item {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.quick-open-item.selected {
+  background: var(--selection);
+}
+
+/* 이름이 줄보다 길면 이름도 줄인다(디렉터리가 먼저 사라진다). */
+.quick-open-name {
+  flex-shrink: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 작업트리에서 지운 파일 */
+.quick-open-item.missing .quick-open-name {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.quick-open-dir {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+
+mark.quick-open-hit {
+  background: none;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* 명령 팔레트: 단축키는 줄 끝에 */
+.palette-item .palette-keys {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 11px;
+}
+
+/* AI가 쓴 줄(git-ai 노트): 나이 막대 옆에 보라 줄, 작성자 자리에 도구 이름 */
+.cm-blame-line.ai {
+  box-shadow: inset 3px 0 0 var(--ai);
+}
+
+.cm-blame-line.ai .cm-blame-author {
+  color: var(--ai);
+}
+
+.badge.ai {
+  border-color: var(--ai);
+  color: var(--ai);
+}
+
+.card-ai .ai-tool {
+  color: var(--ai);
+  font-weight: 600;
 }

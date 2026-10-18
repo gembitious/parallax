@@ -2,6 +2,7 @@
 // blame 결과에 든 정보는 바로 보여 주고, 전체 메시지·변경 파일 수는 commit_info로 받아 채운다.
 import { useLayoutEffect, useRef, useState } from "react";
 import { formatDate, isUncommitted, parseTz, relativeTime, shortSha } from "./format";
+import type { AiAuthor } from "./ai";
 import type { BlameBlock, BlameCommit, CommitInfo } from "./types";
 
 export type InfoState = CommitInfo | "loading" | { error: string } | undefined;
@@ -15,7 +16,11 @@ type Props = {
   anchor: DOMRect;
   pinned: boolean;
   nowMs: number;
+  /** 이 줄을 쓴 AI 에이전트·사람(git-ai 노트). 노트가 없으면 null */
+  ai?: AiAuthor | null;
   onCopy(sha: string): void;
+  /** 커밋 상세로 */
+  onOpen(): void;
   onClose(): void;
   onPointerInside(inside: boolean): void;
 };
@@ -23,7 +28,20 @@ type Props = {
 const GAP = 6;
 const MARGIN = 8;
 
-export function CommitCard({ commit, block, info, path, anchor, pinned, nowMs, onCopy, onClose, onPointerInside }: Props) {
+export function CommitCard({
+  commit,
+  block,
+  info,
+  path,
+  anchor,
+  pinned,
+  nowMs,
+  ai = null,
+  onCopy,
+  onOpen,
+  onClose,
+  onPointerInside,
+}: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: anchor.right + GAP, top: anchor.top });
 
@@ -88,11 +106,15 @@ export function CommitCard({ commit, block, info, path, anchor, pinned, nowMs, o
             </dd>
           </>
         )}
+        {ai && <AiRow ai={ai} />}
         <dt>sha</dt>
         <dd>
           <code>{shortSha(block.sha)}</code>{" "}
           <button type="button" className="link" onClick={() => onCopy(block.sha)}>
             복사 (y)
+          </button>{" "}
+          <button type="button" className="link" onClick={onOpen}>
+            상세 (Enter)
           </button>
         </dd>
         <dt>파일</dt>
@@ -124,5 +146,39 @@ export function CommitCard({ commit, block, info, path, anchor, pinned, nowMs, o
         </button>
       )}
     </div>
+  );
+}
+
+/** git-ai 노트의 이 줄 작성자 */
+function AiRow({ ai }: { ai: AiAuthor }) {
+  if (ai.kind === "human") {
+    return (
+      <>
+        <dt>사람</dt>
+        <dd>
+          {ai.author} <span className="muted">(git-ai가 사람이 친 것으로 봄)</span>
+        </dd>
+      </>
+    );
+  }
+  return (
+    <>
+      <dt>AI</dt>
+      <dd className="card-ai">
+        <span className="ai-tool">✦ {ai.tool || "AI"}</span>
+        {ai.model && <span className="muted"> · {ai.model}</span>}
+        {ai.human && <div>시킨 사람 {ai.human}</div>}
+        {ai.stats && (
+          <div className="muted">
+            더함 {ai.stats.additions} · 지움 {ai.stats.deletions} · 받아들임 {ai.stats.accepted}
+            {ai.stats.overridden > 0 && <> · 사람이 고침 {ai.stats.overridden}</>}
+          </div>
+        )}
+        {ai.attributes.length > 0 && (
+          <div className="muted">{ai.attributes.map(([k, v]) => `${k}=${v}`).join(" · ")}</div>
+        )}
+        {ai.messagesUrl && <div className="muted mono">{ai.messagesUrl}</div>}
+      </dd>
+    </>
   );
 }

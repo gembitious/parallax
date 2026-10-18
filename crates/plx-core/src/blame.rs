@@ -13,16 +13,14 @@
 
 use std::collections::HashSet;
 use std::fmt;
-use std::io::{self, Read};
+use std::io;
 use std::path::Path;
-use std::process::{Child, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::git;
+use crate::git::{self, StreamError};
 
 /// 블록이 가리키는 커밋. 같은 커밋은 처음 한 번만 나온다.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -265,39 +263,12 @@ pub struct Stats {
 }
 
 /// 실행 중인 blame. 다른 스레드에서 [`Canceller`]로 멈출 수 있다.
-/// 끝까지 읽지 않고 버리면 git을 끝내고 거둔다(상주 프로세스에 좀비가 쌓이지 않게).
+/// 끝까지 읽지 않고 버리면 git을 끝내고 거둔다([`git::Streaming`]).
 pub struct Blame {
-    child: Arc<Mutex<Child>>,
-    cancelled: Arc<AtomicBool>,
-    stdout: std::process::ChildStdout,
-    stderr: Option<std::thread::JoinHandle<String>>,
-    started: Instant,
-    spawn_ms: f64,
+    git: git::Streaming,
 }
 
-impl Drop for Blame {
-    fn drop(&mut self) {
-        let mut child = self.child.lock().unwrap_or_else(|e| e.into_inner());
-        if !matches!(child.try_wait(), Ok(Some(_))) {
-            let _ = child.kill();
-        }
-        let _ = child.wait();
-    }
-}
-
-#[derive(Clone)]
-pub struct Canceller {
-    child: Arc<Mutex<Child>>,
-    cancelled: Arc<AtomicBool>,
-}
-
-impl Canceller {
-    /// git을 끝낸다. 읽던 쪽은 [`BlameError::Cancelled`]로 끝난다.
-    pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
-        let _ = self.child.lock().unwrap().kill();
-    }
-}
+pub use crate::git::Canceller;
 
 #[derive(Debug)]
 pub enum BlameError {
@@ -306,6 +277,16 @@ pub enum BlameError {
     Parse(ParseError),
     /// git이 실패했다(경로가 이력에 없음 등). 표준 오류를 담는다.
     Git(String),
+}
+
+impl From<StreamError> for BlameError {
+    fn from(e: StreamError) -> Self {
+        match e {
+            StreamError::Cancelled => BlameError::Cancelled,
+            StreamError::Io(e) => BlameError::Io(e),
+            StreamError::Git(message) => BlameError::Git(message),
+        }
+    }
 }
 
 impl fmt::Display for BlameError {
@@ -324,66 +305,114 @@ impl std::error::Error for BlameError {}
 /// 첫 블록 뒤로는 이 간격마다 모아서 보낸다(화면 갱신 횟수를 줄인다).
 const FLUSH_INTERVAL: Duration = Duration::from_millis(16);
 
+/// 읽기 스레드가 넘기는 것
+enum Read {
+    Bytes(Vec<u8>),
+    /// git이 출력을 닫았다. 성공했는지와 함께.
+    End(Result<(), StreamError>),
+}
+
 impl Blame {
     /// `repo_dir`에서 `path`(저장소 기준, `/` 구분)를 blame한다. `rev`가 없으면 작업트리 파일이다.
     pub fn spawn(repo_dir: &Path, path: &str, rev: Option<&str>) -> io::Result<Blame> {
+        Self::spawn_inner(repo_dir, path, rev, None)
+    }
+
+    /// 작업트리 blame을 `contents`(작업트리에서 읽은 내용)로 한다(`--contents -`). 화면에 보이는 내용과 같은 것을
+    /// blame하므로 읽은 뒤 파일이 바뀌어도 줄이 어긋나지 않는다. git은 작업트리 파일처럼 clean 변환(줄 끝 등)을 한다.
+    pub fn spawn_contents(repo_dir: &Path, path: &str, contents: Vec<u8>) -> io::Result<Blame> {
+        Self::spawn_inner(repo_dir, path, None, Some(contents))
+    }
+
+    fn spawn_inner(
+        repo_dir: &Path,
+        path: &str,
+        rev: Option<&str>,
+        contents: Option<Vec<u8>>,
+    ) -> io::Result<Blame> {
         let mut command = git::command(repo_dir);
         command.args(["blame", "--incremental"]);
         if let Some(rev) = rev {
             command.arg(rev);
         }
+        if contents.is_some() {
+            command.args(["--contents", "-"]);
+        }
         command.arg("--").arg(path);
-        command.stdout(Stdio::piped()).stderr(Stdio::piped());
-
-        let started = Instant::now();
-        let mut child = command.spawn()?;
-        let spawn_ms = started.elapsed().as_secs_f64() * 1000.0;
-        let stdout = child.stdout.take().expect("stdout");
-        let mut stderr = child.stderr.take().expect("stderr");
-        let stderr = std::thread::spawn(move || {
-            let mut text = String::new();
-            let _ = stderr.read_to_string(&mut text);
-            text
-        });
         Ok(Blame {
-            child: Arc::new(Mutex::new(child)),
-            cancelled: Arc::new(AtomicBool::new(false)),
-            stdout,
-            stderr: Some(stderr),
-            started,
-            spawn_ms,
+            git: git::Streaming::spawn_with_input(command, "git blame", contents)?,
         })
     }
 
     pub fn canceller(&self) -> Canceller {
-        Canceller {
-            child: self.child.clone(),
-            cancelled: self.cancelled.clone(),
-        }
+        self.git.canceller()
     }
 
     /// 끝까지 읽으며 묶음을 넘긴다. 첫 블록은 바로, 그다음부터는 16ms마다 모아서 넘긴다.
-    pub fn stream(mut self, mut on_chunk: impl FnMut(Chunk)) -> Result<Stats, BlameError> {
+    /// 읽기는 따로 스레드에서 한다: git이 다음 출력까지 오래 걸려도 이미 받은 블록은 16ms 안에 넘긴다.
+    pub fn stream(self, mut on_chunk: impl FnMut(Chunk)) -> Result<Stats, BlameError> {
+        let started = self.git.started();
         let ms = |since: Instant| since.elapsed().as_secs_f64() * 1000.0;
         let mut stats = Stats {
-            spawn_ms: self.spawn_ms,
+            spawn_ms: self.git.spawn_ms(),
             ..Stats::default()
+        };
+        let canceller = self.git.canceller();
+        let (tx, rx) = mpsc::sync_channel::<Read>(4);
+        let mut git = self.git;
+        // 받는 쪽이 먼저 끝나면(해석 오류) 보내기가 실패하고, git은 이 스레드가 버릴 때 끝내고 거둔다.
+        let reader = std::thread::spawn(move || {
+            loop {
+                let mut buf = vec![0u8; 64 * 1024];
+                let end = match git.read(&mut buf) {
+                    Ok(0) => git.finish(),
+                    Ok(n) => {
+                        buf.truncate(n);
+                        if tx.send(Read::Bytes(buf)).is_err() {
+                            return;
+                        }
+                        continue;
+                    }
+                    Err(e) => Err(e),
+                };
+                let _ = tx.send(Read::End(end));
+                return;
+            }
+        });
+        let fail = |error: BlameError| {
+            if canceller.abort() {
+                BlameError::Cancelled
+            } else {
+                error
+            }
         };
         let mut parser = IncrementalParser::new();
         let mut events = Vec::new();
         let mut chunk = Chunk::default();
         let mut last_flush = Instant::now();
-        let mut buf = vec![0u8; 64 * 1024];
-        loop {
-            let n = match self.stdout.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => n,
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                Err(e) => return Err(self.fail(BlameError::Io(e))),
+        let end = loop {
+            let read = if chunk.is_empty() {
+                rx.recv().map_err(|_| RecvTimeoutError::Disconnected)
+            } else {
+                rx.recv_timeout(FLUSH_INTERVAL.saturating_sub(last_flush.elapsed()))
             };
-            stats.first_byte_ms.get_or_insert_with(|| ms(self.started));
-            if let Err(e) = parser.push(&buf[..n], &mut events) {
-                return Err(self.fail(BlameError::Parse(e)));
+            let bytes = match read {
+                Ok(Read::Bytes(bytes)) => bytes,
+                Ok(Read::End(end)) => break end,
+                Err(RecvTimeoutError::Timeout) => {
+                    on_chunk(std::mem::take(&mut chunk));
+                    last_flush = Instant::now();
+                    continue;
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    break Err(StreamError::Io(io::Error::other(
+                        "git 출력을 읽던 스레드가 끝났다",
+                    )));
+                }
+            };
+            stats.first_byte_ms.get_or_insert_with(|| ms(started));
+            if let Err(e) = parser.push(&bytes, &mut events) {
+                return Err(fail(BlameError::Parse(e)));
             }
             for event in events.drain(..) {
                 match event {
@@ -399,55 +428,21 @@ impl Blame {
             }
             let first = stats.first_block_ms.is_none() && !chunk.blocks.is_empty();
             if first {
-                stats.first_block_ms = Some(ms(self.started));
+                stats.first_block_ms = Some(ms(started));
             }
             if !chunk.is_empty() && (first || last_flush.elapsed() >= FLUSH_INTERVAL) {
                 on_chunk(std::mem::take(&mut chunk));
                 last_flush = Instant::now();
             }
-        }
-        let status = self.child.lock().unwrap().wait().map_err(BlameError::Io)?;
-        let stderr = self
-            .stderr
-            .take()
-            .and_then(|thread| thread.join().ok())
-            .unwrap_or_default();
-        if self.cancelled.load(Ordering::SeqCst) {
-            return Err(BlameError::Cancelled);
-        }
-        if !status.success() {
-            return Err(BlameError::Git(git_error(&stderr, status)));
-        }
+        };
+        let _ = reader.join();
+        end?;
         parser.finish().map_err(BlameError::Parse)?;
         if !chunk.is_empty() {
             on_chunk(chunk);
         }
-        stats.total_ms = ms(self.started);
+        stats.total_ms = ms(started);
         Ok(stats)
-    }
-
-    fn fail(&self, error: BlameError) -> BlameError {
-        let mut child = self.child.lock().unwrap();
-        let _ = child.kill();
-        let _ = child.wait();
-        if self.cancelled.load(Ordering::SeqCst) {
-            BlameError::Cancelled
-        } else {
-            error
-        }
-    }
-}
-
-fn git_error(stderr: &str, status: std::process::ExitStatus) -> String {
-    let message = stderr
-        .lines()
-        .map(|l| l.trim_start_matches("fatal: ").trim())
-        .find(|l| !l.is_empty())
-        .unwrap_or("");
-    if message.is_empty() {
-        format!("git blame 실패({status})")
-    } else {
-        format!("git blame 실패: {message}")
     }
 }
 
@@ -564,33 +559,43 @@ filename a.rs
         assert!(parser.push(b"not a header\n", &mut out).is_err());
     }
 
+    /// 받은 블록은 git이 다음 출력을 낼 때까지 기다리지 않는다: 16ms 안에 넘긴다.
+    #[cfg(unix)]
+    #[test]
+    fn received_blocks_do_not_wait_for_more_output() {
+        let script = r#"
+b() { printf '%s %d %d 1\nauthor A\nauthor-mail <a>\nauthor-time 1\nauthor-tz +0000\ncommitter A\ncommitter-mail <a>\ncommitter-time 1\ncommitter-tz +0000\nsummary s\nfilename f\n' "$1" "$2" "$2"; }
+b 1111111111111111111111111111111111111111 1
+sleep 0.005
+b 2222222222222222222222222222222222222222 2
+sleep 1
+b 3333333333333333333333333333333333333333 3
+"#;
+        let mut command = std::process::Command::new("sh");
+        command.args(["-c", script]);
+        let blame = Blame {
+            git: git::Streaming::spawn(command, "fake blame").unwrap(),
+        };
+        let started = Instant::now();
+        let mut arrivals = Vec::new();
+        let stats = blame
+            .stream(|chunk| {
+                for block in chunk.blocks {
+                    arrivals.push((block.final_line, started.elapsed()));
+                }
+            })
+            .unwrap();
+        assert_eq!(stats.blocks, 3);
+        let second = arrivals.iter().find(|(line, _)| *line == 2).unwrap().1;
+        assert!(
+            second < Duration::from_millis(500),
+            "5ms에 나온 블록이 {second:?}에 왔다: {arrivals:?}"
+        );
+    }
+
     #[test]
     fn uncommitted_sha() {
         assert!(is_uncommitted("0000000000000000000000000000000000000000"));
         assert!(!is_uncommitted("1000000000000000000000000000000000000000"));
-    }
-
-    /// 읽지 않고 버린 blame의 git 프로세스를 거둔다. 거두지 않으면 waitpid가 아직 기다릴 자식을 찾는다.
-    #[cfg(unix)]
-    #[test]
-    fn dropping_reaps_the_child() {
-        // 이 crate 디렉터리(저장소가 아니어도 된다: git이 실패해도 프로세스는 뜬다).
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-        for cancel_first in [false, true] {
-            let blame = Blame::spawn(dir, "Cargo.toml", None).unwrap();
-            let pid = blame.child.lock().unwrap().id() as libc::pid_t;
-            if cancel_first {
-                blame.canceller().cancel();
-            }
-            drop(blame);
-            // SAFETY: 이 프로세스의 자식 pid에 대한 waitpid. WNOHANG이라 막히지 않는다.
-            let r = unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) };
-            let errno = io::Error::last_os_error().raw_os_error();
-            assert_eq!(
-                (r, errno),
-                (-1, Some(libc::ECHILD)),
-                "이미 거둔 자식이어야 한다"
-            );
-        }
     }
 }
