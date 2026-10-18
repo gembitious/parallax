@@ -71,6 +71,10 @@ jobs:
       - name: 프런트 타입 검사·빌드
         run: npm run build
 
+      - name: 프런트 단위 테스트
+        if: runner.os == 'Linux'
+        run: npm test
+
       - name: 포맷
         if: runner.os == 'Linux'
         run: cargo fmt --all -- --check
@@ -92,8 +96,9 @@ jobs:
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # 테스트 바이너리 하나가 실패해도 나머지를 돌린다(실패한 플랫폼의 다른 실패를 한 번에 본다).
       - name: 테스트
-        run: cargo test --workspace
+        run: cargo test --workspace --no-fail-fast
         env:
           # macOS는 기본 bash 3.2로 fixtures 스크립트를 돌려 호환성을 함께 확인한다.
           PLX_BASH: ${{ runner.os == 'macOS' && '/bin/bash' || '' }}
@@ -114,7 +119,10 @@ jobs:
       run:
         shell: bash
     steps:
+      # 앱 확인은 이 저장소의 이력으로 blame·캐시를 본다. 얕은 클론(기본 깊이 1)은 결과를 캐시하지 않는다.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Linux 시스템 라이브러리
         if: runner.os == 'Linux'
@@ -138,6 +146,15 @@ jobs:
       # macOS는 shim이 가리킬 실제 앱 번들(.app)을 만든다. 나머지는 실행 파일만.
       - name: 릴리스 빌드
         run: npm run tauri build -- ${{ runner.os == 'macOS' && '--bundles app' || '--no-bundle' }}
+
+      # 릴리스 빌드가 모은 오픈 소스 라이선스 고지(scripts/third-party-notices.mjs)가 실행 파일에 묻힐 dist에 있다.
+      - name: 오픈 소스 라이선스 고지
+        run: |
+          f=dist/third-party-notices.txt
+          test -s "$f"
+          grep -q '^Rust tauri 2\.' "$f"
+          grep -q '^npm react ' "$f"
+          head -4 "$f"
 
       - name: 앱 확인 (Linux, 가상 화면)
         if: runner.os == 'Linux'

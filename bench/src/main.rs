@@ -3,6 +3,9 @@
 //! 앱이 git을 띄우는 방식 그대로(`-c core.quotepath=false`, Windows는 `CREATE_NO_WINDOW`) 스폰해
 //! 첫 출력, 첫 N개 레코드, 전체 시간을 잰다. hyperfine 같은 도구는 전체 시간만 재므로 직접 잰다.
 //! 조건은 두 가지다: commit-graph 없음(`-c core.commitGraph=false`), commit-graph + changed-path Bloom 필터 있음.
+//! `plx-blame`·`plx-log`·`plx-graph`·`plx-files`는 git이 아니라 앱의 요청(`plx_core::blame_session`, `plx_core::history`,
+//! `plx_core::graph`, `plx_core::files`)을 그대로 돌려 우리 오버헤드를 잰다.
+//! `gix-blame`은 gix의 blame이다(실험, `--features gix-blame`). 표 아래에 줄마다 앱의 blame(git)과 같은지 적는다.
 //!
 //! 사용법: plx-bench --repos <디렉터리> --cases <파일> [--runs 5] [--warmup 1]
 //! 결과는 Markdown으로 표준 출력에 쓴다. bench/run.sh가 bench/results.md에 넣는다.
@@ -10,7 +13,15 @@
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
+use std::sync::{Arc, mpsc};
 use std::time::Instant;
+
+use plx_core::blame_session::{SessionEvent, Sessions};
+use plx_core::cache::DiskCache;
+use plx_core::files::FileLists;
+use plx_core::graph::{GraphEvent, GraphOptions, GraphScope, GraphSessions};
+use plx_core::history::{HistoryEvent, HistorySessions, LineRange};
+use plx_core::repo::RepoCache;
 
 struct Options {
     repos: PathBuf,
@@ -43,6 +54,30 @@ enum Kind {
     /// `git log --topo-order HEAD`: 그래프 첫 화면 100개까지.
     /// 브랜치 목록은 클론 시점마다 달라지므로 고정 태그(HEAD)의 이력만 잰다.
     Graph,
+    /// 앱의 작업트리 blame 요청: 저장소 찾기·git blame·파일 읽기·파싱·JSON 직렬화(채널로 보낼 모양).
+    /// 첫 출력은 내용(meta), 첫 N은 첫 묶음(거터 첫 줄), 전체는 끝(done) 시각이다. 저장소 캐시는 매번 비운다.
+    PlxBlame,
+    /// 앱의 커밋 상세: gix 트리 비교 + 파일별 줄 수(프로세스 없음). `show`(git CLI)와 비교한다.
+    /// 첫 출력 = 결과 전체, 출력 = 화면으로 보내는 JSON 양. 저장소는 매번 새로 연다.
+    PlxShow,
+    /// 앱의 파일 히스토리 요청: `git log -- <path>` 구간을 rename마다 이어 붙인다. `log`·`follow`와 비교한다.
+    /// 첫 출력은 meta, 첫 N은 50개째를 보낸 때다. 캐시는 쓰지 않는다.
+    PlxLog,
+    /// 앱의 라인 히스토리 요청(`git log -L` + hunk 해석). `line-log`와 비교한다. 대상은 `a,b:path`.
+    /// 첫 출력은 meta, 첫 N은 첫 커밋을 보낸 때다.
+    PlxLineLog,
+    /// 앱의 커밋 그래프(`plx_core::graph`): DAG 읽기 + 위상 정렬 + 레이아웃. `graph`와 비교한다.
+    /// 대상은 범위(`head`·`branches`·`all`, 클론마다 같은 것은 `head`뿐)이고 `+table`을 붙이면 앱 캐시의
+    /// 커밋 표를 미리 채워 둔다(commit-graph가 없을 때 두 번째 열기부터). 첫 출력은 meta, 첫 N은 첫 화면(100행).
+    PlxGraph,
+    /// 앱의 Quick Open(`plx_core::files`): 인덱스의 추적 파일 + 퍼지 점수. 대상은 검색어다.
+    /// 첫 출력은 처음 검색(인덱스 읽기 포함), 첫 N은 목록이 있을 때 검색(좁히기 없이 전체), 전체는 검색어를
+    /// 한 글자씩 칠 때(앞 결과 안에서 좁힌다) 가장 느린 글자다. 레코드는 맞은 파일 수.
+    PlxFiles,
+    /// gix의 blame(`gix::Repository::blame_file`, HEAD, rename 추적): 앱의 `blame`을 대신할 수 있는지 본다
+    /// (CLAUDE.md 결정 기록). 흘려보내지 않으므로 첫 출력·첫 블록이 전체와 같다. 저장소는 매번 새로 연다.
+    /// `--features gix-blame`으로 빌드해야 잰다.
+    GixBlame,
 }
 
 impl Kind {
@@ -55,6 +90,13 @@ impl Kind {
             "line-log" => Kind::LineLog,
             "show" => Kind::Show,
             "graph" => Kind::Graph,
+            "plx-blame" => Kind::PlxBlame,
+            "plx-show" => Kind::PlxShow,
+            "plx-log" => Kind::PlxLog,
+            "plx-line-log" => Kind::PlxLineLog,
+            "plx-graph" => Kind::PlxGraph,
+            "plx-files" => Kind::PlxFiles,
+            "gix-blame" => Kind::GixBlame,
             _ => return None,
         })
     }
@@ -68,16 +110,26 @@ impl Kind {
             Kind::LineLog => "log -L",
             Kind::Show => "show",
             Kind::Graph => "log --topo-order",
+            Kind::PlxBlame => "plx blame 세션",
+            Kind::PlxShow => "plx 커밋 상세",
+            Kind::PlxLog => "plx 파일 히스토리",
+            Kind::PlxLineLog => "plx 라인 히스토리",
+            Kind::PlxGraph => "plx 커밋 그래프",
+            Kind::PlxFiles => "plx 파일 찾기",
+            Kind::GixBlame => "gix-blame",
         }
     }
 
     /// "첫 N" 열에서 세는 레코드 수와 그 이름.
     fn first_n(self) -> Option<(usize, &'static str)> {
         match self {
-            Kind::Blame => Some((1, "첫 블록")),
-            Kind::Log | Kind::Follow => Some((50, "첫 50개")),
-            Kind::Graph => Some((100, "첫 100개")),
-            Kind::Spawn | Kind::LineLog | Kind::Show => None,
+            Kind::Blame | Kind::GixBlame => Some((1, "첫 블록")),
+            Kind::PlxBlame => Some((1, "첫 묶음")),
+            Kind::Log | Kind::Follow | Kind::PlxLog => Some((50, "첫 50개")),
+            Kind::PlxLineLog => Some((1, "첫 커밋")),
+            Kind::Graph | Kind::PlxGraph => Some((100, "첫 100개")),
+            Kind::PlxFiles => Some((1, "목록 있음")),
+            Kind::Spawn | Kind::LineLog | Kind::Show | Kind::PlxShow => None,
         }
     }
 
@@ -106,6 +158,15 @@ impl Kind {
                 "--format=%H%x1f%P%x1f%an%x1f%at%x1f%s",
                 "HEAD",
             ],
+            Kind::PlxBlame
+            | Kind::PlxShow
+            | Kind::PlxLog
+            | Kind::PlxLineLog
+            | Kind::PlxGraph
+            | Kind::PlxFiles
+            | Kind::GixBlame => {
+                unreachable!("git을 직접 띄우지 않는다")
+            }
         };
         v.into_iter().map(String::from).collect()
     }
@@ -125,7 +186,16 @@ fn count_records(kind: Kind, chunk: &[u8], carry: &mut Vec<u8>) -> usize {
             count
         }
         Kind::Log | Kind::Follow | Kind::Graph => chunk.iter().filter(|&&b| b == 0).count(),
-        Kind::Spawn | Kind::LineLog | Kind::Show => 0,
+        Kind::Spawn
+        | Kind::LineLog
+        | Kind::Show
+        | Kind::PlxBlame
+        | Kind::PlxShow
+        | Kind::PlxLog
+        | Kind::PlxLineLog
+        | Kind::PlxGraph
+        | Kind::PlxFiles
+        | Kind::GixBlame => 0,
     }
 }
 
@@ -138,6 +208,12 @@ enum Condition {
 }
 
 impl Condition {
+    /// 앱 코드가 띄우는 git에는 `-c`를 붙일 수 없어 환경 변수(`GIT_CONFIG_COUNT` 등)로 넘긴다.
+    fn env(self) -> [(&'static str, &'static str); 2] {
+        let [_, a, _, b] = self.config();
+        [a, b].map(|kv| kv.split_once('=').expect("key=value"))
+    }
+
     fn config(self) -> [&'static str; 4] {
         match self {
             Condition::NoGraph => [
@@ -237,6 +313,333 @@ fn run_once(repo: &Path, kind: Kind, target: &str, condition: Condition) -> io::
     })
 }
 
+/// 앱 요청이 띄우는 git에 측정 조건을 넘긴다(환경 변수로 주는 `-c`).
+fn set_git_config(condition: Condition) {
+    let vars = condition.env();
+    // SAFETY: plx-bench는 측정 사이에 다른 스레드를 두지 않는다. 요청이 띄운 스레드(git 표준 오류·출력 읽기)는
+    // 요청이 끝나기 전에 모두 끝나므로 여기서는 이 스레드만 환경을 읽고 쓴다.
+    unsafe {
+        std::env::set_var("GIT_CONFIG_COUNT", vars.len().to_string());
+        for (i, (key, value)) in vars.iter().enumerate() {
+            std::env::set_var(format!("GIT_CONFIG_KEY_{i}"), key);
+            std::env::set_var(format!("GIT_CONFIG_VALUE_{i}"), value);
+        }
+    }
+}
+
+fn run_session_once(repo: &Path, target: &str, condition: Condition) -> io::Result<Sample> {
+    set_git_config(condition);
+    let sessions = Sessions::new();
+    let repos = RepoCache::new();
+    let id = sessions.register();
+    let path = repo.join(target);
+
+    let start = Instant::now();
+    let ms = |t: Instant| t.duration_since(start).as_secs_f64() * 1000.0;
+    let (mut first_byte, mut first_n) = (None, None);
+    let (mut records, mut bytes) = (0usize, 0usize);
+    let mut end = None;
+    sessions.run(id, &repos, &path, None, |event| {
+        // 앱의 Channel::send처럼 JSON으로 만든다. 출력 열은 화면으로 보내는 양이다.
+        bytes += serde_json::to_vec(&event).map_or(0, |json| json.len());
+        let now = Instant::now();
+        match event {
+            SessionEvent::Meta(_) => first_byte = Some(ms(now)),
+            SessionEvent::Chunk(chunk) => {
+                first_n.get_or_insert_with(|| ms(now));
+                records += chunk.blocks.len();
+            }
+            other => end = Some(other),
+        }
+        true
+    });
+    let total = ms(Instant::now());
+    match end {
+        Some(SessionEvent::Done { .. }) => Ok(Sample {
+            first_byte,
+            first_n,
+            total,
+            records,
+            bytes,
+        }),
+        Some(SessionEvent::Error { message }) => Err(io::Error::other(message)),
+        other => Err(io::Error::other(format!("예상하지 못한 끝: {other:?}"))),
+    }
+}
+
+/// `a,b:path` → (범위, 경로)
+fn parse_line_target(target: &str) -> io::Result<(LineRange, &str)> {
+    let bad = || {
+        io::Error::other(format!(
+            "라인 히스토리 대상은 a,b:path 꼴이어야 한다: {target}"
+        ))
+    };
+    let (range, path) = target.split_once(':').ok_or_else(bad)?;
+    let (start, end) = range.split_once(',').ok_or_else(bad)?;
+    let start = start.parse().map_err(|_| bad())?;
+    let end = end.parse().map_err(|_| bad())?;
+    Ok((LineRange { start, end }, path))
+}
+
+/// 파일 히스토리(`lines`가 있으면 라인 히스토리) 요청 한 번. 첫 N은 파일은 50개째, 라인은 첫 커밋을 보낸 때다.
+fn run_history_once(
+    repo: &Path,
+    target: &str,
+    lines: Option<LineRange>,
+    condition: Condition,
+) -> io::Result<Sample> {
+    set_git_config(condition);
+    let sessions = HistorySessions::new();
+    let repos = RepoCache::new();
+    let id = sessions.register();
+    let path = repo.join(target);
+
+    let start = Instant::now();
+    let ms = |t: Instant| t.duration_since(start).as_secs_f64() * 1000.0;
+    let (mut first_byte, mut first_n) = (None, None);
+    let (mut records, mut bytes) = (0usize, 0usize);
+    let mut end = None;
+    let page = if lines.is_some() { 1 } else { 50 };
+    let on_event = |event: HistoryEvent| {
+        bytes += serde_json::to_vec(&event).map_or(0, |json| json.len());
+        let now = Instant::now();
+        match event {
+            HistoryEvent::Meta(_) => first_byte = Some(ms(now)),
+            HistoryEvent::Entries { entries } => {
+                records += entries.len();
+                if records >= page {
+                    first_n.get_or_insert_with(|| ms(now));
+                }
+            }
+            other => end = Some(other),
+        }
+        true
+    };
+    match lines {
+        Some(lines) => sessions.run_lines(id, &repos, &path, None, lines, on_event),
+        None => sessions.run(id, &repos, &path, None, on_event),
+    }
+    let total = ms(Instant::now());
+    match end {
+        Some(HistoryEvent::Done { .. }) => Ok(Sample {
+            first_byte,
+            first_n,
+            total,
+            records,
+            bytes,
+        }),
+        Some(HistoryEvent::Error { message }) => Err(io::Error::other(message)),
+        other => Err(io::Error::other(format!("예상하지 못한 끝: {other:?}"))),
+    }
+}
+
+/// `plx-graph` 대상: 범위와 커밋 표를 쓸지
+fn parse_graph_target(target: &str) -> io::Result<(GraphScope, bool)> {
+    let (scope, table) = match target.strip_suffix("+table") {
+        Some(scope) => (scope, true),
+        None => (target, false),
+    };
+    let scope = match scope {
+        "head" => GraphScope::Head,
+        "branches" => GraphScope::Branches,
+        "all" => GraphScope::All,
+        other => {
+            return Err(io::Error::other(format!(
+                "plx-graph 대상은 head·branches·all(+table): {other}"
+            )));
+        }
+    };
+    Ok((scope, table))
+}
+
+/// 그래프 열기 한 번. 첫 N은 첫 화면(100행)을 보낸 때, 전체는 레이아웃을 다 정한 때다.
+fn run_graph_once(
+    repo: &Path,
+    scope: GraphScope,
+    cache: Option<Arc<DiskCache>>,
+    condition: Condition,
+) -> io::Result<Sample> {
+    set_git_config(condition);
+    let sessions = match cache {
+        Some(cache) => GraphSessions::with_cache(cache),
+        None => GraphSessions::new(),
+    };
+    let repos = RepoCache::new();
+    let (tx, rx) = mpsc::channel();
+    let start = Instant::now();
+    let ms = |t: Instant| t.duration_since(start).as_secs_f64() * 1000.0;
+    let id = sessions
+        .open(&repos, repo, GraphOptions::scope(scope), move |event| {
+            tx.send((Instant::now(), event)).is_ok()
+        })
+        .map_err(io::Error::other)?;
+    let (mut first_byte, mut first_n) = (None, None);
+    let (mut records, mut bytes) = (0usize, 0usize);
+    for (at, event) in rx {
+        bytes += serde_json::to_vec(&event).map_or(0, |json| json.len());
+        match event {
+            GraphEvent::Meta(_) => first_byte = Some(ms(at)),
+            GraphEvent::Page { total, .. } => {
+                first_n = Some(ms(at));
+                records = total;
+            }
+            GraphEvent::Done { .. } => {
+                sessions.close(id);
+                return Ok(Sample {
+                    first_byte,
+                    first_n,
+                    total: ms(at),
+                    records,
+                    bytes,
+                });
+            }
+            GraphEvent::Error { message } => return Err(io::Error::other(message)),
+            GraphEvent::Cancelled => return Err(io::Error::other("취소됐다")),
+            GraphEvent::Loading { .. } | GraphEvent::Progress { .. } => {}
+        }
+    }
+    Err(io::Error::other("그래프 이벤트가 끊겼다"))
+}
+
+/// Quick Open 한 번: 새 목록으로 처음 검색, 같은 검색어 다시(목록 있음, 좁히기 없음), 한 글자씩 치기.
+fn run_files_once(repo: &Path, query: &str) -> io::Result<Sample> {
+    let opened = plx_core::repo::Repo::discover(repo).map_err(io::Error::other)?;
+    let lists = FileLists::new();
+    let start = Instant::now();
+    let first = lists
+        .search(&opened, query, 100)
+        .map_err(io::Error::other)?;
+    let cold = start.elapsed().as_secs_f64() * 1000.0;
+    // 빈 검색어로 앞 결과를 지운 뒤 같은 검색어를 목록 전체에서 다시 찾는다.
+    lists.search(&opened, "", 100).map_err(io::Error::other)?;
+    let start = Instant::now();
+    lists
+        .search(&opened, query, 100)
+        .map_err(io::Error::other)?;
+    let warm = start.elapsed().as_secs_f64() * 1000.0;
+    lists.search(&opened, "", 100).map_err(io::Error::other)?;
+    let mut slowest = 0f64;
+    let mut typed = String::new();
+    for c in query.chars() {
+        typed.push(c);
+        let start = Instant::now();
+        lists
+            .search(&opened, &typed, 100)
+            .map_err(io::Error::other)?;
+        slowest = slowest.max(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    Ok(Sample {
+        first_byte: Some(cold),
+        first_n: Some(warm),
+        total: slowest,
+        records: first.matched,
+        bytes: serde_json::to_vec(&first).map_or(0, |json| json.len()),
+    })
+}
+
+fn run_show_once(repo: &Path, rev: &str) -> io::Result<Sample> {
+    let start = Instant::now();
+    let opened = plx_core::repo::Repo::discover(repo).map_err(io::Error::other)?;
+    let id = opened.resolve_commit(rev).map_err(io::Error::other)?;
+    let detail = plx_core::commit::commit_detail(&opened, id, None).map_err(io::Error::other)?;
+    let total = start.elapsed().as_secs_f64() * 1000.0;
+    let bytes = serde_json::to_vec(&detail).map_or(0, |json| json.len());
+    Ok(Sample {
+        first_byte: Some(total),
+        first_n: None,
+        total,
+        records: detail.files.len(),
+        bytes,
+    })
+}
+
+/// gix-blame 한 번. 레코드는 블록 수다.
+fn run_gix_blame_once(repo: &Path, target: &str, condition: Condition) -> io::Result<Sample> {
+    let start = Instant::now();
+    let blocks = gix_blame(repo, target, condition)?;
+    let total = start.elapsed().as_secs_f64() * 1000.0;
+    Ok(Sample {
+        first_byte: Some(total),
+        first_n: Some(total),
+        total,
+        records: blocks.len(),
+        bytes: 0,
+    })
+}
+
+/// blame 블록: (원인 커밋, 원래 시작 줄, 지금 시작 줄, 줄 수, 원래 경로). 줄 번호는 1부터다.
+type Block = (String, u32, u32, u32, String);
+
+/// HEAD의 `target`을 gix로 blame한다. git blame처럼 파일의 rename을 따라간다(gix 기본값, 유사도 50%).
+/// commit-graph는 조건대로 쓰고, gix-blame은 Bloom 필터를 읽지 않는다.
+#[cfg(feature = "gix-blame")]
+fn gix_blame(repo: &Path, target: &str, condition: Condition) -> io::Result<Vec<Block>> {
+    let [_, graph, _, paths] = condition.config();
+    let options = gix::open::Options::default().config_overrides([graph, paths]);
+    let repo = gix::open_opts(repo, options).map_err(io::Error::other)?;
+    let head = repo.head_id().map_err(io::Error::other)?.detach();
+    let options = gix::repository::blame_file::Options {
+        rewrites: Some(gix::diff::Rewrites::default()),
+        ..Default::default()
+    };
+    let outcome = repo
+        .blame_file(target.into(), head, options)
+        .map_err(io::Error::other)?;
+    Ok(outcome
+        .entries
+        .into_iter()
+        .map(|entry| {
+            let path = entry
+                .source_file_name
+                .map_or_else(|| target.to_owned(), |name| name.to_string());
+            (
+                entry.commit_id.to_string(),
+                entry.start_in_source_file + 1,
+                entry.start_in_blamed_file + 1,
+                entry.len.get(),
+                path,
+            )
+        })
+        .collect())
+}
+
+#[cfg(not(feature = "gix-blame"))]
+fn gix_blame(_: &Path, _: &str, _: Condition) -> io::Result<Vec<Block>> {
+    Err(io::Error::other(
+        "gix-blame 항목은 `--features gix-blame`으로 빌드해야 잰다",
+    ))
+}
+
+/// gix-blame과 앱의 blame(`git blame --incremental HEAD`)에서 (원인 커밋, 원래 줄, 원래 경로)가 같은 줄 수와 전체 줄 수
+fn gix_blame_agreement(repo: &Path, target: &str) -> io::Result<(usize, usize)> {
+    let ours = per_line(gix_blame(repo, target, Condition::Bloom)?);
+    let mut blocks = Vec::new();
+    plx_core::blame::Blame::spawn(repo, target, Some("HEAD"))?
+        .stream(|chunk| {
+            blocks.extend(
+                chunk
+                    .blocks
+                    .into_iter()
+                    .map(|b| (b.sha, b.orig_line, b.final_line, b.num_lines, b.path)),
+            )
+        })
+        .map_err(io::Error::other)?;
+    let theirs = per_line(blocks);
+    let same = ours.iter().zip(&theirs).filter(|(a, b)| a == b).count();
+    Ok((same, ours.len().max(theirs.len())))
+}
+
+/// 블록을 지금 줄 순서의 (원인 커밋, 원래 줄, 원래 경로)로 편다(`--incremental`은 블록 순서가 줄 순서가 아니다).
+fn per_line(mut blocks: Vec<Block>) -> Vec<(String, u32, String)> {
+    blocks.sort_by_key(|block| block.2);
+    blocks
+        .into_iter()
+        .flat_map(|(sha, orig, _, count, path)| {
+            (0..count).map(move |i| (sha.clone(), orig + i, path.clone()))
+        })
+        .collect()
+}
+
 fn median(mut values: Vec<f64>) -> Option<f64> {
     if values.is_empty() {
         return None;
@@ -254,12 +657,52 @@ struct Summary {
 }
 
 fn measure(opts: &Options, repo: &Path, case: &Case, condition: Condition) -> io::Result<Summary> {
+    // `plx-graph …+table`: 측정 전에 한 번 열어 커밋 표를 채운다(측정이 끝나면 지우는 임시 캐시).
+    let table_dir = std::env::temp_dir().join(format!("plx-bench-table-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&table_dir);
+    let mut graph_cache = None;
+    if case.kind == Kind::PlxGraph {
+        let (scope, table) = parse_graph_target(&case.target)?;
+        if table {
+            let cache = Arc::new(DiskCache::new(table_dir.clone(), 1 << 32));
+            run_graph_once(repo, scope, Some(cache.clone()), condition)?;
+            graph_cache = Some(cache);
+        }
+    }
+    let summary = measure_runs(opts, repo, case, condition, graph_cache);
+    let _ = std::fs::remove_dir_all(&table_dir);
+    summary
+}
+
+fn measure_runs(
+    opts: &Options,
+    repo: &Path,
+    case: &Case,
+    condition: Condition,
+    graph_cache: Option<Arc<DiskCache>>,
+) -> io::Result<Summary> {
+    let run = || match case.kind {
+        Kind::PlxGraph => {
+            let (scope, _) = parse_graph_target(&case.target)?;
+            run_graph_once(repo, scope, graph_cache.clone(), condition)
+        }
+        Kind::PlxBlame => run_session_once(repo, &case.target, condition),
+        Kind::PlxShow => run_show_once(repo, &case.target),
+        Kind::PlxFiles => run_files_once(repo, &case.target),
+        Kind::GixBlame => run_gix_blame_once(repo, &case.target, condition),
+        Kind::PlxLog => run_history_once(repo, &case.target, None, condition),
+        Kind::PlxLineLog => {
+            let (lines, path) = parse_line_target(&case.target)?;
+            run_history_once(repo, path, Some(lines), condition)
+        }
+        kind => run_once(repo, kind, &case.target, condition),
+    };
     for _ in 0..opts.warmup {
-        run_once(repo, case.kind, &case.target, condition)?;
+        run()?;
     }
     let mut samples = Vec::with_capacity(opts.runs);
     for _ in 0..opts.runs {
-        samples.push(run_once(repo, case.kind, &case.target, condition)?);
+        samples.push(run()?);
     }
     let last = samples.last().expect("runs >= 1");
     Ok(Summary {
@@ -419,6 +862,7 @@ fn report(opts: &Options, cases: &[Case]) -> io::Result<()> {
     println!();
     println!("| 저장소 | 항목 | 대상 | commit-graph 없음 | Bloom 있음 | 레코드 | 출력 |");
     println!("|---|---|---|---|---|---|---|");
+    let mut agreements = Vec::new();
     for case in cases {
         let repo = opts.repos.join(&case.repo);
         eprintln!("측정: {} {} {}", case.repo, case.kind.label(), case.target);
@@ -448,11 +892,41 @@ fn report(opts: &Options, cases: &[Case]) -> io::Result<()> {
             },
             bloom.bytes / 1024,
         );
+        if case.kind == Kind::GixBlame {
+            let (same, lines) = gix_blame_agreement(&repo, &case.target)?;
+            agreements.push(format!(
+                "- `{}` `{}`: {lines}줄 중 {same}줄({:.2}%)이 앱의 blame(git)과 원인 커밋·원래 줄·원래 경로까지 같다.",
+                case.repo,
+                case.target,
+                100.0 * same as f64 / lines.max(1) as f64
+            ));
+        }
     }
     println!();
     println!(
         "셀은 `첫 출력 / 첫 N / 전체` (ms). 첫 N은 항목 이름의 괄호 안 기준이고, 해당 없으면 —."
     );
+    println!(
+        "`plx blame 세션`의 첫 출력은 내용(meta), 레코드는 블록 수, 출력은 화면으로 보내는 JSON 양이다."
+    );
+    println!(
+        "`plx 파일 히스토리`의 첫 출력은 meta, 첫 N은 50개째를 보낸 때, 레코드는 커밋 수(rename 앞 구간 포함)다."
+    );
+    println!(
+        "`plx 라인 히스토리`의 첫 출력은 meta, 첫 N은 첫 커밋(hunk 포함)을 보낸 때다. `log -L`의 첫 출력과 비교한다."
+    );
+    println!(
+        "`plx 파일 찾기`의 첫 출력은 처음 검색(인덱스 읽기 포함), 첫 N은 목록이 있을 때 전체 검색, 전체는 한 글자씩 칠 때 가장 느린 글자다(commit-graph와 무관)."
+    );
+    if !agreements.is_empty() {
+        println!(
+            "`gix-blame`은 흘려보내지 않아 첫 출력·첫 블록이 전체와 같고, 레코드는 블록 수다. Bloom 필터는 읽지 않는다(Bloom 있음 = commit-graph만)."
+        );
+        println!();
+        for line in agreements {
+            println!("{line}");
+        }
+    }
     Ok(())
 }
 

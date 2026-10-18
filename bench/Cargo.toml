@@ -1,9 +1,18 @@
 [package]
 name = "plx-bench"
-description = "git baseline 측정: 앱이 git을 띄우는 방식 그대로 첫 출력·첫 N개·전체 시간을 잰다"
+description = "git baseline 측정: 앱이 git을 띄우는 방식 그대로 첫 출력·첫 N개·전체 시간을 잰다. 앱의 blame 요청도 같은 표로 잰다"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [dependencies]
+plx-core.workspace = true
+serde_json.workspace = true
+# gix-blame 전환 검토(CLAUDE.md 결정 기록)에만 쓴다. 기본값이 아니라 앱·CI 빌드에는 들어가지 않는다.
+gix = { version = "0.89.0", default-features = false, features = ["blame"], optional = true }
+
+[features]
+# `gix-blame` 측정 항목(cases.txt)을 잰다: `cargo run -p plx-bench --release --features gix-blame -- …`
+gix-blame = ["dep:gix"]
