@@ -1,6 +1,17 @@
 // 읽기 전용 코드 뷰(CodeMirror 6). blame 거터, 줄 번호, 검색, 구문 강조(언어는 필요할 때 불러온다).
-import { cursorLineDown, cursorLineUp, defaultKeymap } from "@codemirror/commands";
-import { findNext, findPrevious, highlightSelectionMatches, openSearchPanel, search, searchKeymap } from "@codemirror/search";
+import { cursorLineDown, cursorLineUp, defaultKeymap, selectLineDown, selectLineUp } from "@codemirror/commands";
+import {
+  SearchQuery,
+  findNext,
+  findPrevious,
+  getSearchQuery,
+  highlightSelectionMatches,
+  openSearchPanel,
+  search,
+  searchKeymap,
+  searchPanelOpen,
+  setSearchQuery,
+} from "@codemirror/search";
 import { EditorState, Prec } from "@codemirror/state";
 import {
   EditorView,
@@ -24,6 +35,22 @@ export type EditorKeys = {
   older(): boolean;
   /** `>` 다음 리비전 */
   newer(): boolean;
+  /** `H` 파일 히스토리 */
+  history(): boolean;
+  /** `L` 라인 히스토리(선택한 줄들, 없으면 커서 줄) */
+  lineHistory(): boolean;
+  /** `G` 커밋 그래프(커서 줄의 커밋을 골라서) */
+  graph(): boolean;
+  /** `W` 워크트리 고르기 */
+  worktrees(): boolean;
+  /** `f`·Ctrl+P(⌘P) 파일 찾기 */
+  files(): boolean;
+  /** `i` 커서 줄 커밋 카드 보이기·닫기 */
+  card(): boolean;
+  /** `o` 에디터로 열기 */
+  openEditor(): boolean;
+  /** `:`·Ctrl+Shift+P(⌘⇧P) 명령 팔레트 */
+  palette(): boolean;
   back(): boolean;
   help(): boolean;
   escape(): boolean;
@@ -36,6 +63,14 @@ export type EditorOptions = {
   line: number | null;
   gutter: GutterContext;
   keys: EditorKeys;
+  /** 검색 패널(`/`)을 열거나 닫았다 */
+  onSearchPanel?(open: boolean): void;
+};
+
+/** 다시 연 코드 뷰로 넘기는 검색: 검색어·옵션(`n`/`N`이 이어서 찾는다)과 패널이 열려 있었는지. */
+export type SearchState = {
+  query: { search: string; caseSensitive: boolean; regexp: boolean; wholeWord: boolean };
+  open: boolean;
 };
 
 export type Editor = { view: EditorView; destroy(): void };
@@ -64,6 +99,9 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
         keymap.of([
           { key: "j", run: cursorLineDown },
           { key: "k", run: cursorLineUp },
+          // Shift: 줄 선택을 넓힌다(라인 히스토리 범위)
+          { key: "J", run: selectLineDown },
+          { key: "K", run: selectLineUp },
           { key: "y", run: run(keys.copySha) },
           { key: "/", run: openSearchPanel },
           { key: "n", run: findNext },
@@ -72,6 +110,17 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
           { key: ",", run: run(keys.parent) },
           { key: "<", run: run(keys.older) },
           { key: ">", run: run(keys.newer) },
+          { key: "H", run: run(keys.history) },
+          { key: "L", run: run(keys.lineHistory) },
+          { key: "G", run: run(keys.graph) },
+          { key: "W", run: run(keys.worktrees) },
+          { key: "f", run: run(keys.files) },
+          // 브라우저의 인쇄(Ctrl+P) 대신
+          { key: "Mod-p", run: run(keys.files), preventDefault: true },
+          { key: "i", run: run(keys.card) },
+          { key: "o", run: run(keys.openEditor) },
+          { key: ":", run: run(keys.palette) },
+          { key: "Mod-Shift-p", run: run(keys.palette), preventDefault: true },
           { key: "q", run: run(keys.back) },
           { key: "?", run: run(keys.help) },
           { key: "Escape", run: run(keys.escape) },
@@ -79,6 +128,10 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
       ),
       keymap.of([...searchKeymap, ...defaultKeymap]),
       EditorView.contentAttributes.of({ "aria-label": options.path }),
+      EditorView.updateListener.of((update) => {
+        const open = searchPanelOpen(update.state);
+        if (open !== searchPanelOpen(update.startState)) options.onSearchPanel?.(open);
+      }),
     ],
     selection: { anchor: lineStart(doc, options.line) },
   });
@@ -98,6 +151,19 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
       view.destroy();
     },
   };
+}
+
+/** 지금 검색(검색어도 패널도 없으면 null). */
+export function searchStateOf(view: EditorView): SearchState | null {
+  const { search: text, caseSensitive, regexp, wholeWord } = getSearchQuery(view.state);
+  const open = searchPanelOpen(view.state);
+  return text || open ? { query: { search: text, caseSensitive, regexp, wholeWord }, open } : null;
+}
+
+/** 넘겨받은 검색을 되살린다(패널이 열려 있었으면 연다). */
+export function restoreSearch(view: EditorView, state: SearchState): void {
+  view.dispatch({ effects: setSearchQuery.of(new SearchQuery(state.query)) });
+  if (state.open) openSearchPanel(view);
 }
 
 /** `line`번째 줄(1부터, 범위 밖이면 가까운 줄)의 시작 위치. */

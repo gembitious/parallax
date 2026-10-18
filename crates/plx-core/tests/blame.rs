@@ -5,7 +5,7 @@ mod common;
 use std::collections::HashMap;
 use std::path::Path;
 
-use common::{encoding, git, git_text, history};
+use common::{commit_all, encoding, git, git_text, history, scratch_repo, ten_lines};
 use plx_core::blame::{Blame, BlameCommit, is_uncommitted};
 use plx_core::linemap::LineMap;
 use plx_core::repo::Repo;
@@ -435,6 +435,11 @@ fn session_working_tree_and_revision() {
     let (meta, lines) = session(&dir.join("src/lib.rs"), None);
     assert_eq!(meta.path, "src/lib.rs");
     assert_eq!(meta.rev, None);
+    // 작업트리 blame은 기준으로 삼은 HEAD를 알린다(화면이 열기 전의 HEAD 변화 알림을 거른다).
+    assert_eq!(
+        meta.head.as_deref(),
+        Some(git_text(&dir, &["rev-parse", "HEAD"]).as_str())
+    );
     let content = meta.content.unwrap();
     assert_eq!(
         content.line_count, lines,
@@ -451,6 +456,7 @@ fn session_working_tree_and_revision() {
         meta.rev.as_deref(),
         Some(git_text(&dir, &["rev-parse", "v0.1^{commit}"]).as_str())
     );
+    assert_eq!(meta.head, None, "고정 리비전은 HEAD와 상관없다");
     assert_eq!(meta.content.unwrap().line_count, lines);
 }
 
@@ -467,6 +473,7 @@ fn session_encodings_and_binary() {
 
     let (meta, lines) = session(&history().join("assets/logo.bin"), None);
     assert!(meta.binary && meta.content.is_none());
+    assert!(meta.head.is_some(), "바이너리 파일도 기준 HEAD를 알린다");
     assert_eq!(lines, 0);
 }
 
@@ -570,6 +577,36 @@ fn session_stops_when_the_receiver_is_gone() {
     );
 }
 
+/// 한 번에 다 있는 결과(캐시, 모두 미커밋)도 받는 쪽이 meta에서 사라졌으면 취소로 끝난다. git 결과가 묶음 하나로
+/// 다 온 뒤에 사라진 경우(바쁜 머신에서 첫 묶음 전에 git이 끝났다)와 같은 길이다.
+#[test]
+fn whole_results_end_cancelled_when_the_receiver_is_gone() {
+    let repo = scratch_repo("session-gone");
+    std::fs::write(repo.join("a.txt"), ten_lines(&[])).unwrap();
+    commit_all(&repo, "first");
+    std::fs::write(repo.join("new.txt"), "untracked\n").unwrap();
+    let sessions = Sessions::new();
+    let id = sessions.register();
+    let events = events_with(&sessions, id, &repo.join("new.txt"), None, |_| false);
+    assert!(
+        matches!(events[..], [SessionEvent::Meta(_), SessionEvent::Cancelled]),
+        "{events:?}"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let sessions =
+        Sessions::with_cache(Arc::new(DiskCache::new(dir.path().to_path_buf(), 1 << 30)));
+    let file = repo.join("a.txt");
+    let (_, cached) = cached_session(&sessions, &file, Some("HEAD"));
+    assert!(!cached);
+    let id = sessions.register();
+    let events = events_with(&sessions, id, &file, Some("HEAD"), |_| false);
+    assert!(
+        matches!(events[..], [SessionEvent::Meta(_), SessionEvent::Cancelled]),
+        "{events:?}"
+    );
+}
+
 #[test]
 fn session_events_serialize_for_the_ui() {
     let events = events(&history().join("src/lib.rs"), None);
@@ -604,7 +641,8 @@ fn session_events_serialize_for_the_ui() {
 // ---------------------------------------------------------------- 캐시
 
 use plx_core::blame::Chunk;
-use plx_core::cache::BlameCache;
+use plx_core::cache::DiskCache;
+use std::sync::Arc;
 
 /// 요청 하나의 (줄별 결과, 캐시에서 읽었는가).
 fn cached_session(
@@ -644,7 +682,8 @@ fn cached_session(
 #[test]
 fn commit_blame_is_cached() {
     let dir = tempfile::tempdir().unwrap();
-    let sessions = Sessions::with_cache(BlameCache::new(dir.path().to_path_buf(), 1 << 30));
+    let sessions =
+        Sessions::with_cache(Arc::new(DiskCache::new(dir.path().to_path_buf(), 1 << 30)));
     let file = history().join("src/lib.rs");
     let (first, cached) = cached_session(&sessions, &file, Some("HEAD~1"));
     assert!(!cached);
@@ -682,31 +721,356 @@ fn worktree_blame_cache_follows_the_file() {
             "first",
         ],
     );
-    let set_mtime = |ago: u64| {
+    let modified = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    let set_mtime = || {
         let f = std::fs::File::options().write(true).open(&file).unwrap();
-        f.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(ago))
-            .unwrap();
+        f.set_modified(modified).unwrap();
     };
     std::fs::write(&file, "하나\n둘\n셋\n").unwrap();
-    set_mtime(3600);
+    set_mtime();
 
     let cache_dir = tempfile::tempdir().unwrap();
-    let sessions = Sessions::with_cache(BlameCache::new(cache_dir.path().to_path_buf(), 1 << 30));
+    let sessions = Sessions::with_cache(Arc::new(DiskCache::new(
+        cache_dir.path().to_path_buf(),
+        1 << 30,
+    )));
     let (first, cached) = cached_session(&sessions, &file, None);
     assert!(!cached);
-    assert_eq!(
-        first.iter().filter(|(sha, _)| is_uncommitted(sha)).count(),
-        1
-    );
+    let uncommitted =
+        |lines: &[(String, u32)]| lines.iter().filter(|(sha, _)| is_uncommitted(sha)).count();
+    assert_eq!(uncommitted(&first), 1);
     let (second, cached) = cached_session(&sessions, &file, None);
     assert!(cached);
     assert_eq!(first, second);
 
-    // 내용이 바뀌면(크기·시각이 바뀐다) 다시 계산하고, 막 고친 파일은 넣지 않는다.
-    std::fs::write(&file, "하나\n둘\n셋\n넷\n").unwrap();
+    // 열쇠는 내용이다: 크기와 수정 시각이 그대로인 채 내용이 바뀌어도(같은 초 안에 다시 고침) 다시 계산한다.
+    std::fs::write(&file, "하나\n넷\n셋\n").unwrap();
+    set_mtime();
     let (third, cached) = cached_session(&sessions, &file, None);
+    assert!(!cached, "크기·수정 시각이 같아도 내용이 다르면 다른 열쇠");
+    assert_eq!(uncommitted(&third), 2);
+    // 막 고친 파일도 넣는다(git에 준 내용이 열쇠라 낡은 결과가 될 수 없다).
+    std::fs::write(&file, "하나\n둘\n셋\n넷\n").unwrap();
+    let (fourth, cached) = cached_session(&sessions, &file, None);
     assert!(!cached);
-    assert_eq!(third.len(), 4);
-    let (_, cached) = cached_session(&sessions, &file, None);
-    assert!(!cached, "방금 고친 파일의 결과는 캐시에 넣지 않았다");
+    assert_eq!(fourth.len(), 4);
+    let (fifth, cached) = cached_session(&sessions, &file, None);
+    assert!(cached);
+    assert_eq!(fourth, fifth);
+}
+
+// ---------------------------------------------------------------- 리뷰에서 찾은 경우(회귀 테스트)
+
+use plx_core::repo::FilePath;
+
+/// 줄마다 (sha, 원래 줄)과 캐시에서 왔는지, 세션이 blame한 경로. `repos`를 나눠 쓰면 앱처럼 저장소를 열어 둔다.
+fn lines_of(
+    sessions: &Sessions,
+    repos: &RepoCache,
+    file: FilePath,
+    rev: Option<&str>,
+) -> (Vec<(String, u32)>, bool, String) {
+    let id = sessions.register();
+    let mut blocks = Vec::new();
+    let mut cached = false;
+    let mut path = String::new();
+    sessions.run(id, repos, file, rev, |event| {
+        match event {
+            SessionEvent::Meta(meta) => path = meta.path,
+            SessionEvent::Chunk(chunk) => blocks.extend(chunk.blocks),
+            SessionEvent::Done { stats, .. } => cached = stats.cached,
+            SessionEvent::Error { message } => panic!("{message}"),
+            SessionEvent::Cancelled => panic!("취소됐다"),
+        }
+        true
+    });
+    let mut lines: Vec<(u32, String, u32)> = blocks
+        .iter()
+        .flat_map(|b| {
+            (0..b.num_lines).map(move |i| (b.final_line + i, b.sha.clone(), b.orig_line + i))
+        })
+        .collect();
+    lines.sort();
+    (
+        lines
+            .into_iter()
+            .map(|(_, sha, orig)| (sha, orig))
+            .collect(),
+        cached,
+        path,
+    )
+}
+
+fn in_repo(dir: &Path, path: &str) -> FilePath {
+    FilePath::InRepo {
+        workdir: dir.to_path_buf(),
+        path: path.to_owned(),
+    }
+}
+
+fn cache_in(dir: &Path) -> Sessions {
+    Sessions::with_cache(Arc::new(DiskCache::new(dir.to_path_buf(), 1 << 30)))
+}
+
+/// `git mv`만 하고 커밋하지 않은 파일: git blame은 옮기기 전 이력을 찾는다. 모두 미커밋으로 만들면 안 된다.
+#[test]
+fn staged_rename_keeps_history() {
+    let dir = scratch_repo("staged-rename");
+    std::fs::write(dir.join("a.txt"), ten_lines(&[])).unwrap();
+    let c1 = commit_all(&dir, "c1");
+    std::fs::write(dir.join("a.txt"), ten_lines(&[2])).unwrap();
+    let c2 = commit_all(&dir, "c2");
+    git(&dir, &["mv", "a.txt", "b.txt"]);
+    let (lines, _, _) = lines_of(
+        &Sessions::new(),
+        &RepoCache::new(),
+        dir.join("b.txt").into(),
+        None,
+    );
+    assert_eq!(lines.len(), 10);
+    assert!(
+        lines.iter().all(|(sha, _)| !is_uncommitted(sha)),
+        "{lines:?}"
+    );
+    assert_eq!(lines[1].0, c2);
+    assert_eq!(lines[0].0, c1);
+
+    // 새로 add만 한 파일은 git도 모두 미커밋이다.
+    std::fs::write(dir.join("new.txt"), "x\ny\n").unwrap();
+    git(&dir, &["add", "new.txt"]);
+    let (lines, _, _) = lines_of(
+        &Sessions::new(),
+        &RepoCache::new(),
+        dir.join("new.txt").into(),
+        None,
+    );
+    assert_eq!(lines.len(), 2);
+    assert!(lines.iter().all(|(sha, _)| is_uncommitted(sha)));
+}
+
+/// 사용자의 `i18n.logOutputEncoding`(예: cp949)과 관계없이 작성자·요약을 UTF-8로 받는다.
+#[test]
+fn log_output_encoding_does_not_garble_blame() {
+    let dir = scratch_repo("output-encoding");
+    git(&dir, &["config", "user.name", "김개발"]);
+    std::fs::write(dir.join("f.txt"), "x\n").unwrap();
+    std::fs::write(dir.join(".msg"), "한글 요약\n").unwrap();
+    git(&dir, &["add", "f.txt"]);
+    git(&dir, &["commit", "-q", "-F", ".msg"]);
+    git(&dir, &["config", "i18n.logOutputEncoding", "euc-kr"]);
+    let mut commits = Vec::new();
+    Blame::spawn(&dir, "f.txt", None)
+        .unwrap()
+        .stream(|chunk| commits.extend(chunk.commits))
+        .unwrap();
+    assert_eq!(commits[0].author, "김개발");
+    assert_eq!(commits[0].summary, "한글 요약");
+}
+
+/// 얕은 클론은 경계 너머 이력을 모른다. 이력을 더 받으면(`fetch --unshallow`) 결과가 바뀌므로 캐시에 넣지 않는다.
+#[test]
+fn shallow_clone_results_are_not_cached() {
+    let src = scratch_repo("shallow-source");
+    std::fs::write(src.join("f.txt"), ten_lines(&[])).unwrap();
+    commit_all(&src, "c1");
+    std::fs::write(src.join("f.txt"), ten_lines(&[3])).unwrap();
+    commit_all(&src, "c2");
+    std::fs::write(src.join("f.txt"), ten_lines(&[3, 5])).unwrap();
+    let c3 = commit_all(&src, "c3");
+    let shallow = Path::new(env!("CARGO_TARGET_TMPDIR")).join("scratch-shallow-clone");
+    let _ = std::fs::remove_dir_all(&shallow);
+    let url = format!("file://{}", src.to_string_lossy().replace('\\', "/"));
+    git(
+        &src,
+        &[
+            "clone",
+            "-q",
+            "--depth",
+            "1",
+            &url,
+            &shallow.to_string_lossy(),
+        ],
+    );
+
+    let cache = tempfile::tempdir().unwrap();
+    let sessions = cache_in(cache.path());
+    let repos = RepoCache::new();
+    let distinct = |lines: &[(String, u32)]| {
+        let mut shas: Vec<&String> = lines.iter().map(|(sha, _)| sha).collect();
+        shas.sort();
+        shas.dedup();
+        shas.len()
+    };
+    for rev in [Some(c3.as_str()), None] {
+        let (before, cached, _) = lines_of(&sessions, &repos, shallow.join("f.txt").into(), rev);
+        assert!(!cached);
+        assert_eq!(distinct(&before), 1, "경계 커밋 하나");
+        let (_, cached, _) = lines_of(&sessions, &repos, shallow.join("f.txt").into(), rev);
+        assert!(!cached, "얕은 클론은 넣지 않는다");
+    }
+    git(&shallow, &["fetch", "-q", "--unshallow"]);
+    for rev in [Some(c3.as_str()), None] {
+        let (after, _, _) = lines_of(&sessions, &repos, shallow.join("f.txt").into(), rev);
+        assert_eq!(distinct(&after), 3, "이력을 다 받으면 커밋 셋");
+    }
+}
+
+/// `blame.ignoreRevsFile`을 켜거나 그 파일에 커밋을 더하면 캐시에 있던 결과를 쓰지 않는다.
+#[test]
+fn ignore_revs_change_the_cache_key() {
+    let dir = scratch_repo("ignore-revs");
+    std::fs::write(dir.join("f.txt"), ten_lines(&[])).unwrap();
+    let c1 = commit_all(&dir, "c1");
+    std::fs::write(dir.join("f.txt"), ten_lines(&[3])).unwrap();
+    let c2 = commit_all(&dir, "c2: 포맷만 바꿈");
+    let cache = tempfile::tempdir().unwrap();
+    let sessions = cache_in(cache.path());
+    let repos = RepoCache::new();
+    let file = || in_repo(&dir, "f.txt");
+
+    let (plain, _, _) = lines_of(&sessions, &repos, file(), Some(&c2));
+    assert_eq!(plain[2].0, c2);
+    let (_, cached, _) = lines_of(&sessions, &repos, file(), Some(&c2));
+    assert!(cached);
+
+    // 무시할 커밋 목록을 켠다: 저장소를 열어 둔 채로(앱처럼) 설정이 바뀐다.
+    std::fs::write(dir.join(".git-blame-ignore-revs"), "").unwrap();
+    git(
+        &dir,
+        &["config", "blame.ignoreRevsFile", ".git-blame-ignore-revs"],
+    );
+    let (_, cached, _) = lines_of(&sessions, &repos, file(), Some(&c2));
+    assert!(!cached, "설정이 바뀌면 다른 열쇠");
+    // 목록에 커밋을 더한다(설정은 그대로)
+    std::fs::write(dir.join(".git-blame-ignore-revs"), format!("{c2}\n")).unwrap();
+    let (ignored, cached, _) = lines_of(&sessions, &repos, file(), Some(&c2));
+    assert!(!cached, "목록 파일이 바뀌면 다른 열쇠");
+    assert_eq!(ignored[2].0, c1, "무시한 커밋 대신 그 앞 커밋");
+    let (_, cached, _) = lines_of(&sessions, &repos, file(), Some(&c2));
+    assert!(cached);
+}
+
+/// `git replace`로 부모를 바꾸면 git blame이 바뀐 이력을 따른다. 바꾸는 참조가 있는 동안은 캐시에 넣지 않고,
+/// 그 전에 넣은 결과도 쓰지 않는다(참조를 더하거나 지우면 같은 커밋의 결과가 달라진다).
+#[test]
+fn replaced_parents_are_not_cached() {
+    let dir = scratch_repo("blame-replace");
+    std::fs::write(dir.join("f.txt"), ten_lines(&[])).unwrap();
+    commit_all(&dir, "c1");
+    std::fs::write(dir.join("f.txt"), ten_lines(&[3])).unwrap();
+    commit_all(&dir, "c2");
+    std::fs::write(dir.join("f.txt"), ten_lines(&[3, 5])).unwrap();
+    let c3 = commit_all(&dir, "c3");
+    let cache = tempfile::tempdir().unwrap();
+    let sessions = cache_in(cache.path());
+    let repos = RepoCache::new();
+    let distinct = |lines: &[(String, u32)]| {
+        let mut shas: Vec<&String> = lines.iter().map(|(sha, _)| sha).collect();
+        shas.sort();
+        shas.dedup();
+        shas.len()
+    };
+    let file = || in_repo(&dir, "f.txt");
+    let (plain, _, _) = lines_of(&sessions, &repos, file(), Some(&c3));
+    assert_eq!(distinct(&plain), 3);
+    assert!(lines_of(&sessions, &repos, file(), Some(&c3)).1);
+
+    // c3의 부모를 c1로: c2가 바꾼 줄도 c3의 것이 된다.
+    git(&dir, &["replace", "--graft", "HEAD", "HEAD~2"]);
+    for _ in 0..2 {
+        let (replaced, cached, _) = lines_of(&sessions, &repos, file(), Some(&c3));
+        assert!(!cached);
+        assert_eq!(distinct(&replaced), 2, "git blame과 같다");
+    }
+}
+
+/// 작업트리 결과는 줄 끝 설정도 열쇠에 든다: `core.autocrlf`를 바꾸면 git이 보는 내용이 달라진다.
+#[test]
+fn autocrlf_change_changes_the_worktree_key() {
+    let dir = scratch_repo("autocrlf-cache");
+    git(&dir, &["config", "core.autocrlf", "true"]);
+    std::fs::write(dir.join("f.txt"), ten_lines(&[])).unwrap();
+    commit_all(&dir, "c1");
+    std::fs::remove_file(dir.join("f.txt")).unwrap();
+    git(&dir, &["checkout", "--", "f.txt"]);
+    git(&dir, &["config", "core.autocrlf", "false"]);
+    let cache = tempfile::tempdir().unwrap();
+    let sessions = cache_in(cache.path());
+    let repos = RepoCache::new();
+    let uncommitted =
+        |lines: &[(String, u32)]| lines.iter().filter(|(sha, _)| is_uncommitted(sha)).count();
+
+    let (crlf, _, _) = lines_of(&sessions, &repos, dir.join("f.txt").into(), None);
+    assert_eq!(
+        uncommitted(&crlf),
+        10,
+        "autocrlf=false면 CRLF 줄은 모두 바뀐 줄"
+    );
+    git(&dir, &["config", "core.autocrlf", "true"]);
+    let (converted, cached, _) = lines_of(&sessions, &repos, dir.join("f.txt").into(), None);
+    assert!(!cached);
+    assert_eq!(
+        uncommitted(&converted),
+        0,
+        "autocrlf=true면 바뀐 줄이 없다(git과 같다)"
+    );
+}
+
+/// 리비전의 경로는 그 리비전의 경로다: 오늘의 작업트리(심볼릭 링크)로 풀지 않는다.
+#[cfg(unix)]
+#[test]
+fn revision_path_is_not_resolved_through_the_worktree() {
+    let dir = scratch_repo("revision-symlink");
+    std::fs::write(dir.join("alias.txt"), "alias at c1\n").unwrap();
+    std::fs::write(dir.join("real.txt"), "real at c1\n").unwrap();
+    let c1 = commit_all(&dir, "c1");
+    std::fs::remove_file(dir.join("alias.txt")).unwrap();
+    std::os::unix::fs::symlink("real.txt", dir.join("alias.txt")).unwrap();
+    commit_all(&dir, "c2: alias는 심볼릭 링크");
+    let (_, _, path) = lines_of(
+        &Sessions::new(),
+        &RepoCache::new(),
+        in_repo(&dir, "alias.txt"),
+        Some(&c1),
+    );
+    assert_eq!(path, "alias.txt");
+    // 작업트리의 심볼릭 링크는 가리키는 파일을 blame한다(터미널에서 준 경로와 같다).
+    let (_, _, path) = lines_of(
+        &Sessions::new(),
+        &RepoCache::new(),
+        in_repo(&dir, "alias.txt"),
+        None,
+    );
+    assert_eq!(path, "real.txt");
+    let (_, _, path) = lines_of(
+        &Sessions::new(),
+        &RepoCache::new(),
+        dir.join("alias.txt").into(),
+        None,
+    );
+    assert_eq!(path, "real.txt");
+}
+
+/// 화면이 준 저장소 기준 경로는 저장소 밖을 가리킬 수 없다.
+#[test]
+fn repo_relative_paths_stay_inside() {
+    let dir = scratch_repo("relative-inside");
+    std::fs::write(dir.join("f.txt"), "x\n").unwrap();
+    commit_all(&dir, "c1");
+    for bad in ["../f.txt", "a/../../f.txt", "/etc/passwd", "a//b"] {
+        let events = {
+            let sessions = Sessions::new();
+            let id = sessions.register();
+            let mut events = Vec::new();
+            sessions.run(id, &RepoCache::new(), in_repo(&dir, bad), None, |e| {
+                events.push(e);
+                true
+            });
+            events
+        };
+        assert!(
+            matches!(events.last(), Some(SessionEvent::Error { message }) if message.contains("저장소 기준 경로가 아니다")),
+            "{bad}: {events:?}"
+        );
+    }
 }

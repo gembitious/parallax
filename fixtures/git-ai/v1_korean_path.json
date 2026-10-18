@@ -1,0 +1,23 @@
+{
+  "files": {
+    "자료/설명 문서.md": {
+      "lines": {
+        "2": "d293ab945c8fd7f0",
+        "4": "d293ab945c8fd7f0"
+      },
+      "prompts": {
+        "d293ab945c8fd7f0": {
+          "agent_id": {
+            "id": "ai-thread-1792301825737345338",
+            "model": "unknown",
+            "tool": "mock_ai"
+          },
+          "human_author": "Test User <test@example.com>"
+        }
+      }
+    }
+  },
+  "git_ai_version": "1.7.6",
+  "head": "e3acc97ffe2bec5c33ac256ae418dbfab742dea1",
+  "notes_git_ai_version": "1.3.4"
+}
