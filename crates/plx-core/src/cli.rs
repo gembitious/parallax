@@ -139,14 +139,14 @@ pub fn printable(text: &str) -> String {
         .collect()
 }
 
-/// 상주 인스턴스에 넘기기 전에 대상 저장소를 앱과 같은 방법([`Repo::discover`])으로 열어 본다. 저장소가 아니거나
-/// `plx show`의 리비전이 없으면 창을 띄우지 않고 이 터미널에서 알린다.
+/// 상주 인스턴스에 넘기기 전에 대상 저장소를 앱과 같은 방법으로 열어 본다(저장소 밖의 시스템 설정만 빼고:
+/// [`Repo::discover_for_check`]). 저장소가 아니거나 `plx show`의 리비전이 없으면 창을 띄우지 않고 이 터미널에서 알린다.
 pub fn check_repo(request: &Request, cwd: &Path) -> Result<(), CliError> {
     let path = match request {
         Request::Graph | Request::Show { .. } => cwd,
         Request::Blame { path, .. } | Request::Log { path } | Request::LineLog { path, .. } => path,
     };
-    let repo = Repo::discover(path).map_err(|e| CliError(e.to_string()))?;
+    let repo = Repo::discover_for_check(path).map_err(|e| CliError(e.to_string()))?;
     if let Request::Show { rev } = request {
         repo.resolve_commit(rev)
             .map_err(|e| CliError(e.to_string()))?;

@@ -115,6 +115,33 @@ impl fmt::Debug for Repo {
 impl Repo {
     /// `path`(파일이나 디렉터리, 지금은 없는 경로도 된다)를 담은 저장소를 찾는다.
     pub fn discover(path: &Path) -> Result<Repo> {
+        Self::discover_with(path, Default::default())
+    }
+
+    /// [`discover`](Self::discover)와 같되 저장소 밖의 시스템·git 설치 설정은 읽지 않는다. `plx`가 상주 인스턴스에
+    /// 넘기기 전에 저장소를 열어 볼 때 쓴다: Windows에서는 시스템 설정의 자리를 gix가 git을 띄워 찾아(`EXEPATH`가
+    /// 없으면) 호출마다 30~50ms가 들었다(CI, PLX_TRACE). 그 확인(저장소인지, 리비전이 있는지)은 시스템 설정과
+    /// 상관없다. 상주 앱은 그 값을 프로세스마다 한 번 치르므로 [`discover`](Self::discover)로 모두 읽는다.
+    pub fn discover_for_check(path: &Path) -> Result<Repo> {
+        let mut permissions = gix::open::Permissions::all();
+        permissions.config.system = false;
+        permissions.config.git_binary = false;
+        permissions.attributes.system = false;
+        permissions.attributes.git_binary = false;
+        let defaults = gix::sec::trust::Mapping::<gix::open::Options>::default();
+        Self::discover_with(
+            path,
+            gix::sec::trust::Mapping {
+                full: defaults.full.permissions(permissions),
+                reduced: defaults.reduced.permissions(permissions),
+            },
+        )
+    }
+
+    fn discover_with(
+        path: &Path,
+        trust: gix::sec::trust::Mapping<gix::open::Options>,
+    ) -> Result<Repo> {
         let start = existing_ancestor(path)
             .ok_or_else(|| Error(format!("경로가 없다: {}", path.display())))?;
         let start = if start.is_dir() {
@@ -122,8 +149,10 @@ impl Repo {
         } else {
             start.parent().unwrap_or(start)
         };
-        let repo = gix::discover(start)
-            .map_err(|e| err(&format!("git 저장소가 아니다 ({})", start.display()), e))?;
+        let repo: gix::Repository =
+            gix::ThreadSafeRepository::discover_opts(start, Default::default(), trust)
+                .map_err(|e| err(&format!("git 저장소가 아니다 ({})", start.display()), e))?
+                .into();
         let workdir = repo
             .workdir()
             .ok_or_else(|| Error("작업트리가 없는(bare) 저장소는 지원하지 않는다".to_owned()))?;
@@ -284,27 +313,57 @@ impl Repo {
         self.local().is_shallow().unwrap_or(true)
     }
 
+    /// git이 객체와 다른 부모·내용을 보는 커밋이 있는가: `git replace`로 바꾼 객체(`core.useReplaceRefs=false`·
+    /// `GIT_NO_REPLACE_OBJECTS`로 끄지 않았으면)나 `info/grafts`. git은 이때 commit-graph를 쓰지 않고
+    /// (commit_graph_compatible), 이력 결과가 커밋 sha만으로 정해지지 않는다(바꾸는 참조를 더하거나 빼면 달라진다).
+    pub fn has_rewrites(&self) -> bool {
+        let repo = self.local();
+        !read_grafts(repo.common_dir()).is_empty() || has_replace_refs(&repo)
+    }
+
+    /// 이력 질의 결과(blame, 히스토리)를 캐시에 넣어도 되는가: 얕은 클론과 [`Self::has_rewrites`]는 넣지 않는다.
+    pub fn cacheable(&self) -> bool {
+        !self.is_shallow() && !self.has_rewrites()
+    }
+
     /// `git blame` 결과를 바꾸는 설정의 지문. 결과 캐시의 열쇠에 넣는다: 설정이나 설정이 가리키는 파일
     /// (`blame.ignoreRevsFile`, `.mailmap`)이 바뀌면 다른 열쇠가 된다.
     pub fn blame_settings(&self) -> String {
+        self.settings(BLAME_SETTINGS, true)
+    }
+
+    /// 파일 히스토리(`git log`) 결과를 바꾸는 설정의 지문: 작성자 이름·메일(`%aN`·`%aE`)을 바꾸는 mailmap.
+    pub fn history_settings(&self) -> String {
+        self.settings(MAILMAP_SETTINGS, false)
+    }
+
+    /// 라인 히스토리(`git log -L`) 결과를 바꾸는 설정의 지문: mailmap과 줄을 따라가는 diff·rename 설정.
+    pub fn line_history_settings(&self) -> String {
+        self.settings(LINE_LOG_SETTINGS, false)
+    }
+
+    /// `keys` 설정 값과 mailmap(·`ignore_revs`면 `blame.ignoreRevsFile`) 파일 내용의 지문.
+    fn settings(&self, keys: &[&str], ignore_revs: bool) -> String {
         use std::fmt::Write;
 
         let repo = self.local();
         let config = repo.config_snapshot();
         let config = config.plumbing();
         let mut out = String::new();
-        for key in BLAME_SETTINGS {
+        for key in keys {
             for value in config.strings(*key).unwrap_or_default() {
                 let _ = writeln!(out, "{key}={value}");
             }
         }
         // 설정이 가리키는 파일은 내용으로 본다. 빈 값은 앞의 목록을 비운다(git과 같다).
         let mut files = Vec::new();
-        for value in config.strings("blame.ignoreRevsFile").unwrap_or_default() {
-            if value.is_empty() {
-                files.clear();
-            } else {
-                files.push(self.config_path(&value.to_str_lossy()));
+        if ignore_revs {
+            for value in config.strings("blame.ignoreRevsFile").unwrap_or_default() {
+                if value.is_empty() {
+                    files.clear();
+                } else {
+                    files.push(self.config_path(&value.to_str_lossy()));
+                }
             }
         }
         files.push(self.workdir.join(".mailmap"));
@@ -351,9 +410,21 @@ impl Repo {
     /// 리비전 표현(`HEAD~2`, 태그, sha 일부 등)을 커밋으로 푼다.
     pub fn resolve_commit(&self, rev: &str) -> Result<ObjectId> {
         let repo = self.local();
-        let id = repo
-            .rev_parse_single(rev)
-            .map_err(|e| err(&format!("리비전을 찾을 수 없다 ({rev})"), e))?;
+        let id = repo.rev_parse_single(rev).map_err(|e| {
+            // 커밋이 하나도 없으면(HEAD가 아직 없는 브랜치를 가리킨다) gix는 HEAD를 "rev-spec is malformed"라고 답한다.
+            if (rev.starts_with("HEAD") || rev.starts_with('@'))
+                && let Ok(head) = repo.head()
+                && head.is_unborn()
+            {
+                let branch = head
+                    .referent_name()
+                    .map_or_else(|| "HEAD".to_owned(), |name| name.shorten().to_string());
+                return Error(format!(
+                    "커밋이 아직 없다({rev}): HEAD가 가리키는 {branch} 브랜치에 커밋이 하나도 없다"
+                ));
+            }
+            err(&format!("리비전을 찾을 수 없다 ({rev})"), e)
+        })?;
         let commit = id
             .object()
             .and_then(|object| object.peel_to_commit())
@@ -543,7 +614,7 @@ impl Repo {
     /// `id` 커밋이 첫 부모의 다른 파일을 옮겨(rename) `path`를 만들었다면 그 원래 경로.
     ///
     /// `git log --follow`처럼 이 파일 하나의 원본만 찾는다: 그 커밋에서 지운 파일 가운데 내용이 같은 것,
-    /// 없으면 git과 같은 유사도([`crate::similarity`])가 50% 이상인 것 중 가장 비슷한 것(같으면 파일 이름이
+    /// 없으면 git과 같은 기준의 유사도([`crate::similarity`])가 50% 이상인 것 중 가장 비슷한 것(같으면 파일 이름이
     /// 같은 것). 커밋 전체의 rename을 찾지 않으므로 파일 수백 개를 옮긴 커밋에서도 빠르다.
     /// 복사(copy)는 따라가지 않는다. 얕은 클론의 경계처럼 부모가 없으면 `None`.
     pub fn rename_source(&self, id: ObjectId, path: &str) -> Result<Option<String>> {
@@ -731,6 +802,78 @@ const BLAME_SETTINGS: &[&str] = &[
     "mailmap.file",
     "mailmap.blob",
 ];
+
+/// 작성자(`%aN`·`%aE`)를 바꾸는 설정. 저장소의 `.mailmap`은 설정이 없어도 늘 본다.
+const MAILMAP_SETTINGS: &[&str] = &["mailmap.file", "mailmap.blob"];
+
+/// `git log -L`의 결과를 바꾸는 설정: 줄 범위를 옛 버전으로 옮기는 diff와 옛 이름을 찾는 rename.
+const LINE_LOG_SETTINGS: &[&str] = &[
+    "diff.algorithm",
+    "diff.indentHeuristic",
+    "diff.interHunkContext",
+    "diff.context",
+    "diff.renames",
+    "diff.renameLimit",
+    "mailmap.file",
+    "mailmap.blob",
+];
+
+/// git처럼 `core.useReplaceRefs=false`나 `GIT_NO_REPLACE_OBJECTS`면 바꾸는 참조를 보지 않는다.
+pub(crate) fn replace_enabled(repo: &gix::Repository) -> bool {
+    std::env::var_os("GIT_NO_REPLACE_OBJECTS").is_none()
+        && repo.config_snapshot().boolean("core.useReplaceRefs") != Some(false)
+}
+
+/// 바꾸는 참조가 놓이는 곳(`GIT_REPLACE_REF_BASE`, 기본 `refs/replace/`)
+pub(crate) fn replace_base() -> String {
+    let mut base = std::env::var("GIT_REPLACE_REF_BASE")
+        .ok()
+        .filter(|b| !b.is_empty())
+        .unwrap_or_else(|| "refs/replace/".to_owned());
+    if !base.ends_with('/') {
+        base.push('/');
+    }
+    base
+}
+
+/// `git replace`로 바꾼 객체가 있는가(바꾸는 참조를 보지 않게 했으면 없는 것으로 본다).
+pub(crate) fn has_replace_refs(repo: &gix::Repository) -> bool {
+    if !replace_enabled(repo) {
+        return false;
+    }
+    let base = replace_base();
+    let Ok(platform) = repo.references() else {
+        return false;
+    };
+    let Ok(refs) = platform.prefixed(base.as_str()) else {
+        return false;
+    };
+    refs.flatten().any(|reference| {
+        reference
+            .name()
+            .as_bstr()
+            .strip_prefix(base.as_bytes())
+            .is_some_and(|hex| ObjectId::from_hex(hex).is_ok())
+    })
+}
+
+/// `<공통 디렉터리>/info/grafts`: 줄마다 `<커밋> <부모>*`, `#`은 주석
+pub(crate) fn read_grafts(common_dir: &Path) -> HashMap<ObjectId, Vec<ObjectId>> {
+    let Ok(text) = std::fs::read_to_string(common_dir.join("info").join("grafts")) else {
+        return HashMap::new();
+    };
+    text.lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .filter_map(|line| {
+            let mut ids = line
+                .split_whitespace()
+                .map(|hex| ObjectId::from_hex(hex.as_bytes()).ok());
+            let commit = ids.next()??;
+            let parents: Option<Vec<ObjectId>> = ids.collect();
+            Some((commit, parents?))
+        })
+        .collect()
+}
 
 /// 설정 파일들의 크기·수정 시각. gix는 저장소를 열 때 설정을 한 번 읽으므로, 상주하는 앱이 `git config`로
 /// 바꾼 값(줄 끝, blame 설정)을 보려면 파일이 바뀌었을 때 다시 열어야 한다.

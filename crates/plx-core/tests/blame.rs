@@ -435,6 +435,11 @@ fn session_working_tree_and_revision() {
     let (meta, lines) = session(&dir.join("src/lib.rs"), None);
     assert_eq!(meta.path, "src/lib.rs");
     assert_eq!(meta.rev, None);
+    // 작업트리 blame은 기준으로 삼은 HEAD를 알린다(화면이 열기 전의 HEAD 변화 알림을 거른다).
+    assert_eq!(
+        meta.head.as_deref(),
+        Some(git_text(&dir, &["rev-parse", "HEAD"]).as_str())
+    );
     let content = meta.content.unwrap();
     assert_eq!(
         content.line_count, lines,
@@ -451,6 +456,7 @@ fn session_working_tree_and_revision() {
         meta.rev.as_deref(),
         Some(git_text(&dir, &["rev-parse", "v0.1^{commit}"]).as_str())
     );
+    assert_eq!(meta.head, None, "고정 리비전은 HEAD와 상관없다");
     assert_eq!(meta.content.unwrap().line_count, lines);
 }
 
@@ -467,6 +473,7 @@ fn session_encodings_and_binary() {
 
     let (meta, lines) = session(&history().join("assets/logo.bin"), None);
     assert!(meta.binary && meta.content.is_none());
+    assert!(meta.head.is_some(), "바이너리 파일도 기준 HEAD를 알린다");
     assert_eq!(lines, 0);
 }
 
@@ -941,6 +948,40 @@ fn ignore_revs_change_the_cache_key() {
     assert_eq!(ignored[2].0, c1, "무시한 커밋 대신 그 앞 커밋");
     let (_, cached, _) = lines_of(&sessions, &repos, file(), Some(&c2));
     assert!(cached);
+}
+
+/// `git replace`로 부모를 바꾸면 git blame이 바뀐 이력을 따른다. 바꾸는 참조가 있는 동안은 캐시에 넣지 않고,
+/// 그 전에 넣은 결과도 쓰지 않는다(참조를 더하거나 지우면 같은 커밋의 결과가 달라진다).
+#[test]
+fn replaced_parents_are_not_cached() {
+    let dir = scratch_repo("blame-replace");
+    std::fs::write(dir.join("f.txt"), ten_lines(&[])).unwrap();
+    commit_all(&dir, "c1");
+    std::fs::write(dir.join("f.txt"), ten_lines(&[3])).unwrap();
+    commit_all(&dir, "c2");
+    std::fs::write(dir.join("f.txt"), ten_lines(&[3, 5])).unwrap();
+    let c3 = commit_all(&dir, "c3");
+    let cache = tempfile::tempdir().unwrap();
+    let sessions = cache_in(cache.path());
+    let repos = RepoCache::new();
+    let distinct = |lines: &[(String, u32)]| {
+        let mut shas: Vec<&String> = lines.iter().map(|(sha, _)| sha).collect();
+        shas.sort();
+        shas.dedup();
+        shas.len()
+    };
+    let file = || in_repo(&dir, "f.txt");
+    let (plain, _, _) = lines_of(&sessions, &repos, file(), Some(&c3));
+    assert_eq!(distinct(&plain), 3);
+    assert!(lines_of(&sessions, &repos, file(), Some(&c3)).1);
+
+    // c3의 부모를 c1로: c2가 바꾼 줄도 c3의 것이 된다.
+    git(&dir, &["replace", "--graft", "HEAD", "HEAD~2"]);
+    for _ in 0..2 {
+        let (replaced, cached, _) = lines_of(&sessions, &repos, file(), Some(&c3));
+        assert!(!cached);
+        assert_eq!(distinct(&replaced), 2, "git blame과 같다");
+    }
 }
 
 /// 작업트리 결과는 줄 끝 설정도 열쇠에 든다: `core.autocrlf`를 바꾸면 git이 보는 내용이 달라진다.

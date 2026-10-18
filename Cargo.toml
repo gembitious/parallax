@@ -7,6 +7,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.97"
 publish = false
+license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 plx-core = { path = "crates/plx-core" }
@@ -20,4 +21,5 @@ codegen-units = 1
 lto = true
 opt-level = 3
 strip = true
-# 템플릿의 panic = "abort"는 뺐다. 상주 앱이라 요청 하나의 패닉이 프로세스 전체를 죽이면 안 된다.
+# 템플릿의 panic = "abort"는 뺐다. 상주 앱이라 요청 하나의 패닉이 프로세스 전체를 죽이면 안 된다
+# (요청은 패닉을 잡아 그 요청의 오류로 끝낸다: plx_core::requests::catch).

@@ -1,4 +1,6 @@
 // `?` 도움말. 키맵은 CLAUDE.md를 따른다. 아직 없는 기능은 어느 마일스톤에서 붙는지 적는다.
+import { openNotices } from "./notices/Notices";
+
 type Key = { keys: string; what: string; note?: string; planned?: boolean };
 
 const COMMON: Key[] = [
@@ -90,6 +92,19 @@ export function Help({ view, onClose }: { view: HelpView; onClose(): void }) {
             ))}
           </tbody>
         </table>
+        <p className="muted help-footer">
+          <button
+            type="button"
+            className="link"
+            onClick={() => {
+              onClose();
+              openNotices();
+            }}
+          >
+            오픈 소스 라이선스
+          </button>{" "}
+          · 명령 팔레트에서도 연다
+        </p>
       </div>
     </div>
   );

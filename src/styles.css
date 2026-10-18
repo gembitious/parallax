@@ -873,6 +873,36 @@ button.toggle.primary {
   box-shadow: var(--shadow);
 }
 
+.help-footer {
+  margin: 10px 0 0;
+  font-size: 12px;
+}
+
+/* 오픈 소스 라이선스: 거의 화면 전체, 글만 스크롤한다 */
+.help.notices {
+  display: flex;
+  flex-direction: column;
+  width: min(960px, calc(100vw - 32px));
+  height: calc(100vh - 32px);
+  overflow: hidden;
+}
+
+.notices-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  outline: none;
+}
+
+.notices-body pre {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .help h2 {
   margin: 0 0 8px;
   font-size: 14px;
