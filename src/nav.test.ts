@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { MAX_STACK, backDirectionOf, lastName, titleOf, viewReducer, type PlxRequest, type ViewState } from "./nav";
+import {
+  MAX_STACK,
+  backDirectionAt,
+  backDirectionOf,
+  lastName,
+  titleOf,
+  viewReducer,
+  type PlxRequest,
+  type ViewState,
+} from "./nav";
 
 const request = (id: number, request: PlxRequest["request"]): PlxRequest => ({
   id,
@@ -8,6 +17,7 @@ const request = (id: number, request: PlxRequest["request"]): PlxRequest => ({
   args: [],
   cwd: "/repo",
   t0Ms: 0,
+  mainMs: 0,
   recvMs: 0,
   cold: false,
 });
@@ -124,6 +134,17 @@ describe("viewReducer", () => {
     expect(state.stack).toHaveLength(MAX_STACK);
     expect(state.stack[MAX_STACK - 1]).toMatchObject({ target: { rev: `p${MAX_STACK + 4}` } });
   });
+
+  it("아래를 버려 맨 아래가 된 `<` 화면의 `>`는 돌아가지 않고 새로 연다", () => {
+    let state = viewReducer(empty, { type: "request", request: blame(1), receivedMs: 0 });
+    for (let i = 0; i < MAX_STACK; i++) state = navigate(state, "older", `o${i}`);
+    expect(state.stack).toHaveLength(MAX_STACK);
+    expect(state.stack.map((e) => e.via)).toEqual(Array(MAX_STACK).fill("older"));
+    expect(backDirectionAt(state.stack, 0)).toBeUndefined();
+    expect(backDirectionAt(state.stack, 1)).toBe("newer");
+    while (state.stack.length > 1) state = viewReducer(state, { type: "back" });
+    expect(backDirectionAt(state.stack, 0)).toBeUndefined();
+  });
 });
 
 describe("탐색 도우미", () => {
@@ -132,6 +153,10 @@ describe("탐색 도우미", () => {
     expect(backDirectionOf("newer")).toBe("older");
     expect(backDirectionOf("parent")).toBeUndefined();
     expect(backDirectionOf("request")).toBeUndefined();
+    let state = viewReducer(empty, { type: "request", request: blame(1), receivedMs: 0 });
+    state = navigate(state, "older", "o1");
+    state = navigate(state, "newer", "n1");
+    expect([0, 1, 2].map((i) => backDirectionAt(state.stack, i))).toEqual([undefined, "newer", "older"]);
   });
 
   it("창 제목", () => {
@@ -163,5 +188,61 @@ describe("lastName", () => {
     expect(lastName("C:\\work\\repo\\")).toBe("repo");
     expect(lastName("repo")).toBe("repo");
     expect(lastName("/")).toBe("/");
+  });
+});
+
+describe("reload", () => {
+  it("replaces the entry in place with a new key (blame keeps the given line)", () => {
+    let state = viewReducer(empty, { type: "request", request: blame(1), receivedMs: 0 });
+    state = viewReducer(state, {
+      type: "navigate",
+      navigation: { kind: "history", target: { repo: "/repo", path: "a.rs", rev: null } },
+    });
+    const [root, history] = state.stack;
+    const reloaded = viewReducer(state, { type: "reload", key: root.key, line: 42 });
+    expect(reloaded.stack[0]).toMatchObject({ view: "blame", line: 42, via: "request" });
+    expect(reloaded.stack[0].key).not.toBe(root.key);
+    expect(reloaded.stack[1]).toBe(history);
+    const again = viewReducer(reloaded, { type: "reload", key: history.key });
+    expect(again.stack[1]).toMatchObject({ view: "history", via: "history" });
+    expect(again.stack[1].key).not.toBe(history.key);
+    expect(viewReducer(again, { type: "reload", key: 9999 })).toBe(again);
+  });
+
+  it("라인 히스토리는 옮긴 줄 범위로 다시 연다(파일 히스토리는 범위가 생기지 않는다)", () => {
+    let state = viewReducer(empty, { type: "request", request: blame(1), receivedMs: 0 });
+    state = viewReducer(state, {
+      type: "navigate",
+      navigation: { kind: "history", target: { repo: "/repo", path: "a.rs", rev: null }, lines: { start: 40, end: 50 } },
+    });
+    const line = state.stack[1];
+    const moved = viewReducer(state, { type: "reload", key: line.key, lines: { start: 50, end: 60 } });
+    expect(moved.stack[1]).toMatchObject({ view: "history", lines: { start: 50, end: 60 } });
+    state = viewReducer(moved, { type: "back" });
+    state = viewReducer(state, {
+      type: "navigate",
+      navigation: { kind: "history", target: { repo: "/repo", path: "a.rs", rev: null } },
+    });
+    const file = state.stack[1];
+    const same = viewReducer(state, { type: "reload", key: file.key, lines: { start: 1, end: 2 } });
+    expect(same.stack[1]).toMatchObject({ view: "history", lines: null });
+  });
+
+  it("화면의 검색(blame 검색어·패널, 히스토리 검색어)을 새 화면으로 넘긴다", () => {
+    let state = viewReducer(empty, { type: "request", request: blame(1), receivedMs: 0 });
+    const search = { query: { search: "fn", caseSensitive: false, regexp: false, wholeWord: true }, open: false };
+    state = viewReducer(state, { type: "reload", key: state.stack[0].key, line: 7, search });
+    expect(state.stack[0]).toMatchObject({ view: "blame", line: 7, search });
+    // 줄 없이 다시 열면 앞 줄 그대로, 검색이 없으면 지운다
+    state = viewReducer(state, { type: "reload", key: state.stack[0].key });
+    expect(state.stack[0]).toMatchObject({ view: "blame", line: 7 });
+    expect(state.stack[0]).not.toHaveProperty("search", search);
+
+    state = viewReducer(state, {
+      type: "navigate",
+      navigation: { kind: "history", target: { repo: "/repo", path: "a.rs", rev: null } },
+    });
+    state = viewReducer(state, { type: "reload", key: state.stack[1].key, query: "수정" });
+    expect(state.stack[1]).toMatchObject({ view: "history", lines: null, query: "수정" });
   });
 });

@@ -2,18 +2,28 @@
 // 행은 화면이 보는 범위만 묶음으로 백엔드에서 읽고(가상 스크롤), 레인은 캔버스 하나에 그린다.
 // 키: j/k 이동, Enter 커밋 상세, y sha 복사, R 원격 브랜치 모두 ↔ 브랜치만, / 검색(메시지·작성자·sha, path:경로),
 //     n/N 다음·이전 결과, q 뒤로, ? 도움말.
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Help } from "../Help";
 import { copyText } from "../clipboard";
 import { formatCount, formatDate, relativeTime, shortSha } from "../blame/format";
 import { Acceleration } from "../history/Acceleration";
 import { scrollToRow, visibleRange } from "../history/list";
 import { lastName, type Navigation } from "../nav";
-import { afterPaint, nowMs, record } from "../perf";
+import { afterPaint, getPerfInfo, longFrameIn, nowMs, record } from "../perf";
 import { drawRows, graphWidth, readPalette, ROW_HEIGHT, type Palette, type Visible } from "./draw";
+import { reloadFocus, type Focus } from "./focus";
 import { CHUNK, RowCache, rowWidth } from "./rows";
 import { nextRow, parseQuery, rowMatches, type Query } from "./search";
 import { CANCELLED, openGraph, type GraphHandle } from "./session";
+import { watchRepo } from "../watch";
+import { WorktreePicker } from "../worktree/WorktreePicker";
+import { useQuickOpen } from "../quickopen/QuickOpen";
+import { commonCommands, usePalette, type Command } from "../palette/Palette";
+import { isComposing, routeKey } from "../keys";
+import { openInEditor } from "../editor";
+import { toggleHud } from "../Hud";
+import { ScrollMeter } from "../scrollMeter";
+import { drawWindow, insideDrawn, type DrawnRange } from "../scrollWindow";
 import type { GraphMeta, GraphRow, GraphScope, GraphStats, Label } from "./types";
 
 type Props = {
@@ -97,10 +107,21 @@ type Progress =
 const TOAST_MS = 1800;
 /** 성능 예산(docs/MILESTONES.md): 참조 저장소 전체 이력에서 첫 화면 ≤ 150ms */
 const FIRST_SCREEN_BUDGET_MS = 150;
-/** 보이는 행 앞뒤로 미리 읽는 행 수 */
+/** 그리는 범위 앞뒤로 미리 읽는 행 수 */
 const OVERSCAN = 60;
+/** 읽지 못한 행 묶음을 다시 읽기까지(ms) */
+const RETRY_MS = 1000;
 /** 한 행에 보이는 이름표 수(나머지는 +N) */
 const MAX_LABELS = 3;
+/**
+ * 레인 캔버스의 문맥 설정. WebKit(macOS·Linux)에는 CPU 캔버스(willReadFrequently, 픽셀을 읽지는 않는다)를 청한다.
+ * GPU 캔버스를 처음 쓸 때 준비하느라 앱이 뜬 뒤 첫 그래프가 늦었다(macOS CI 0.9~3.1초 → CPU 캔버스로 0.27~0.56초).
+ * 레인은 선과 점뿐이고 그리는 범위가 바뀔 때만 다시 그려 CPU로 충분하다. Chromium(Windows WebView2)은 기본(GPU 캔버스)으로
+ * 둔다: CPU 캔버스로 빨라지지 않았다(CI 첫 그래프의 그린 뒤 화면까지 CPU 77·111ms, GPU 97·98·101ms, bench/results.md).
+ */
+const CANVAS_SETTINGS: CanvasRenderingContext2DSettings | undefined = /\bChrome\//.test(navigator.userAgent)
+  ? undefined
+  : { willReadFrequently: true };
 
 /** 마지막으로 한 검색(n/N이 되풀이한다). 경로 검색은 일치 행들을 한 번 구해 둔다. */
 type Found = { kind: "text"; text: string } | { kind: "path"; path: string; rows: number[]; set: ReadonlySet<number> };
@@ -132,11 +153,18 @@ function GraphPane({
     commits: 0,
   });
   const [selected, setSelected] = useState(0);
+  /** 그리는 범위의 기준 스크롤 위치. 스크롤마다가 아니라 미리 그린 범위를 벗어날 때 바뀐다. */
   const [viewport, setViewport] = useState({ top: 0, height: 0 });
+  /** 지금 그린 행 범위(스크롤 이벤트가 다시 그릴지 판단한다). 행과 레인 캔버스가 스크롤 내용 안에 있어 이 범위 안의
+   * 스크롤은 브라우저가 옮기기만 한다(src/scrollWindow.ts). */
+  const drawnRange = useRef<DrawnRange>({ start: 0, end: 0, height: 0 });
   /** 행 묶음이 도착할 때마다 올려 다시 그린다. */
-  const [, setVersion] = useState(0);
+  const [version, setVersion] = useState(0);
+  /** 보이는 세션이 바뀔 때마다 올린다(행을 다시 읽는다). */
+  const [generation, setGeneration] = useState(0);
   const [palette, setPalette] = useState<Palette | null>(null);
   const [help, setHelp] = useState(false);
+  const [worktrees, setWorktrees] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [search, setSearch] = useState({ open: false, input: "" });
   const [found, setFound] = useState<Found | null>(null);
@@ -145,8 +173,22 @@ function GraphPane({
   /** 검색마다 올린다. 늦게 온 앞 검색의 결과는 버린다. */
   const searchSeq = useRef(0);
   const cache = useRef(new RowCache());
+  /** 보이는 세션 */
   const handle = useRef<GraphHandle | null>(null);
+  /** 다시 읽는 중인 세션(첫 화면이 오면 보이는 세션과 바꾼다) */
+  const pending = useRef<GraphHandle | null>(null);
+  const sessionSeq = useRef(0);
+  /** 아직 이루지 못한 처음 요청(`G`로 연 커밋 등). 그사이 다시 읽으면 새 세션도 이것을 고른다. */
+  const pendingFocus = useRef<Focus | null>(null);
+  /** 고른 행의 sha(그 행의 묶음이 캐시에서 밀려나도 다시 읽을 때 같은 커밋을 고른다) */
+  const selectedSha = useRef<{ index: number; sha: string | null }>({ index: -1, sha: null });
   const listRef = useRef<HTMLDivElement>(null);
+  const quickOpen = useQuickOpen({
+    repo: meta?.repo ?? repo,
+    current: null,
+    onNavigate,
+    onClosed: () => listRef.current?.focus({ preventScroll: true }),
+  });
   const canvasRef = useRef<HTMLCanvasElement>(null);
   /** 숨겼다 다시 보일 때 되돌릴 스크롤 위치 */
   const savedTop = useRef(0);
@@ -156,12 +198,56 @@ function GraphPane({
     t0: nowMs(),
     metaMs: NaN,
     pageMs: NaN,
+    /** 첫 화면의 레인을 캔버스에 그린 때와 그리는 데 든 시간 */
+    lanesMs: NaN,
+    lanesDrawMs: NaN,
     shown: false,
     painted: null as Promise<number | null> | null,
     reported: false,
   });
-  const latest = useRef({ active, meta, selected, help, total, found });
-  latest.current = { active, meta, selected, help, total, found };
+  const [accelRequest, setAccelRequest] = useState(0);
+  // 명령 팔레트: 키로 하는 일 모두와 머리줄 버튼(범위, 가속 설정). 함수들은 아래에 있다(누를 때 부른다).
+  const commands: Command[] = [
+    { label: "커밋 상세", keys: "Enter", run: () => openCommit() },
+    { label: "커밋 sha 복사", keys: "y", run: () => copySha() },
+    ...SCOPES.map(
+      (s): Command => ({
+        label: `범위: ${s.name}`,
+        keys: s.scope === "all" ? "R" : undefined,
+        detail: s.title,
+        run: () => changeScope(s.scope),
+      }),
+    ),
+    { label: "검색 (메시지·작성자·sha, path:경로)", keys: "/", run: () => openSearch() },
+    { label: "다음 검색 결과", keys: "n", run: () => runSearch(true) },
+    { label: "이전 검색 결과", keys: "N", run: () => runSearch(false) },
+    { label: "맨 위(최근) 커밋으로", keys: "Home", run: () => select(0) },
+    { label: "맨 아래 커밋으로", keys: "End", run: () => select((latest.current.total ?? 1) - 1) },
+    { label: "에디터로 열기", keys: "o", detail: "작업트리 폴더", run: () => openEditor() },
+    { label: "가속 설정 (commit-graph·Bloom 필터)", detail: "그래프·히스토리를 빠르게", run: () => setAccelRequest((n) => n + 1) },
+    ...commonCommands({
+      files: quickOpen.open,
+      worktrees: () => setWorktrees(true),
+      help: () => setHelp(true),
+      back: onBack,
+      hud: getPerfInfo().enabled ? toggleHud : undefined,
+    }),
+  ];
+  const commandPalette = usePalette(commands, () => listRef.current?.focus({ preventScroll: true }));
+  const latest = useRef({ active, meta, selected, help, total, found, openFiles: quickOpen.open, palette: commandPalette.open });
+  // 스크롤 프레임 측정(성능 HUD가 켜져 있을 때만)
+  const scrollMeter = useRef<ScrollMeter | null>(null);
+  scrollMeter.current ??= new ScrollMeter(
+    () => `그래프 ${lastName(latest.current.meta?.repo ?? repo)}`,
+    ROW_HEIGHT,
+  );
+  useEffect(() => () => scrollMeter.current?.dispose(), []);
+  latest.current = { active, meta, selected, help, total, found, openFiles: quickOpen.open, palette: commandPalette.open };
+  {
+    const row = cache.current.get(selected);
+    if (selectedSha.current.index !== selected) selectedSha.current = { index: selected, sha: row?.sha ?? null };
+    else if (row) selectedSha.current.sha = row.sha;
+  }
 
   const showToast = (message: string) => {
     setToast(message);
@@ -169,46 +255,168 @@ function GraphPane({
     toastTimer.current = window.setTimeout(() => setToast(null), TOAST_MS);
   };
 
-  // 그래프를 연다. 화면을 떠나면(끝난 뒤에도) 닫아 백엔드의 레이아웃을 버린다.
-  useEffect(() => {
+  /**
+   * 그래프 세션을 연다. 처음에는 바로 보이고, 다시 읽을 때(저장소가 바뀜)는 새 세션의 첫 화면이 올 때까지 앞 세션을
+   * 그대로 보이다가 바꿔 끼운다(깜빡이지 않게). 더 새 세션이 열리면 앞 세션의 이벤트는 버린다.
+   */
+  const openSession = (focusOn: Focus, reload: boolean) => {
+    const seq = ++sessionSeq.current;
+    const startedMs = nowMs();
+    let nextMeta: GraphMeta | null = null;
+    pending.current?.close();
+    pending.current = null;
     const graph = openGraph(repo, scope, (event) => {
+      const showing = handle.current === graph;
+      // 더 새 세션이 열렸으면 이 세션의 이벤트는 버린다. 단 보이는 세션은 바꿔 끼울 때까지 그린다(다시 읽기가
+      // 실패해도 보이는 그래프가 멈추지 않게).
+      if (seq !== sessionSeq.current && !showing) return;
       switch (event.kind) {
         case "meta": {
           const { kind: _kind, ...m } = event;
-          timing.current.metaMs = nowMs();
-          setMeta(m);
+          if (showing) {
+            timing.current.metaMs = nowMs();
+            setMeta(m);
+          } else {
+            nextMeta = m;
+          }
           break;
         }
         case "loading":
-          setProgress({ kind: "loading", commits: event.commits });
+          if (showing) setProgress({ kind: "loading", commits: event.commits });
           break;
         case "page":
-          timing.current.pageMs = nowMs();
+          if (showing) {
+            timing.current.pageMs = nowMs();
+          } else {
+            handle.current?.close();
+            handle.current = graph;
+            pending.current = null;
+            cache.current = new RowCache();
+            if (nextMeta) setMeta(nextMeta);
+            refreshSearch(graph);
+            const total = event.total;
+            const receivedMs = nowMs();
+            // 바뀐 저장소를 다시 그린 데까지(외부 커밋 → 화면 반영, 예산 1초의 우리 몫)
+            void afterPaint().then((painted) => {
+              const end = painted ?? nowMs();
+              record({
+                kind: "graph",
+                label: `그래프 다시 읽음 ${lastName(nextMeta?.repo ?? repo)}`,
+                totalMs: end - startedMs,
+                phases: [
+                  { label: "첫 화면 받음", ms: receivedMs - startedMs },
+                  { label: "표시", ms: end - startedMs },
+                ],
+                detail: `커밋 ${total}`,
+                ok: painted !== null,
+              });
+            });
+          }
           cache.current.seed(event.rows);
           setAvailable(event.rows.length);
           setTotal(event.total);
-          setProgress((p) => (p.kind === "done" ? p : { kind: "layout" }));
+          setProgress({ kind: "layout" });
+          setGeneration(seq);
+          focusRow(graph, focusOn);
           break;
         case "progress":
-          setAvailable(event.available);
+          if (showing) setAvailable(event.available);
           break;
         case "done":
-          setAvailable(event.stats.rows);
-          setProgress({ kind: "done", stats: event.stats });
+          if (showing) {
+            setAvailable(event.stats.rows);
+            setProgress({ kind: "done", stats: event.stats });
+          }
           break;
         case "error":
-          setProgress({ kind: "failed", message: event.message });
+          if (showing) setProgress({ kind: "failed", message: event.message });
+          else showToast(`그래프를 다시 읽지 못했다: ${event.message}`);
           break;
         case "cancelled":
           break;
       }
     });
-    handle.current = graph;
+    if (reload) pending.current = graph;
+    else handle.current = graph;
+  };
+
+  /** 새 세션의 첫 화면에서 고를 행 */
+  const focusRow = (graph: GraphHandle, focusOn: Focus) => {
+    if (focusOn.kind === "top") {
+      pendingFocus.current = null;
+      setSelected(0);
+      if (listRef.current) listRef.current.scrollTop = 0;
+      return;
+    }
+    graph.find(focusOn.kind === "rev" ? focusOn.rev : "HEAD").then(
+      (row) => {
+        // 보이는 세션의 답이면 쓴다(더 새 세션을 읽는 중이어도: 바꿔 끼우면 그 세션이 같은 요청을 이룬다).
+        if (handle.current !== graph) return;
+        if (pendingFocus.current === focusOn) pendingFocus.current = null;
+        if (row === null) {
+          if (focusOn.kind === "rev" && focusOn.offset === undefined) {
+            showToast(`이 그래프에 없는 커밋이다: ${shortSha(focusOn.rev)}`);
+          }
+          return;
+        }
+        const list = listRef.current;
+        if (focusOn.kind === "rev" && focusOn.offset !== undefined && list) {
+          // 다시 읽은 그래프: 고른 커밋을 화면의 같은 자리에 둔다(위에 새 커밋이 생겨 행 번호가 밀려도).
+          setSelected(row);
+          list.scrollTop = Math.max(0, row * ROW_HEIGHT - focusOn.offset);
+        } else {
+          select(row, true);
+        }
+      },
+      (e: unknown) => focusOn.kind === "rev" && focusOn.offset === undefined && showToast(String(e)),
+    );
+  };
+
+  /**
+   * 저장소가 바뀌었다: 맨 위를 보고 있었으면 맨 위(새 커밋)를, 아니면 고른 커밋을 같은 자리에 두고 다시 읽는다.
+   * 처음 요청한 커밋을 아직 고르지 못했으면(그래프를 읽는 중에 커밋이 생겼다) 그 요청을 이어 간다.
+   */
+  const reload = () => {
+    const { selected: at } = latest.current;
+    const top = listRef.current?.scrollTop ?? 0;
+    // 고른 행의 묶음이 캐시에서 밀려났으면 기억한 sha, 그것도 없으면 보이는 첫 행(늘 캐시에 있다)을 같은 자리에 둔다.
+    const remembered = selectedSha.current.index === at ? selectedSha.current.sha : null;
+    const focusOn = reloadFocus({
+      pending: pendingFocus.current,
+      scrollTop: top,
+      rowHeight: ROW_HEIGHT,
+      selected: at,
+      selectedSha: cache.current.get(at)?.sha ?? remembered,
+      firstVisibleSha: cache.current.get(Math.floor(top / ROW_HEIGHT))?.sha ?? null,
+    });
+    openSession(focusOn, true);
+  };
+
+  // 그래프를 연다. 화면을 떠나면(끝난 뒤에도) 닫아 백엔드의 레이아웃을 버린다.
+  useEffect(() => {
+    const initial: Focus = focus ? { kind: "rev", rev: focus } : { kind: "head" };
+    pendingFocus.current = initial;
+    openSession(initial, false);
     return () => {
-      graph.close();
+      sessionSeq.current += 1;
+      handle.current?.close();
+      handle.current = null;
+      pending.current?.close();
       window.clearTimeout(toastTimer.current);
     };
     // 범위마다 새 컴포넌트다(GraphView가 key를 준다).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 저장소의 HEAD·참조가 바뀌면(다른 터미널·워크트리의 커밋 등) 다시 읽는다. 다른 화면 아래 숨어 있으면(스크롤
+  // 위치를 읽을 수 없다) 표시만 해 두고 다시 보일 때 읽는다.
+  const stale = useRef(false);
+  useEffect(() => {
+    return watchRepo(repo, () => {
+      if (latest.current.active) reload();
+      else stale.current = true;
+    });
+    // reload는 ref만 읽는다. 범위마다 새 컴포넌트다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -232,6 +440,7 @@ function GraphPane({
       const phases = [
         { label: "참조", ms: t.metaMs - t.t0 },
         { label: "첫 화면 보냄", ms: t.pageMs - t.t0 },
+        { label: "레인 그림", ms: t.lanesMs - t.t0 },
         { label: "표시", ms: end - t.t0 },
         { label: "레이아웃 끝", ms: stats.totalMs },
       ].filter((p) => Number.isFinite(p.ms));
@@ -246,41 +455,43 @@ function GraphPane({
         totalMs: end - t.t0,
         budgetMs: cold ? undefined : FIRST_SCREEN_BUDGET_MS,
         phases,
-        detail: `커밋 ${stats.rows} · 레인 ${stats.width} · DAG ${stats.loadMs.toFixed(1)}ms (${sources.join(", ") || "없음"})`,
+        detail: [
+          `커밋 ${stats.rows} · 레인 ${stats.width} · DAG ${stats.loadMs.toFixed(1)}ms (${sources.join(", ") || "없음"})`,
+          Number.isFinite(t.lanesDrawMs) && `캔버스 ${t.lanesDrawMs.toFixed(1)}ms`,
+          longFrameIn(t.t0, end),
+        ]
+          .filter(Boolean)
+          .join(" · "),
         ok: painted !== null,
       });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [progress]);
 
-  // 처음 고를 커밋: 준 커밋, 없으면 HEAD(맨 위가 아닐 수 있다: 다른 브랜치가 더 최근이거나 detached HEAD)
-  const pageArrived = total !== null;
-  useEffect(() => {
-    if (!pageArrived) return;
-    handle.current?.find(focus ?? "HEAD").then(
-      (row) => {
-        if (row !== null) select(row, true);
-        else if (focus) showToast(`이 그래프에 없는 커밋이다: ${shortSha(focus)}`);
-      },
-      (e: unknown) => focus && showToast(String(e)),
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageArrived]);
-
-  // 보이는 범위(와 앞뒤 여유)의 행을 읽는다.
+  // 그리는 범위(와 앞뒤 여유)의 행을 읽는다.
   useEffect(() => {
     if (total === null) return;
-    const { start, end } = visibleRange(viewport.top, viewport.height, ROW_HEIGHT, total, OVERSCAN);
-    for (const index of cache.current.take(start, end, available)) {
+    const { start, end } = drawWindow(viewport.top, viewport.height, ROW_HEIGHT, total);
+    const from = Math.max(0, start - OVERSCAN);
+    // 응답이 오기 전에 세션을 바꿔 끼웠으면(다시 읽기) 그 응답은 앞 세션의 행이라 버린다.
+    const rows = cache.current;
+    for (const index of rows.take(from, Math.min(total, end + OVERSCAN), available)) {
       handle.current?.rows(index * CHUNK, (index + 1) * CHUNK).then(
         (window) => {
-          cache.current.put(window);
+          if (cache.current !== rows) return;
+          rows.put(window);
+          // 덜 받은 묶음(레이아웃 진행 중에 요청)이면 다음 실행이 나머지를 다시 읽는다(version이 바뀐다).
           setVersion((v) => v + 1);
         },
-        () => cache.current.failed(index),
+        () => {
+          if (cache.current !== rows) return;
+          rows.failed(index);
+          // 실패한 묶음은 잠시 뒤 다시 읽는다(곧바로 되풀이하지 않게).
+          window.setTimeout(() => setVersion((v) => v + 1), RETRY_MS);
+        },
       );
     }
-  }, [viewport, available, total]);
+  }, [viewport, available, total, generation, version]);
 
   // 목록 크기를 따라간다.
   useEffect(() => {
@@ -310,9 +521,19 @@ function GraphPane({
       if (list.scrollTop !== savedTop.current) list.scrollTop = savedTop.current;
       setViewport({ top: list.scrollTop, height: list.clientHeight });
       list.focus({ preventScroll: true });
+      if (stale.current) {
+        stale.current = false;
+        reload();
+      }
     } else {
+      // 숨을 때 떠 있는 창은 닫는다(돌아왔을 때 포커스 없이 남지 않게).
       setHelp(false);
+      setWorktrees(false);
+      quickOpen.close();
+      commandPalette.close();
     }
+    // reload는 ref만 읽는다. close는 상태만 바꾼다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
   /** `index`를 고르고 보이게 스크롤한다(`center`면 화면 밖일 때 가운데로). */
@@ -352,6 +573,27 @@ function GraphPane({
   };
 
   const changeScope = (next: GraphScope) => onScope(next, current()?.sha ?? null);
+
+  const openEditor = () => openInEditor({ repo: meta?.repo ?? repo, path: null, rev: null, line: null }).then(showToast);
+
+  /**
+   * 세션을 바꿔 끼웠다: 하던 검색은 버리고(앞 세션의 행 번호다), 경로 일치는 새 세션에서 다시 구한다(위에 커밋이
+   * 생기면 행 번호가 밀린다). 메시지 검색은 행마다 다시 맞춰 보므로 그대로 둔다.
+   */
+  const refreshSearch = (graph: GraphHandle) => {
+    const seq = ++searchSeq.current;
+    setSearching(false);
+    const last = latest.current.found;
+    if (last?.kind !== "path") return;
+    graph.searchPath(last.path).then(
+      (matched) => {
+        if (seq === searchSeq.current) setFound({ kind: "path", path: last.path, rows: matched, set: new Set(matched) });
+      },
+      () => {
+        if (seq === searchSeq.current) setFound(null);
+      },
+    );
+  };
 
   /**
    * 고른 행 다음(`forward`가 아니면 앞)의 일치로 간다. `input`을 주면 그 입력으로 찾고, 없으면 마지막 검색을 되풀이한다.
@@ -414,14 +656,19 @@ function GraphPane({
     else if (latest.current.active) listRef.current?.focus({ preventScroll: true });
   }, [search.open]);
 
+  /** 검색 칸을 연다. 이미 열려 있으면(목록을 눌러 포커스가 떠났다) 그리로 포커스를 옮긴다. */
+  const openSearch = () => {
+    setSearch((s) => ({ ...s, open: true }));
+    searchRef.current?.focus();
+  };
+
   // 키: 화면이 맨 위일 때만.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!latest.current.active || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
-      const target = e.target as HTMLElement | null;
-      if (target?.closest("input, textarea")) return;
+      const { active: on, openFiles, palette: openPalette } = latest.current;
+      if (!on || routeKey(e, { files: openFiles, palette: openPalette }) !== "view") return;
       // 머리줄 버튼에 초점이 있으면 Enter·Space는 버튼이 받는다.
-      if (target?.closest("button") && (e.key === "Enter" || e.key === " ")) return;
+      if ((e.target as HTMLElement | null)?.closest("button") && (e.key === "Enter" || e.key === " ")) return;
       const { selected: at, help: helpOpen } = latest.current;
       let handled = true;
       switch (e.key) {
@@ -453,7 +700,7 @@ function GraphPane({
           copySha();
           break;
         case "/":
-          setSearch((s) => ({ ...s, open: true }));
+          openSearch();
           break;
         case "n":
           runSearch(true);
@@ -466,6 +713,12 @@ function GraphPane({
           break;
         case "q":
           onBack();
+          break;
+        case "W":
+          setWorktrees(true);
+          break;
+        case "o":
+          openEditor();
           break;
         case "?":
           setHelp(true);
@@ -487,7 +740,7 @@ function GraphPane({
   }, []);
 
   const count = total ?? 0;
-  const { start, end } = visibleRange(viewport.top, viewport.height, ROW_HEIGHT, count);
+  const { start, end } = drawWindow(viewport.top, viewport.height, ROW_HEIGHT, count);
   const visible: Visible[] = [];
   let visibleLanes = 1;
   for (let i = start; i < end; i++) {
@@ -502,25 +755,50 @@ function GraphPane({
     if (visibleLanes > lanes) setLanes(visibleLanes);
   });
 
-  // 레인은 보이는 행만 캔버스에 그린다(스크롤·행 도착·테마 변경마다).
+  // 레인은 그리는 범위의 행만 캔버스에 그린다. 캔버스는 스크롤 내용 안(범위의 첫 행 자리)에 있어 범위 안의 스크롤은
+  // 다시 그리지 않는다. 범위·행 도착·너비·HEAD·테마가 바뀔 때만 다시 그린다.
+  const drawnLanes = useRef<{ key: string; palette: Palette | null }>({ key: "", palette: null });
   useLayoutEffect(() => {
+    drawnRange.current = { start, end, height: viewport.height };
     const canvas = canvasRef.current;
-    if (!canvas || !palette) return;
-    const dpr = window.devicePixelRatio || 1;
-    const height = viewport.height;
-    const w = Math.round(width * dpr);
-    const h = Math.round(height * dpr);
-    if (canvas.width !== w || canvas.height !== h) {
-      canvas.width = w;
-      canvas.height = h;
-      canvas.style.width = `${width}px`;
-      canvas.style.height = `${height}px`;
+    const key = `${start}:${end}:${width}:${meta?.head ?? ""}:${version}:${generation}`;
+    let canvasMs: number | null = null;
+    if (canvas && palette && (drawnLanes.current.key !== key || drawnLanes.current.palette !== palette)) {
+      const t0 = nowMs();
+      drawnLanes.current = { key, palette };
+      const dpr = window.devicePixelRatio || 1;
+      const height = (end - start) * ROW_HEIGHT;
+      const w = Math.round(width * dpr);
+      const h = Math.round(height * dpr);
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+        canvas.style.width = `${width}px`;
+        canvas.style.height = `${height}px`;
+      }
+      const ctx = canvas.getContext("2d", CANVAS_SETTINGS);
+      if (ctx) {
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, width, height);
+        drawRows(ctx, visible, start * ROW_HEIGHT, width, palette, meta?.head ?? null);
+      }
+      const drawnAt = nowMs();
+      canvasMs = drawnAt - t0;
+      // 첫 화면의 레인(성능 HUD): '표시'가 그리기에서 늘었는지, 그린 뒤 페인트를 기다린 것인지 나눠 본다.
+      const t = timing.current;
+      if (t.shown && Number.isNaN(t.lanesMs)) {
+        t.lanesMs = drawnAt;
+        t.lanesDrawMs = canvasMs;
+      }
     }
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, width, height);
-    drawRows(ctx, visible, viewport.top, width, palette, meta?.head ?? null);
+    // 스크롤 측정: 지금 보이는 행 가운데 아직 오지 않은 것이 있었나
+    const list = listRef.current;
+    if (list) {
+      const shown = visibleRange(list.scrollTop, list.clientHeight, ROW_HEIGHT, count, 0);
+      let blank = false;
+      for (let i = shown.start; i < shown.end && !blank; i++) blank = cache.current.get(i) === undefined;
+      scrollMeter.current?.drawn(blank, canvasMs);
+    }
   });
 
   const chosen = current();
@@ -582,7 +860,7 @@ function GraphPane({
             뒤로 q · {depth - 1}
           </span>
         )}
-        {meta && <Acceleration repo={meta.repo} onDone={showToast} />}
+        {meta && <Acceleration repo={meta.repo} request={accelRequest} active={active} onDone={showToast} />}
         <span className="blame-status">
           {progress.kind === "loading" &&
             (progress.commits > 0 ? `커밋 ${formatCount(progress.commits)}개 읽는 중…` : "여는 중…")}
@@ -603,6 +881,8 @@ function GraphPane({
             aria-label="그래프 검색"
             onChange={(e) => setSearch({ open: true, input: e.target.value })}
             onKeyDown={(e) => {
+              // IME 조합 중의 Enter·Esc는 조합을 끝내는 키다(Quick Open·팔레트와 같다).
+              if (isComposing(e.nativeEvent)) return;
               if (e.key === "Enter") {
                 e.preventDefault();
                 runSearch(!e.shiftKey, search.input);
@@ -628,6 +908,14 @@ function GraphPane({
           onScroll={(e) => {
             const list = e.currentTarget;
             if (latest.current.active) savedTop.current = list.scrollTop;
+            const meter = scrollMeter.current;
+            meter?.scrolled(list.scrollTop);
+            // 미리 그린 범위 안이면 브라우저가 옮기기만 한다(다시 그리지 않는다).
+            const count = latest.current.total ?? 0;
+            if (insideDrawn(list.scrollTop, list.clientHeight, ROW_HEIGHT, count, drawnRange.current)) {
+              meter?.drawn(false);
+              return;
+            }
             setViewport({ top: list.scrollTop, height: list.clientHeight });
           }}
         >
@@ -657,6 +945,7 @@ function GraphPane({
                 </div>
               );
             })}
+            <canvas className="graph-lanes" ref={canvasRef} aria-hidden="true" style={{ top: start * ROW_HEIGHT }} />
           </div>
           {progress.kind !== "failed" && total === 0 && (
             <div className="blame-message">
@@ -669,7 +958,6 @@ function GraphPane({
             </div>
           )}
         </div>
-        <canvas className="graph-lanes" ref={canvasRef} aria-hidden="true" />
       </div>
       {chosen && (
         <footer className="history-detail">
@@ -688,6 +976,18 @@ function GraphPane({
         </footer>
       )}
       {help && <Help view="graph" onClose={() => setHelp(false)} />}
+      {worktrees && (
+        <WorktreePicker
+          repo={meta?.repo ?? repo}
+          onClose={() => setWorktrees(false)}
+          onPick={(worktree) => {
+            setWorktrees(false);
+            if (!worktree.current) onNavigate({ kind: "graph", repo: worktree.path, rev: null });
+          }}
+        />
+      )}
+      {quickOpen.overlay}
+      {commandPalette.overlay}
       {toast && (
         <div className="toast" role="status">
           {toast}
@@ -697,7 +997,8 @@ function GraphPane({
   );
 }
 
-function Row({ row, nowMs }: { row: GraphRow; nowMs: number }) {
+/** 행 글(이름표·요약·작성자·시각·sha). 범위를 다시 그릴 때 이미 그린 행은 건너뛴다. */
+const Row = memo(function Row({ row, nowMs }: { row: GraphRow; nowMs: number }) {
   return (
     <>
       <Labels labels={row.labels} />
@@ -711,7 +1012,7 @@ function Row({ row, nowMs }: { row: GraphRow; nowMs: number }) {
       <span className="history-sha mono">{shortSha(row.sha)}</span>
     </>
   );
-}
+});
 
 const LABEL_TITLE: Record<Label["kind"], string> = {
   head: "HEAD (브랜치가 아니다)",
@@ -728,11 +1029,14 @@ function Labels({ labels }: { labels: Label[] }) {
     <>
       {shown.map((label) => (
         <span
-          key={`${label.kind}:${label.name}`}
-          className={`label label-${label.kind}${label.current ? " current" : ""}`}
-          title={`${LABEL_TITLE[label.kind]}${label.current ? " · HEAD" : ""}: ${label.name}`}
+          key={`${label.kind}:${label.name}:${label.worktree ?? ""}`}
+          className={`label label-${label.kind}${label.current ? " current" : ""}${label.worktree ? " label-worktree" : ""}`}
+          title={`${LABEL_TITLE[label.kind]}${label.current ? " · HEAD" : ""}: ${label.name}${
+            label.worktree ? ` (워크트리 ${label.worktree}에서 체크아웃)` : ""
+          }`}
         >
           {label.name}
+          {label.worktree && <span className="label-wt">{label.worktree}</span>}
         </span>
       ))}
       {rest.length > 0 && (

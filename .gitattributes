@@ -16,3 +16,5 @@
 *.webp binary
 *.woff binary
 *.woff2 binary
+# git 번들(fixtures/git-ai: git-ai가 쓴 노트가 든 저장소)
+*.bundle binary

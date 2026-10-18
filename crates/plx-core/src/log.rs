@@ -331,19 +331,30 @@ impl LogStream {
     pub fn spawn(repo_dir: &Path, starts: &[String], path: &str) -> io::Result<LogStream> {
         let mut command = git::command(repo_dir);
         command.args([
+            // 경로는 파일 이름 그대로다: `app/[slug]/page.tsx`의 `[slug]`를 글롭으로 보면 다른 파일의 커밋이
+            // 끼고 changed-path Bloom 필터도 쓰지 못한다.
+            "--literal-pathspecs",
             "-c",
             "log.showRoot=true",
             "log",
             "-z",
             FORMAT,
             "--date=raw",
-            "--name-status",
             "--no-follow",
             "--no-show-signature",
             "--no-color",
             "--encoding=UTF-8",
         ]);
-        command.args(starts).arg("--").arg(path);
+        // 저장소 전체(`plx log .`)는 `git log`와 같게 경로를 주지 않는다: `-- .`은 이력 단순화를 해서 빈 커밋,
+        // `-s ours`로 합친 곁가지, 본줄기가 그대로인 `--no-ff` merge를 뺀다. 커밋마다 바뀐 파일 목록도 받지 않는다.
+        let whole = path.is_empty() || path == ".";
+        if !whole {
+            command.arg("--name-status");
+        }
+        command.args(starts);
+        if !whole {
+            command.arg("--").arg(path);
+        }
         Ok(LogStream {
             git: git::Streaming::spawn(command, "git log")?,
             parser: LogParser::new(path),

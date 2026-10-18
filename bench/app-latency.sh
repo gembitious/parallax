@@ -197,8 +197,93 @@ phases_of() {
   grep -o '"label":"[^"]*","ms":[0-9.]*' | sed 's/"label":"\([^"]*\)","ms":\([0-9.]*\)/\1|\2/' |
     awk -F'|' 'NF == 2 { printf "%s%s %.1f", sep, $1, $2; sep = " · " } END { print "" }'
 }
+# 여러 기록의 구간별 중앙값(구간은 처음 나온 순서로). macOS awk에는 정렬이 없어 구간마다 삽입 정렬한다.
+phase_medians() {
+  grep -o '"label":"[^"]*","ms":[0-9.]*' | sed 's/"label":"\([^"]*\)","ms":\([0-9.]*\)/\1|\2/' |
+    awk -F'|' 'NF == 2 {
+        if (!($1 in count)) names[++n] = $1
+        v[$1, ++count[$1]] = $2 + 0
+      }
+      END {
+        for (i = 1; i <= n; i++) {
+          l = names[i]; k = count[l]
+          for (a = 2; a <= k; a++) {
+            x = v[l, a]
+            for (b = a - 1; b >= 1 && v[l, b] > x; b--) v[l, b + 1] = v[l, b]
+            v[l, b + 1] = x
+          }
+          printf "%s%s %.1f", sep, l, v[l, int((k + 1) / 2)]; sep = " · "
+        }
+        print ""
+      }'
+}
 cold_phases="$(grep '"kind":"cold"' "$log" | head -n 1 | phases_of)"
 cold_blame="$(LC_ALL=C grep -F '(콜드 스타트)' "$log" | LC_ALL=C grep -F '"kind":"blame"' | head -n 1 | phases_of)"
+warm_phases="$(LC_ALL=C grep -F '"kind":"plx"' "$log" | phase_medians)"
+# 기록 가운데 가장 느린 것: "합계 · 구간 — 이름 (설명)". 가끔 한 번만 크게 느린 것(p90 = 최대)이 어느 구간인지 본다.
+# 기록의 열쇠는 이름 순이다(kind 다음이 label).
+slowest() {
+  local line record detail
+  line="$(awk '{ if (match($0, /"totalMs":[0-9.]*/)) print substr($0, RSTART + 10, RLENGTH - 10) "\t" $0 }' |
+    LC_ALL=C sort -n | tail -n 1)"
+  if [ -z "$line" ]; then
+    echo "-"
+    return
+  fi
+  record="$(printf '%s\n' "$line" | cut -f 2-)"
+  detail="$(printf '%s\n' "$record" | sed -n 's/.*"detail":"\([^"]*\)".*/\1/p')"
+  printf '%s · %s — %s%s\n' "$(printf '%s\n' "$line" | cut -f 1 | awk '{ printf "%.1f", $1 }')" \
+    "$(printf '%s\n' "$record" | phases_of)" \
+    "$(printf '%s\n' "$record" | sed -n 's/.*"kind":"[^"]*","label":"\([^"]*\)".*/\1/p')" \
+    "${detail:+ ($detail)}"
+}
+slowest_plx="$(LC_ALL=C grep -F '"kind":"plx"' "$log" | slowest)"
+slowest_blame="$(printf '%s\n' "$git_blame" | slowest)"
+slowest_cache="$(printf '%s\n' "$cached_blame" | slowest)"
+slowest_commit="$(LC_ALL=C grep -F '"kind":"commit"' "$log" | slowest)"
+slowest_history="$(printf '%s\n' "$git_history" | slowest)"
+slowest_graph="$(LC_ALL=C grep -F '"kind":"graph"' "$log" | slowest)"
+
+# 클라이언트 구간(PLX_TRACE): 상주 호출의 '전달'(main → 상주 인스턴스가 받음)이 어디에 드는지. 위 기록을 다 센 뒤에
+# 몇 번 더 불러 구간마다 중앙값을 낸다("plx: 구간(ms): 인자 0.1 · 인자 검사 0.2 · …").
+traces=""
+traced=5
+for i in $(seq 1 "$traced"); do
+  file="$(sed -n "${i}p" "$files")"
+  # 반복 횟수가 작으면 파일이 다섯보다 적다. 이 구간은 덤이라 호출이 실패해도(시간 한도 등) 앞의 측정을 버리지 않는다.
+  [ -n "$file" ] || break
+  out="$(PLX_TRACE=1 "$bin" "$file:9" 2>&1 >/dev/null)" || continue
+  line="$(printf '%s\n' "$out" | sed -n 's/^plx: 구간(ms): //p' | tail -n 1)"
+  traces="$traces$line
+"
+  wait_for "\"label\":\"blame $file:9\"" || true
+done
+# 잰 횟수(파일이 모자라거나 호출이 실패하면 다섯보다 적다)
+trace_count="$(printf '%s' "$traces" | grep -c . || true)"
+trace_medians="$(printf '%s' "$traces" | awk '
+  {
+    n = split($0, parts, " · ")
+    for (p = 1; p <= n; p++) {
+      i = match(parts[p], / [0-9.]+$/)
+      if (i == 0) continue
+      label = substr(parts[p], 1, i - 1); value = substr(parts[p], i + 1) + 0
+      if (!(label in count)) names[++k] = label
+      v[label, ++count[label]] = value
+    }
+  }
+  END {
+    for (j = 1; j <= k; j++) {
+      l = names[j]; c = count[l]
+      for (a = 2; a <= c; a++) {
+        x = v[l, a]
+        for (b = a - 1; b >= 1 && v[l, b] > x; b--) v[l, b + 1] = v[l, b]
+        v[l, b + 1] = x
+      }
+      printf "%s%s %.1f", sep, l, v[l, int((c + 1) / 2)]; sep = " · "
+    }
+    print ""
+  }')"
+
 echo "- 환경: $(uname -srm), $(date '+%Y-%m-%d'), $("$bin" --version 2>/dev/null || echo plx)"
 if [ "$unpainted" -gt 0 ]; then
   echo "- 주의: 페인트를 측정하지 못한 기록 ${unpainted}건(창이 화면에 그려지지 않는 환경). 그 기록은 렌더까지만 잰 값이다."
@@ -218,3 +303,12 @@ echo "| 커밋 그래프 첫 화면 표시 (이 저장소 커밋 ${graph_rows:-?
 echo
 echo "- 콜드 스타트 구간(ms): $cold_phases"
 echo "- 콜드 스타트의 blame(ms): $cold_blame"
+echo "- 상주 인스턴스에 plx 호출, 구간별 중앙값(ms): $warm_phases"
+echo "- 상주 호출의 클라이언트 구간 중앙값(ms, PLX_TRACE, n=$trace_count): ${trace_medians:--}"
+echo "- 가장 느린 기록(ms, 합계 · 구간 — 이름 (설명)):"
+echo "  - plx 호출: $slowest_plx"
+echo "  - blame, 처음 여는 파일: $slowest_blame"
+echo "  - blame, 캐시: $slowest_cache"
+echo "  - 커밋 상세: $slowest_commit"
+echo "  - 파일 히스토리, 처음 여는 파일: $slowest_history"
+echo "  - 커밋 그래프: $slowest_graph"
