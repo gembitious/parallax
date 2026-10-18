@@ -16,7 +16,7 @@ import { copyText } from "../clipboard";
 import { formatCount, formatDate, parseTz, relativeTime, shortSha } from "../blame/format";
 import { STATUS_LETTER, STATUS_NAME } from "../commit/types";
 import { lastName, type Navigation } from "../nav";
-import { watchRepo } from "../watch";
+import { headMoved, watchRepo } from "../watch";
 import { afterPaint, getPerfInfo, nowMs, record } from "../perf";
 import { ScrollMeter } from "../scrollMeter";
 import { useMounted } from "../mounted";
@@ -195,11 +195,13 @@ export function HistoryView({
 
   // HEAD부터 거슬러 오르는 히스토리: HEAD가 바뀌면(새 커밋 등) 다시 연다. 고정 리비전은 바뀌지 않는다.
   // 열기를 시작할 때 요청 대상으로 구독한다(meta를 기다리면 다시 열다 실패한 화면은 더는 바뀌지 않는다).
-  const [changed, setChanged] = useState(false);
+  // 알림의 HEAD가 이 화면이 거슬러 오르기 시작한 커밋과 같으면 다시 열지 않는다(열기 바로 전의 커밋이 늦게 알려진 것).
+  const [movedTo, setMovedTo] = useState<string | null | undefined>(undefined);
+  const changed = headMoved(movedTo, meta ? meta.start : undefined, progress.kind === "failed");
   useEffect(() => {
     if (target.rev !== null || !onReload) return;
     return watchRepo(target.repo ?? target.path, (change) => {
-      if (change.headChanged) setChanged(true);
+      if (change.headChanged) setMovedTo(change.head);
     });
     // 요청마다 새 컴포넌트다(App이 key를 준다).
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -1,0 +1,40 @@
+{
+  "files": {
+    "app.py": {
+      "lines": {
+        "1-2": "s_63144025b3d675::t_ec1fa7bf269565",
+        "3": "s_94d128b60bae53::t_6cc737a4505cf6",
+        "4": "s_5f3a7162388b27::t_2c894a222efe58",
+        "5-6": "s_63144025b3d675::t_ec1fa7bf269565"
+      },
+      "prompts": {
+        "s_5f3a7162388b27::t_2c894a222efe58": {
+          "agent_id": {
+            "id": "ai-thread-1792301146208035453",
+            "model": "unknown",
+            "tool": "mock_ai"
+          },
+          "human_author": "Test User <test@example.com>"
+        },
+        "s_63144025b3d675::t_ec1fa7bf269565": {
+          "agent_id": {
+            "id": "ai-thread-1792301146040323278",
+            "model": "unknown",
+            "tool": "mock_ai"
+          },
+          "human_author": "Test User <test@example.com>"
+        },
+        "s_94d128b60bae53::t_6cc737a4505cf6": {
+          "agent_id": {
+            "id": "ai-thread-1792301146194479935",
+            "model": "unknown",
+            "tool": "mock_ai"
+          },
+          "human_author": "Test User <test@example.com>"
+        }
+      }
+    }
+  },
+  "git_ai_version": "1.7.6",
+  "head": "0cfccaef5f77bc79aafe3da4493e308b261c76aa"
+}

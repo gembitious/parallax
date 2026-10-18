@@ -241,26 +241,6 @@ fn object_dirs(repo: &Repo, local: &gix::Repository) -> Vec<PathBuf> {
     dirs
 }
 
-/// git(`git --version`)의 (주, 부) 버전. 앱이 떠 있는 동안 한 번만 묻는다(상태를 볼 때마다 git을 띄우지 않게).
-/// 모르면 (0, 0): 가장 오래된 git으로 본다.
-fn git_version(dir: &Path) -> (u32, u32) {
-    static VERSION: std::sync::OnceLock<Option<(u32, u32)>> = std::sync::OnceLock::new();
-    VERSION
-        .get_or_init(|| {
-            git::output(dir, ["--version"])
-                .ok()
-                .and_then(|out| parse_version(&String::from_utf8_lossy(&out)))
-        })
-        .unwrap_or((0, 0))
-}
-
-/// `git version 2.43.0`, `git version 2.56.0.windows.2` → (2, 43)
-fn parse_version(text: &str) -> Option<(u32, u32)> {
-    let version = text.split_whitespace().nth(2)?;
-    let mut parts = version.split('.');
-    Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
-}
-
 /// `commitGraph.changedPathsVersion`이 생긴 git(그 전 git은 v1만 읽고 쓴다)
 const V2_GIT: (u32, u32) = (2, 46);
 
@@ -371,7 +351,8 @@ fn percent_decode(text: &str) -> String {
 pub fn status(repo: &Repo) -> crate::repo::Result<GraphStatus> {
     let local = repo.local();
     let layers = load_graph(&object_dirs(repo, &local));
-    let git = git_version(repo.workdir());
+    // 모르면 (0, 0): 가장 오래된 git으로 본다.
+    let git = git::version().unwrap_or((0, 0));
     let config = local.config_snapshot();
     let head_covered = match repo.head()? {
         Some(head) => layers
@@ -643,17 +624,6 @@ fn parse_progress(line: &str) -> Option<Progress> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn versions_of_git() {
-        assert_eq!(parse_version("git version 2.43.0\n"), Some((2, 43)));
-        assert_eq!(parse_version("git version 2.56.0.windows.2"), Some((2, 56)));
-        assert_eq!(
-            parse_version("git version 2.39.5 (Apple Git-154)"),
-            Some((2, 39))
-        );
-        assert_eq!(parse_version("nonsense"), None);
-    }
 
     #[test]
     fn progress_lines() {

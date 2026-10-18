@@ -18,7 +18,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use gix::ObjectId;
@@ -31,6 +31,7 @@ use crate::cache::{CacheKey, DiskCache};
 use crate::commit_table::CommitTable;
 use crate::git::{self, Canceller, Streaming};
 use crate::repo::{Repo, RepoCache, decode_text, person};
+use crate::requests;
 
 /// 레인 색 수(화면 팔레트와 같다)
 pub const COLORS: u8 = 8;
@@ -1521,8 +1522,16 @@ fn walk(
     started: Instant,
     mut on_event: impl FnMut(GraphEvent) -> bool,
 ) {
-    let end = walk_inner(&session, tables, &tips, meta, started, &mut on_event);
-    session.state.lock().unwrap().done = true;
+    let end = requests::catch(
+        || walk_inner(&session, tables, &tips, meta, started, &mut on_event),
+        |message| GraphEvent::Error { message },
+    );
+    // 패닉이 상태를 쥔 채였어도 끝났다고 적는다(이 그래프는 오류로 끝났다).
+    session
+        .state
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .done = true;
     on_event(end);
 }
 

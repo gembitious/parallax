@@ -27,6 +27,8 @@ const ENV_T0: &str = "PLX_T0";
 const ENV_READY: &str = "PLX_READY";
 /// 상주 인스턴스가 작업 디렉터리를 떠나기 전에 절대 경로로 바꿔 둘 경로 변수(상대 경로로 줄 수 있다).
 const PATH_ENVS: [&str; 2] = ["PLX_CACHE_DIR", "PLX_PERF_LOG"];
+/// 있으면 상주 인스턴스에 넘기기까지의 구간(ms)을 표준 오류에 쓴다(측정용, `bench/app-latency.sh`).
+const ENV_TRACE: &str = "PLX_TRACE";
 
 /// 상주 인스턴스가 막 뜨는 중일 때 기다리는 한도. 콜드 스타트보다 넉넉해야 한다.
 const CLAIM_TIMEOUT: Duration = Duration::from_secs(10);
@@ -48,6 +50,8 @@ pub struct PlxRequest {
     pub cwd: String,
     /// 호출 시작 시각(epoch ms).
     pub t0_ms: f64,
+    /// 호출한 프로세스가 `main()`에 들어온 시각(epoch ms). 모르면 0.
+    pub main_ms: f64,
     /// 이 인스턴스가 받은 시각(epoch ms).
     pub recv_ms: f64,
     /// 콜드 스타트(이 프로세스를 띄운 호출)인지.
@@ -94,6 +98,7 @@ impl Requests {
             args: invocation.args,
             cwd: invocation.cwd,
             t0_ms: invocation.t0_ms,
+            main_ms: invocation.main_ms,
             recv_ms,
             cold,
         };
@@ -165,6 +170,7 @@ pub fn current_request(requests: tauri::State<'_, Arc<Requests>>) -> Option<PlxR
 pub fn start(t_main_ms: f64, requests: Arc<Requests>) -> Server {
     let detached = std::env::var_os(ENV_DETACHED).is_some();
     let detach = std::env::var(ENV_DETACH).ok();
+    let mut trace = Trace::new(std::env::var_os(ENV_TRACE).is_some(), t_main_ms);
     let ready_file = std::env::var_os(ENV_READY).map(PathBuf::from);
     // 측정 기준점: 넘겨받은 시각, 없으면 OS가 이 프로세스를 만든 시각(실행 파일 로딩 포함).
     // 단, `cargo run`(tauri dev)은 Unix에서 exec로 자기 자신을 plx로 바꾸므로 생성 시각에 빌드 시간이
@@ -183,7 +189,7 @@ pub fn start(t_main_ms: f64, requests: Arc<Requests>) -> Server {
     // 상주하면 작업 디렉터리를 떠나므로(아래) 상대 경로로 준 경로 변수는 지금 절대 경로로 바꿔 둔다.
     // SAFETY: main 맨 앞, 다른 스레드가 생기기 전이다.
     unsafe {
-        for key in [ENV_DETACHED, ENV_DETACH, ENV_T0, ENV_READY] {
+        for key in [ENV_DETACHED, ENV_DETACH, ENV_T0, ENV_READY, ENV_TRACE] {
             std::env::remove_var(key);
         }
         for key in PATH_ENVS {
@@ -195,7 +201,8 @@ pub fn start(t_main_ms: f64, requests: Arc<Requests>) -> Server {
         }
     }
 
-    let invocation = current_invocation(t0_ms).unwrap_or_else(|msg| fail(&msg, 2));
+    let invocation = current_invocation(t0_ms, t_main_ms).unwrap_or_else(|msg| fail(&msg, 2));
+    trace.mark("인자");
     let cwd = PathBuf::from(&invocation.cwd);
     // 잘못된 인자는 상주 인스턴스를 건드리지 않고 이 터미널에서 바로 알린다.
     let request = match cli::parse(&invocation.args, &cwd, cli::stat) {
@@ -204,6 +211,7 @@ pub fn start(t_main_ms: f64, requests: Arc<Requests>) -> Server {
         Ok(Parsed::Version) => print_and_exit(&format!("plx {}", env!("CARGO_PKG_VERSION"))),
         Err(e) => fail(&format!("{e}\n자세한 사용법: plx --help"), 2),
     };
+    trace.mark("인자 검사");
     // 대상 저장소도 앱과 같은 방법으로 열어 본다. 대상을 줬거나 터미널에서 불렀으면 실패를 이 터미널에 알린다.
     // 인자 없이 앱으로 띄웠으면(Finder·Dock·시작 메뉴, 작업 디렉터리가 `/`나 설치 위치) 알릴 곳이 없으니 그냥 뜨고
     // 첫 화면 안내를 보인다(저장소가 아닌 곳의 그래프 오류 대신).
@@ -212,12 +220,18 @@ pub fn start(t_main_ms: f64, requests: Arc<Requests>) -> Server {
         Err(e) if !invocation.args.is_empty() || cli::has_terminal() => fail(&e.to_string(), 2),
         Err(_) => false,
     };
+    trace.mark("저장소 열기");
     let flavor = cfg!(debug_assertions).then_some("dev");
     let endpoint = Endpoint::new(APP_ID, flavor)
         .unwrap_or_else(|e| fail(&format!("인스턴스 경로를 준비하지 못했다: {e}"), 1));
+    trace.mark("인스턴스 자리");
 
     let lock = match instance::claim(&endpoint, &invocation, CLAIM_TIMEOUT) {
-        Ok(Claim::Forwarded(reply)) if reply.ok => std::process::exit(0),
+        Ok(Claim::Forwarded(reply)) if reply.ok => {
+            trace.mark("넘기기");
+            trace.print();
+            std::process::exit(0)
+        }
         Ok(Claim::Forwarded(reply)) => fail(reply.error.as_deref().unwrap_or("알 수 없는 오류"), 1),
         Ok(Claim::Primary(lock)) => lock,
         Err(e) => fail(&e.to_string(), 1),
@@ -319,7 +333,7 @@ fn should_detach(detached: bool, detach: Option<&str>) -> bool {
     }
 }
 
-fn current_invocation(t0_ms: f64) -> Result<Invocation, String> {
+fn current_invocation(t0_ms: f64, main_ms: f64) -> Result<Invocation, String> {
     let args = std::env::args_os()
         .skip(1)
         .map(|arg| {
@@ -344,9 +358,46 @@ fn current_invocation(t0_ms: f64) -> Result<Invocation, String> {
         args,
         cwd,
         t0_ms,
+        main_ms,
         pid: std::process::id(),
         env: Env::capture(),
     })
+}
+
+/// `PLX_TRACE`: main부터 상주 인스턴스에 넘기기까지 구간마다 걸린 시간. 상주 호출의 '전달' 구간을 나눠 본다.
+struct Trace {
+    last: Option<f64>,
+    parts: Vec<(&'static str, f64)>,
+}
+
+impl Trace {
+    fn new(on: bool, main_ms: f64) -> Trace {
+        Trace {
+            last: on.then_some(main_ms),
+            parts: Vec::new(),
+        }
+    }
+
+    fn mark(&mut self, label: &'static str) {
+        if let Some(last) = self.last {
+            let now = plx_core::time::epoch_ms();
+            self.parts.push((label, now - last));
+            self.last = Some(now);
+        }
+    }
+
+    fn print(&self) {
+        if self.last.is_none() {
+            return;
+        }
+        let parts: Vec<String> = self
+            .parts
+            .iter()
+            .map(|(label, ms)| format!("{label} {ms:.1}"))
+            .collect();
+        cli::attach_parent_console();
+        eprintln!("plx: 구간(ms): {}", parts.join(" · "));
+    }
 }
 
 fn print_and_exit(text: &str) -> ! {

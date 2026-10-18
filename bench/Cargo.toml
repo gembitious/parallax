@@ -10,3 +10,9 @@ license.workspace = true
 [dependencies]
 plx-core.workspace = true
 serde_json.workspace = true
+# gix-blame 전환 검토(CLAUDE.md 결정 기록)에만 쓴다. 기본값이 아니라 앱·CI 빌드에는 들어가지 않는다.
+gix = { version = "0.89.0", default-features = false, features = ["blame"], optional = true }
+
+[features]
+# `gix-blame` 측정 항목(cases.txt)을 잰다: `cargo run -p plx-bench --release --features gix-blame -- …`
+gix-blame = ["dep:gix"]
