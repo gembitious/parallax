@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
-use common::{encoding, git, git_text, history};
+use common::{commit_at, encoding, git, git_text, history, scratch_repo};
 use plx_core::cache::DiskCache;
 use plx_core::graph::{
     CHECKPOINT, GraphEvent, GraphMeta, GraphOptions, GraphRow, GraphScope, GraphSessions,
@@ -504,4 +504,281 @@ fn shallow_clones_are_not_put_in_the_table() {
     sessions.close(id);
     // 경계 커밋을 부모 없는 커밋으로 적어 두면 나중에 이력을 더 받았을 때 틀린다.
     assert!(!cache_dir.exists() || std::fs::read_dir(&cache_dir).unwrap().next().is_none());
+}
+
+/// 행마다 git이 보는 (메시지, 작성자, 메일)로 기대 결과를 만든다.
+fn text_matches(repo: &Path, rows: &[GraphRow], query: &str) -> Vec<usize> {
+    let query = query.to_lowercase();
+    rows.iter()
+        .enumerate()
+        .filter(|(_, row)| {
+            let text = git_text(repo, &["log", "-1", "--format=%B%n%an%n%ae", &row.sha]);
+            row.sha.starts_with(&query) || text.to_lowercase().contains(&query)
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
+#[test]
+fn search_messages_authors_and_shas() {
+    let repo = history();
+    let sessions = GraphSessions::new();
+    let (id, opened) = open_with(&sessions, &repo, GraphOptions::default());
+    let n = opened.rows.len();
+    for query in ["feature", "LINE", "fixture author", "notes"] {
+        let expected = text_matches(&repo, &opened.rows, query);
+        assert!(!expected.is_empty(), "{query}");
+        // 앞으로: 0번 행 다음부터 차례로, 끝에 닿으면 처음으로
+        let mut found = Vec::new();
+        let mut from = n - 1;
+        for _ in 0..expected.len() {
+            let row = sessions
+                .search(id, query, from, true)
+                .unwrap()
+                .expect(query);
+            found.push(row);
+            from = row;
+        }
+        assert_eq!(found, expected, "{query}");
+        // 뒤로
+        let back = sessions.search(id, query, expected[0], false).unwrap();
+        assert_eq!(
+            back,
+            expected.last().copied(),
+            "{query}: 처음에서 뒤로 가면 마지막"
+        );
+    }
+    // sha 앞부분
+    let sha = &opened.rows[5].sha;
+    assert_eq!(sessions.search(id, &sha[..7], 0, true).unwrap(), Some(5));
+    assert_eq!(sessions.search(id, "없는 말", 0, true).unwrap(), None);
+    assert_eq!(sessions.search(id, "   ", 0, true).unwrap(), None);
+    sessions.close(id);
+    assert!(
+        sessions.search(id, "feature", 0, true).is_err(),
+        "닫은 그래프"
+    );
+
+    // 커밋 인코딩(EUC-KR) 메시지도 찾는다.
+    let sessions = GraphSessions::new();
+    let (id, opened) = open_with(&sessions, &encoding(), GraphOptions::default());
+    let row = sessions
+        .search(id, "인코딩 테스트", 0, true)
+        .unwrap()
+        .unwrap();
+    assert!(opened.rows[row].summary.starts_with("인코딩 테스트"));
+}
+
+#[test]
+fn search_paths_like_git_log() {
+    for (repo, paths) in [
+        (
+            history(),
+            vec![
+                "src/lib.rs",
+                "src",
+                "src/new_name.rs",
+                "core/*.rs",
+                "없는/경로",
+            ],
+        ),
+        (encoding(), vec!["한글/파일 이름.txt", "문서"]),
+    ] {
+        let sessions = GraphSessions::new();
+        let (id, opened) = open_with(&sessions, &repo, GraphOptions::default());
+        let row_of: HashMap<&str, usize> = opened
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (r.sha.as_str(), i))
+            .collect();
+        for path in paths {
+            let shas = git_text(
+                &repo,
+                &[
+                    "log",
+                    "--format=%H",
+                    "--full-history",
+                    "--no-merges",
+                    "HEAD",
+                    "--branches",
+                    "--",
+                    path,
+                ],
+            );
+            let mut expected: Vec<usize> = shas.lines().map(|sha| row_of[sha]).collect();
+            expected.sort_unstable();
+            assert_eq!(sessions.search_path(id, path).unwrap(), expected, "{path}");
+        }
+        sessions.close(id);
+    }
+}
+
+// ---------------------------------------------------------------- 리뷰에서 찾은 경우(회귀 테스트)
+
+const BRANCHES: [&str; 2] = ["HEAD", "--branches"];
+const EVERYTHING: [&str; 3] = ["HEAD", "--branches", "--remotes"];
+
+fn table_files(dir: &Path) -> usize {
+    std::fs::read_dir(dir).map_or(0, |entries| {
+        entries
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "bin"))
+            .count()
+    })
+}
+
+/// a - b - c - d(main), a - x(other). `git replace --graft main~1 other`로 c의 부모를 x로 바꾼다.
+fn replaced_repo(name: &str) -> std::path::PathBuf {
+    let dir = scratch_repo(name);
+    for (i, message) in ["a", "b", "c", "d"].iter().enumerate() {
+        commit_at(&dir, message, 1_000 + i as i64 * 100);
+    }
+    git(&dir, &["checkout", "-q", "-b", "other", "HEAD~3"]);
+    commit_at(&dir, "x", 1_250);
+    git(&dir, &["checkout", "-q", "main"]);
+    dir
+}
+
+/// `git replace`로 부모를 바꾼 커밋: git은 바꾼 부모를 보고 commit-graph를 쓰지 않는다. 그 전에 쓴 commit-graph나
+/// 앱의 커밋 표에 남은 원래 부모를 쓰면 안 된다.
+#[test]
+fn replace_refs_change_parents_like_git() {
+    let dir = replaced_repo("graph-replace");
+    git(&dir, &["commit-graph", "write", "--reachable"]);
+    git(&dir, &["replace", "--graft", "main~1", "other"]);
+    let opened = open(&dir, GraphOptions::default());
+    assert_matches_git(&dir, &opened, &BRANCHES);
+    assert!(
+        !opened.meta.commit_graph,
+        "바꾼 커밋이 있으면 commit-graph를 쓰지 않는다"
+    );
+    assert_eq!(
+        opened.rows.len(),
+        4,
+        "a는 바꾼 부모로 닿지 않는다(git과 같다)"
+    );
+    assert_eq!(opened.rows[1].summary, "c");
+
+    // 앱의 커밋 표: 바꾸기 전에 쓴 표를 쓰지 않고, 바꾼 동안에는 표를 쓰지 않는다.
+    let dir = replaced_repo("graph-replace-table");
+    let cache_dir = tempfile::tempdir().unwrap();
+    let cache = || Arc::new(DiskCache::new(cache_dir.path().to_path_buf(), 1 << 30));
+    let opened_with = |sessions: &GraphSessions| {
+        let (id, opened) = open_with(sessions, &dir, GraphOptions::default());
+        sessions.close(id);
+        opened
+    };
+    let first = opened_with(&GraphSessions::with_cache_min(cache(), 1));
+    assert_matches_git(&dir, &first, &BRANCHES);
+    assert_eq!(table_files(cache_dir.path()), 1);
+    git(&dir, &["replace", "--graft", "main~1", "other"]);
+    let replaced = opened_with(&GraphSessions::with_cache_min(cache(), 1));
+    assert_matches_git(&dir, &replaced, &BRANCHES);
+    assert_eq!(replaced.stats.from_table, 0);
+    let c = git_text(&dir, &["rev-parse", "main~1"]);
+    git(&dir, &["replace", "-d", &c]);
+    let restored = opened_with(&GraphSessions::with_cache_min(cache(), 1));
+    assert_matches_git(&dir, &restored, &BRANCHES);
+}
+
+/// `info/grafts`(오래된 방식)도 git과 같이 부모를 바꾼다.
+#[test]
+fn grafts_change_parents_like_git() {
+    let dir = scratch_repo("graph-grafts");
+    for (i, message) in ["a", "b", "c", "d"].iter().enumerate() {
+        commit_at(&dir, message, 1_000 + i as i64 * 100);
+    }
+    let graft = format!(
+        "{} {}\n",
+        git_text(&dir, &["rev-parse", "HEAD~1"]),
+        git_text(&dir, &["rev-parse", "HEAD~3"])
+    );
+    std::fs::write(dir.join(".git/info/grafts"), graft).unwrap();
+    git(&dir, &["commit-graph", "write", "--reachable"]);
+    let opened = open(&dir, GraphOptions::default());
+    assert_matches_git(&dir, &opened, &BRANCHES);
+    assert_eq!(opened.rows.len(), 3);
+}
+
+/// 다 받은 클론에 commit-graph·커밋 표를 만든 뒤 `fetch --depth`로 얕아졌다: 경계에서 멈춘다(git과 같다).
+#[test]
+fn clone_that_became_shallow_stops_at_the_boundary() {
+    let temp = tempfile::tempdir().unwrap();
+    let with_graph = temp.path().join("with-graph");
+    clone(&history(), &with_graph, &[]);
+    git(&with_graph, &["commit-graph", "write", "--reachable"]);
+    git(&with_graph, &["fetch", "-q", "--depth=2", "origin"]);
+    let opened = open(&with_graph, ALL);
+    assert_matches_git(&with_graph, &opened, &EVERYTHING);
+    assert!(!opened.meta.commit_graph);
+
+    let with_table = temp.path().join("with-table");
+    clone(&history(), &with_table, &[]);
+    let cache_dir = temp.path().join("cache");
+    let cache = || Arc::new(DiskCache::new(cache_dir.clone(), 1 << 30));
+    let sessions = GraphSessions::with_cache_min(cache(), 1);
+    let (id, _) = open_with(&sessions, &with_table, ALL);
+    sessions.close(id);
+    git(&with_table, &["fetch", "-q", "--depth=2", "origin"]);
+    let sessions = GraphSessions::with_cache_min(cache(), 1);
+    let (id, opened) = open_with(&sessions, &with_table, ALL);
+    sessions.close(id);
+    assert_matches_git(&with_table, &opened, &EVERYTHING);
+    assert_eq!(opened.stats.from_table, 0);
+}
+
+/// 느슨한 원격 참조가 annotated 태그를 가리킨다(`+refs/tags/*:refs/remotes/origin/tags/*`로 받은 태그):
+/// 그 태그의 커밋에서 걷고 이름표도 커밋에 단다.
+#[test]
+fn loose_remote_ref_to_an_annotated_tag_is_peeled() {
+    let dir = scratch_repo("graph-tag-ref");
+    commit_at(&dir, "root", 1_000);
+    commit_at(&dir, "second", 1_100);
+    git(&dir, &["checkout", "-q", "-b", "side"]);
+    commit_at(&dir, "side only", 1_200);
+    let side = commit_at(&dir, "side only 2", 1_300);
+    git(&dir, &["tag", "-a", "-m", "tagged", "vside"]);
+    git(&dir, &["checkout", "-q", "main"]);
+    git(&dir, &["branch", "-q", "-D", "side"]);
+    let tag = git_text(&dir, &["rev-parse", "vside"]);
+    git(
+        &dir,
+        &["update-ref", "refs/remotes/origin/tags/vside", &tag],
+    );
+    let opened = open(&dir, ALL);
+    assert_matches_git(&dir, &opened, &EVERYTHING);
+    assert_eq!(opened.rows.len(), 4, "태그로만 닿는 커밋도 보인다");
+    let row = opened.rows.iter().find(|r| r.sha == side).unwrap();
+    assert!(
+        row.labels.iter().any(|l| l.name == "origin/tags/vside"),
+        "{:?}",
+        row.labels
+    );
+}
+
+/// 객체를 읽지 못한 커밋이 있으면 커밋 표를 쓰지 않는다: 그 자식의 부모가 빠진 채 적혀 객체가 돌아와도 이력이 끊긴다.
+#[test]
+fn missing_parents_are_not_put_in_the_table() {
+    let dir = scratch_repo("graph-missing-parent");
+    let root = commit_at(&dir, "root", 1_000);
+    commit_at(&dir, "second", 1_100);
+    commit_at(&dir, "third", 1_200);
+    let object = dir.join(".git/objects").join(&root[..2]).join(&root[2..]);
+    let saved = std::fs::read(&object).expect("느슨한 객체");
+    std::fs::remove_file(&object).unwrap();
+    let cache_dir = tempfile::tempdir().unwrap();
+    let sessions = GraphSessions::with_cache_min(
+        Arc::new(DiskCache::new(cache_dir.path().to_path_buf(), 1 << 30)),
+        1,
+    );
+    let (id, opened) = open_with(&sessions, &dir, GraphOptions::default());
+    sessions.close(id);
+    assert_eq!(opened.rows.len(), 2);
+    assert_eq!(table_files(cache_dir.path()), 0);
+    // 객체가 돌아오면 이력이 다 보인다.
+    std::fs::write(&object, saved).unwrap();
+    let (id, opened) = open_with(&sessions, &dir, GraphOptions::default());
+    sessions.close(id);
+    assert_eq!(opened.rows.len(), 3);
 }

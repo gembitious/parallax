@@ -11,6 +11,8 @@ export type Label = {
   kind: LabelKind;
   /** HEAD가 가리키는 브랜치(detached면 `HEAD` 이름표) */
   current: boolean;
+  /** 다른 워크트리가 체크아웃한 브랜치·HEAD면 그 워크트리 이름 */
+  worktree?: string;
 };
 
 /** (레인, 색) */
