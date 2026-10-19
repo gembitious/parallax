@@ -39,12 +39,18 @@ CI, 또는 저장소의 Actions → CI)을 열고 Summary 맨 아래 **Artifacts
 - **Windows:** `parallax_<버전>_x64-portable.zip`을 풀고 `plx.exe`가 든 폴더를 PATH에 넣는다
   (Git Bash: `export PATH="/c/Users/<나>/plx:$PATH"`). 처음 실행할 때 SmartScreen이 막으면 "추가 정보" → "실행".
   설치 프로그램(`…-setup.exe`)은 1-15로 확인한다
-- **macOS (Apple Silicon):** `parallax_<버전>_aarch64.dmg`를 열어 `parallax.app`을 응용 프로그램 폴더로 끈 뒤
+- **macOS (Apple Silicon):** `parallax_<버전>_aarch64.dmg`를 열어 `parallax.app`을 응용 프로그램 폴더로 끈다.
+  공증하지 않은 앱이라 그대로 열면 "Apple은 'parallax'에 … 악성 코드가 없음을 확인할 수 없습니다"라며 열지 않는다.
+  그 창을 "완료"로 닫고 한 시간 안에 시스템 설정 → 개인정보 보호 및 보안 → 보안의 "그래도 열기"(Open Anyway)를
+  누르고 암호를 넣으면 열린다(이 과정이 1-16). 터미널에서 열기 전에 내려받은 파일 표시를 지워도 된다
+  (`xattr -dr com.apple.quarantine /Applications/parallax.app`, 1-16을 볼 거면 하지 않는다).
+  그다음 `plx` 명령을 설치한다(이 저장소가 있으면 `sh scripts/install-macos-shim.sh`, 릴리스에도 붙어 있다):
   ```sh
-  xattr -dr com.apple.quarantine /Applications/parallax.app   # 서명하지 않은 앱이라 지우지 않으면 열지 않는다
-  sh scripts/install-macos-shim.sh                            # 이 저장소의 스크립트(릴리스에도 붙어 있다)
+  curl -fsSLO https://raw.githubusercontent.com/gembitious/parallax/main/scripts/install-macos-shim.sh
+  sh install-macos-shim.sh
   ```
-  → `/usr/local/bin/plx`(쓸 수 없으면 `~/.local/bin/plx`에 설치하고 PATH 안내를 출력한다)
+  → `/usr/local/bin/plx`(쓸 수 없으면 `~/.local/bin/plx`에 설치하고 PATH 안내를 출력한다).
+  `plx`가 같은 창으로 막히면 위의 `xattr`를 한 번 실행한다
 
 ### 직접 빌드
 
@@ -90,7 +96,7 @@ npm run tauri build -- --bundles app   # macOS: target/release/bundle/macos/para
 | 13 | 앱 아이콘 보기: Dock·Finder·`⌘Tab`(macOS), 작업 표시줄·창 제목줄·`Alt+Tab`(Windows) | 어긋나게 겹친 층 셋(위부터 주황·보라·파랑)을 흰 선이 꿴 아이콘. Tauri 기본 아이콘(노랑·하늘색 고리)이 아니고, 작은 크기에서도 층 셋이 보인다 |
 | 14 | macOS: 메뉴 막대의 parallax 아이콘을 밝은·어두운 모드에서 보기 | 층 셋 모양의 단색 아이콘이 다른 메뉴 막대 아이콘과 같은 색으로 보인다(컬러 앱 아이콘이 아니다). 누르면 열기·종료 메뉴 |
 | 15 | Windows: 앱을 끝낸 뒤 `parallax_<버전>_x64-setup.exe`로 설치 → 끝 화면에서 실행, 시작 메뉴의 parallax로 다시 실행 | 관리자 권한을 묻지 않고 한국어 화면으로 `%LOCALAPPDATA%\parallax`에 설치한다. 띄우면 첫 화면 안내가 보인다. 설정 → 앱에서 제거된다 |
-| 16 | macOS: DMG를 열었을 때 | parallax 아이콘과 응용 프로그램 폴더 바로 가기가 보이고, 끌어 넣은 앱이 1-7처럼 Finder에서 뜬다 |
+| 16 | macOS: DMG를 열어 앱을 응용 프로그램 폴더로 끌고 `xattr` 없이 Finder로 연다 → "완료" → 시스템 설정 → 개인정보 보호 및 보안 → "그래도 열기" | DMG에 parallax 아이콘과 응용 프로그램 폴더 바로 가기가 보인다. 처음에는 "Apple은 … 확인할 수 없습니다" 창이 뜬다("손상되었기 때문에 열 수 없습니다"가 아니다). 허용하면 1-7처럼 뜨고, 다음부터는 Finder와 `plx` 모두 막히지 않는다 |
 
 ## 2. blame 화면 (M1)
 

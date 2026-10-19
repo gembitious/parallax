@@ -3,8 +3,11 @@
 ## macOS (Apple Silicon)
 
 1. `parallax_{{VERSION}}_aarch64.dmg`를 열어 `parallax.app`을 응용 프로그램(Applications) 폴더로 끈다.
-2. 터미널에서 내려받은 파일 표시를 지운다(지우지 않으면 "Apple이 확인할 수 없다"며 열지 않는다):
-   `xattr -dr com.apple.quarantine /Applications/parallax.app`
+2. 공증하지 않은 앱이라 그대로 열면 "Apple은 'parallax'에 … 악성 코드가 없음을 확인할 수 없습니다"라며 열지 않는다.
+   둘 중 하나로 한 번 허용하면 그다음부터는 그냥 열린다.
+   - 터미널(열기 전에): `xattr -dr com.apple.quarantine /Applications/parallax.app`
+   - 터미널 없이: 그 창을 "완료"로 닫고 한 시간 안에 시스템 설정 → 개인정보 보호 및 보안 → 보안의
+     "그래도 열기"(Open Anyway)를 누르고 암호를 넣는다.
 3. `install-macos-shim.sh`를 내려받아 `sh install-macos-shim.sh`로 `plx` 명령을 설치한다
    (`/usr/local/bin/plx`, 쓸 수 없으면 `~/.local/bin/plx`).
 
