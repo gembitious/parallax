@@ -20,6 +20,8 @@ CI(`.github/workflows/ci.yml`)가 Windows·macOS·Linux에서 빌드, 테스트,
 - 다른 터미널의 커밋이 열린 그래프에 2초 안에 반영되고(Linux 약 0.2초), 고친 파일이 열린 작업트리 blame에 반영된다
 - 그래프의 순서·부모·레인 연결은 `git log --topo-order`와 대조하는 테스트가 있다(fixtures, 원격·얕은 클론, commit-graph 유무)
 - 릴리스 빌드가 오픈 소스 라이선스 고지를 만들어 실행 파일에 넣는다(파일이 있는지까지. 창은 아래 1-12)
+- 릴리스 빌드가 설치 파일(Windows NSIS 설치 프로그램과 설치 없이 쓰는 zip, macOS DMG, Linux deb)을 만든다. 설치
+  프로그램으로 설치하는 과정과 아이콘은 사람이 본다(아래 1-13~16). macOS 앱 번들은 ad-hoc 서명을 하고 그대로 앱 확인을 돈다
 - AI 출처: git-ai 1.7.6·1.3.4(옛 형식)가 노트를 쓴 저장소 20개(rename, cherry-pick, amend, merge, 한글 경로 등)에서 줄마다
   에이전트가 1.7.6의 `git-ai blame --json`과 같다(`fixtures/git-ai`). 화면 표시는 아래 13
 - 지연 측정: 콜드 스타트, plx 호출 → 첫 페인트, blame 첫 줄 표시(처음·캐시), 커밋 상세, 파일 히스토리 첫 50개(처음·캐시),
@@ -27,6 +29,24 @@ CI(`.github/workflows/ci.yml`)가 Windows·macOS·Linux에서 빌드, 테스트,
   결과는 Actions 실행 화면의 Summary에 있다
 
 ## 0. 준비 (한 번)
+
+### CI가 만든 빌드 받기 (빌드 도구가 없어도 된다)
+
+CI는 PR과 main의 커밋마다 앱 자동 확인을 통과한 설치 파일을 올린다(14일 보관). 그 커밋의 CI 실행(PR의 Checks 탭 →
+CI, 또는 저장소의 Actions → CI)을 열고 Summary 맨 아래 **Artifacts**에서 파일을 누르면 그 파일이 그대로 받아진다
+(GitHub에 로그인해야 한다). 게시한 릴리스(Releases)의 파일도 같다.
+
+- **Windows:** `parallax_<버전>_x64-portable.zip`을 풀고 `plx.exe`가 든 폴더를 PATH에 넣는다
+  (Git Bash: `export PATH="/c/Users/<나>/plx:$PATH"`). 처음 실행할 때 SmartScreen이 막으면 "추가 정보" → "실행".
+  설치 프로그램(`…-setup.exe`)은 1-15로 확인한다
+- **macOS (Apple Silicon):** `parallax_<버전>_aarch64.dmg`를 열어 `parallax.app`을 응용 프로그램 폴더로 끈 뒤
+  ```sh
+  xattr -dr com.apple.quarantine /Applications/parallax.app   # 서명하지 않은 앱이라 지우지 않으면 열지 않는다
+  sh scripts/install-macos-shim.sh                            # 이 저장소의 스크립트(릴리스에도 붙어 있다)
+  ```
+  → `/usr/local/bin/plx`(쓸 수 없으면 `~/.local/bin/plx`에 설치하고 PATH 안내를 출력한다)
+
+### 직접 빌드
 
 필요한 것: git, [Volta](https://volta.sh)(Node·npm 버전을 `package.json`에 맞춰 자동으로 쓴다), [rustup](https://rustup.rs)
 (`rust-toolchain.toml`의 Rust를 자동으로 받는다). Windows는 Git for Windows와 Visual Studio Build Tools(C++)도 필요하다.
@@ -44,7 +64,9 @@ npm run tauri build -- --bundles app   # macOS: target/release/bundle/macos/para
 - **macOS:** `scripts/install-macos-shim.sh target/release/bundle/macos/parallax.app` → `/usr/local/bin/plx`
   (쓸 수 없으면 `~/.local/bin/plx`에 설치하고 PATH 안내를 출력한다)
 
-확인: `plx --version` → `plx 0.1.0`
+### 확인
+
+`plx --version` → `plx 0.1.0`
 
 이후 단계는 **아무 git 저장소 안에서** 한다(이 저장소도 된다). 개발 빌드 수치를 보려면 `PLX_PERF=1`을 붙여
 실행한다(`` ` `` 키로 성능 HUD를 켜고 끈다).
@@ -65,6 +87,10 @@ npm run tauri build -- --bundles app   # macOS: target/release/bundle/macos/para
 | 10 | **Windows:** 앱을 끝낸 뒤 새 폴더에서 `plx`를 처음 실행하고(그 폴더의 저장소), 그 터미널을 닫은 뒤 탐색기에서 그 폴더를 지운다 | 지워진다(상주 앱이 폴더를 쥐고 있지 않다) |
 | 11 | **Windows:** 관리자 터미널에서 처음 `plx`로 띄운 뒤 일반 터미널에서 `plx README.md` | 같은 창에 열리거나, 열지 못하면 까닭을 알리는 문장이 나온다(멈추지 않는다) |
 | 12 | 릴리스 빌드에서 아무 화면이나 `:` → `라이선스` → `Enter` | "오픈 소스 라이선스" 창에 parallax와 다른 프로젝트의 고지가 보인다. `j`/`k`·`PageDown`으로 스크롤, `Esc`로 닫은 뒤 화면 키가 그대로 먹는다 |
+| 13 | 앱 아이콘 보기: Dock·Finder·`⌘Tab`(macOS), 작업 표시줄·창 제목줄·`Alt+Tab`(Windows) | 어긋나게 겹친 층 셋(위부터 주황·보라·파랑)을 흰 선이 꿴 아이콘. Tauri 기본 아이콘(노랑·하늘색 고리)이 아니고, 작은 크기에서도 층 셋이 보인다 |
+| 14 | macOS: 메뉴 막대의 parallax 아이콘을 밝은·어두운 모드에서 보기 | 층 셋 모양의 단색 아이콘이 다른 메뉴 막대 아이콘과 같은 색으로 보인다(컬러 앱 아이콘이 아니다). 누르면 열기·종료 메뉴 |
+| 15 | Windows: 앱을 끝낸 뒤 `parallax_<버전>_x64-setup.exe`로 설치 → 끝 화면에서 실행, 시작 메뉴의 parallax로 다시 실행 | 관리자 권한을 묻지 않고 한국어 화면으로 `%LOCALAPPDATA%\parallax`에 설치한다. 띄우면 첫 화면 안내가 보인다. 설정 → 앱에서 제거된다 |
+| 16 | macOS: DMG를 열었을 때 | parallax 아이콘과 응용 프로그램 폴더 바로 가기가 보이고, 끌어 넣은 앱이 1-7처럼 Finder에서 뜬다 |
 
 ## 2. blame 화면 (M1)
 
@@ -263,6 +289,7 @@ VS Code(`code`)나 Zed(`zed`)가 PATH에 있는 상태에서 한다. 없으면 �
 | 3 | 보라 줄에서 `i` | 카드에 `AI ✦ 도구 · 모델`, 시킨 사람 |
 | 4 | git-ai 노트가 없는 저장소 | 아무 표시가 없고 blame이 그대로 빠르다 |
 
+## 문제를 알릴 때
 - 플랫폼(Windows/macOS 버전), 위 표의 번호, 실제로 본 것
 - 가능하면 `PLX_PERF=1`로 실행한 성능 HUD 캡처
 - 콘솔 출력이 필요하면 트레이에서 종료한 뒤 `PLX_DETACH=0 plx <파일>`로 실행한다(상주 인스턴스가 터미널에 붙어 로그가 남는다)
