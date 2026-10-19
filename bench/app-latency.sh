@@ -91,8 +91,10 @@ cache_dir="$log.cache"
 data_dir="$log.data"
 half=$(((runs + 1) / 2))
 files="$log.files"
+# head 대신 sed로 앞 줄만 고른다: head가 먼저 끝나면 목록이 파이프 버퍼(4KB)보다 길 때 grep이 SIGPIPE로 죽고,
+# pipefail이라 스크립트가 아무 말 없이 끝난다.
 git -c core.quotepath=false ls-files -- '*.rs' '*.ts' '*.tsx' '*.sh' '*.md' '*.toml' |
-  LC_ALL=C grep -vxF "$target" | head -n "$half" >"$files"
+  LC_ALL=C grep -vxF "$target" | sed -n "1,${half}p" >"$files"
 if [ "$(wc -l <"$files" | tr -d ' ')" -lt "$half" ]; then
   echo "blame할 파일이 ${half}개보다 적다($root)" >&2
   exit 1
@@ -183,7 +185,7 @@ for i in $(seq 1 "$graphs"); do
   fi
 done
 read -r graph_med graph_p90 graph_max <<<"$(LC_ALL=C grep -F '"kind":"graph"' "$log" | total_of | summary)"
-graph_rows="$(LC_ALL=C grep -F '"kind":"graph"' "$log" | head -n 1 | sed -n 's/.*"detail":"커밋 \([0-9]*\).*/\1/p')"
+graph_rows="$(LC_ALL=C grep -m 1 -F '"kind":"graph"' "$log" | sed -n 's/.*"detail":"커밋 \([0-9]*\).*/\1/p')"
 
 warm_blame="$(LC_ALL=C grep -F '"kind":"blame"' "$log" | LC_ALL=C grep -vF '(콜드 스타트)' || true)"
 git_blame="$(printf '%s\n' "$warm_blame" | LC_ALL=C grep -vF '(캐시)' || true)"
