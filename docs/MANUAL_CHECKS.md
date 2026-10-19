@@ -17,6 +17,8 @@ CI(`.github/workflows/ci.yml`)가 Windows·macOS·Linux에서 빌드, 테스트,
 - `plx log`로 연 파일 히스토리가 rename 앞(옛 이름) 구간까지 그린다(한글 경로), 다시 열면 캐시에서 온다
 - `plx log -L`로 연 라인 히스토리가 rename 앞 커밋까지 그린다(한글 경로)
 - 인자 없는 `plx`가 커밋 그래프 첫 화면을 그린다(한글 이름 브랜치를 merge한 저장소, 레인 2개)
+- 저장소 밖에서 `plx <폴더>`가 그 저장소의 그래프를 그린다. macOS는 `open -a parallax.app <폴더>`(Dock 아이콘에 폴더를
+  놓을 때와 같은 Apple 이벤트)도 떠 있는 앱에 그래프로 열린다. 연 저장소는 최근 저장소 목록에 최근 순으로 남는다
 - 다른 터미널의 커밋이 열린 그래프에 2초 안에 반영되고(Linux 약 0.2초), 고친 파일이 열린 작업트리 blame에 반영된다
 - 그래프의 순서·부모·레인 연결은 `git log --topo-order`와 대조하는 테스트가 있다(fixtures, 원격·얕은 클론, commit-graph 유무)
 - 릴리스 빌드가 오픈 소스 라이선스 고지를 만들어 실행 파일에 넣는다(파일이 있는지까지. 창은 아래 1-12)
@@ -36,15 +38,17 @@ CI는 PR과 main의 커밋마다 앱 자동 확인을 통과한 설치 파일을
 CI, 또는 저장소의 Actions → CI)을 열고 Summary 맨 아래 **Artifacts**에서 파일을 누르면 그 파일이 그대로 받아진다
 (GitHub에 로그인해야 한다). 게시한 릴리스(Releases)의 파일도 같다.
 
-- **Windows:** `parallax_<버전>_x64-portable.zip`을 풀고 `plx.exe`가 든 폴더를 PATH에 넣는다
-  (Git Bash: `export PATH="/c/Users/<나>/plx:$PATH"`). 처음 실행할 때 SmartScreen이 막으면 "추가 정보" → "실행".
+- **Windows:** `parallax_<버전>_x64-portable.zip`을 풀고 `plx.exe`를 실행한다. 처음 실행할 때 SmartScreen이 막으면
+  "추가 정보" → "실행". 첫 화면의 "터미널 명령 설치"를 누르면 그 폴더가 사용자 PATH에 들어가 새로 연 터미널에서
+  `plx`를 쓸 수 있다(14-10, 직접 넣어도 된다. Git Bash: `export PATH="/c/Users/<나>/plx:$PATH"`).
   설치 프로그램(`…-setup.exe`)은 1-15로 확인한다
 - **macOS (Apple Silicon):** `parallax_<버전>_aarch64.dmg`를 열어 `parallax.app`을 응용 프로그램 폴더로 끈다.
   공증하지 않은 앱이라 그대로 열면 "Apple은 'parallax'에 … 악성 코드가 없음을 확인할 수 없습니다"라며 열지 않는다.
   그 창을 "완료"로 닫고 한 시간 안에 시스템 설정 → 개인정보 보호 및 보안 → 보안의 "그래도 열기"(Open Anyway)를
   누르고 암호를 넣으면 열린다(이 과정이 1-16). 터미널에서 열기 전에 내려받은 파일 표시를 지워도 된다
   (`xattr -dr com.apple.quarantine /Applications/parallax.app`, 1-16을 볼 거면 하지 않는다).
-  그다음 `plx` 명령을 설치한다(이 저장소가 있으면 `sh scripts/install-macos-shim.sh`, 릴리스에도 붙어 있다):
+  터미널 명령 `plx`는 앱 첫 화면의 "터미널 명령 설치"로 설치한다(14-9, `/usr/local/bin/plx`). 스크립트로도 된다
+  (이 저장소가 있으면 `sh scripts/install-macos-shim.sh`, 릴리스에도 붙어 있다):
   ```sh
   curl -fsSLO https://raw.githubusercontent.com/gembitious/parallax/main/scripts/install-macos-shim.sh
   sh install-macos-shim.sh
@@ -68,7 +72,7 @@ npm run tauri build -- --bundles app   # macOS: target/release/bundle/macos/para
 
 - **Windows (Git Bash):** `export PATH="$PWD/target/release:$PATH"` (또는 `target/release`를 시스템 PATH에 추가)
 - **macOS:** `scripts/install-macos-shim.sh target/release/bundle/macos/parallax.app` → `/usr/local/bin/plx`
-  (쓸 수 없으면 `~/.local/bin/plx`에 설치하고 PATH 안내를 출력한다)
+  (쓸 수 없으면 `~/.local/bin/plx`에 설치하고 PATH 안내를 출력한다). 앱의 "터미널 명령 설치"도 된다
 
 ### 확인
 
@@ -85,17 +89,17 @@ npm run tauri build -- --bundles app   # macOS: target/release/bundle/macos/para
 | 2 | 창을 다른 앱 뒤로 보낸 뒤 `plx CLAUDE.md` | 창이 **앞으로 오고** 내용이 바뀐다(0.1초 안) |
 | 3 | 창의 닫기 버튼 | 창이 숨는다(앱은 살아 있다). macOS는 포커스가 터미널로 돌아간다 |
 | 4 | 다시 `plx README.md` | 창이 바로 뜬다 |
-| 5 | 트레이(메뉴 막대) 아이콘 → 열기 / 종료 | 열기는 창을 보인다, 종료는 앱을 끝낸다(다음 `plx`는 다시 콜드 스타트) |
+| 5 | 트레이(메뉴 막대) 아이콘 → 창 보이기 / 종료 | 창 보이기는 창을 보인다, 종료는 앱을 끝낸다(다음 `plx`는 다시 콜드 스타트). 저장소 열기…·터미널 명령 설치…는 14 |
 | 6 | macOS: 창을 닫은 뒤 Dock 아이콘 클릭 | 창이 다시 보인다 |
-| 7 | 앱을 끝낸 뒤 Finder(macOS)·시작 메뉴(Windows)로 앱을 연다 | 창이 뜨고 첫 화면 안내("터미널에서 plx를 실행하면…")가 보인다. 그 뒤 `plx README.md`는 이 창에 열린다 |
+| 7 | 앱을 끝낸 뒤 Finder(macOS)·시작 메뉴(Windows)로 앱을 연다 | 창이 뜨고 첫 화면(저장소 열기…, 최근 저장소, 터미널에서 열기)이 보인다. 그 뒤 `plx README.md`는 이 창에 열린다 |
 | 8 | 상주 중에 다른 TMPDIR로 `TMPDIR=/tmp/x plx README.md`(macOS·Linux) | 같은 창에 열린다(인스턴스가 둘이 되지 않는다. Dock·트레이 아이콘도 하나) |
 | 9 | **Windows (Git Bash):** 앱을 끝낸 뒤 `x=$(plx README.md); echo 끝` | 1초 안팎에 `끝`이 나오고 창이 뜬다(앱이 끝날 때까지 기다리지 않는다) |
 | 10 | **Windows:** 앱을 끝낸 뒤 새 폴더에서 `plx`를 처음 실행하고(그 폴더의 저장소), 그 터미널을 닫은 뒤 탐색기에서 그 폴더를 지운다 | 지워진다(상주 앱이 폴더를 쥐고 있지 않다) |
 | 11 | **Windows:** 관리자 터미널에서 처음 `plx`로 띄운 뒤 일반 터미널에서 `plx README.md` | 같은 창에 열리거나, 열지 못하면 까닭을 알리는 문장이 나온다(멈추지 않는다) |
 | 12 | 릴리스 빌드에서 아무 화면이나 `:` → `라이선스` → `Enter` | "오픈 소스 라이선스" 창에 parallax와 다른 프로젝트의 고지가 보인다. `j`/`k`·`PageDown`으로 스크롤, `Esc`로 닫은 뒤 화면 키가 그대로 먹는다 |
 | 13 | 앱 아이콘 보기: Dock·Finder·`⌘Tab`(macOS), 작업 표시줄·창 제목줄·`Alt+Tab`(Windows) | 어긋나게 겹친 층 셋(위부터 주황·보라·파랑)을 흰 선이 꿴 아이콘. Tauri 기본 아이콘(노랑·하늘색 고리)이 아니고, 작은 크기에서도 층 셋이 보인다 |
-| 14 | macOS: 메뉴 막대의 parallax 아이콘을 밝은·어두운 모드에서 보기 | 층 셋 모양의 단색 아이콘이 다른 메뉴 막대 아이콘과 같은 색으로 보인다(컬러 앱 아이콘이 아니다). 누르면 열기·종료 메뉴 |
-| 15 | Windows: 앱을 끝낸 뒤 `parallax_<버전>_x64-setup.exe`로 설치 → 끝 화면에서 실행, 시작 메뉴의 parallax로 다시 실행 | 관리자 권한을 묻지 않고 한국어 화면으로 `%LOCALAPPDATA%\parallax`에 설치한다. 띄우면 첫 화면 안내가 보인다. 설정 → 앱에서 제거된다 |
+| 14 | macOS: 메뉴 막대의 parallax 아이콘을 밝은·어두운 모드에서 보기 | 층 셋 모양의 단색 아이콘이 다른 메뉴 막대 아이콘과 같은 색으로 보인다(컬러 앱 아이콘이 아니다). 누르면 창 보이기·저장소 열기…·터미널 명령 설치…·종료 메뉴 |
+| 15 | Windows: 앱을 끝낸 뒤 `parallax_<버전>_x64-setup.exe`로 설치 → 끝 화면에서 실행, 시작 메뉴의 parallax로 다시 실행 | 관리자 권한을 묻지 않고 한국어 화면으로 `%LOCALAPPDATA%\parallax`에 설치한다. 띄우면 첫 화면이 보인다. 설정 → 앱에서 제거된다 |
 | 16 | macOS: DMG를 열어 앱을 응용 프로그램 폴더로 끌고 `xattr` 없이 Finder로 연다 → "완료" → 시스템 설정 → 개인정보 보호 및 보안 → "그래도 열기" | DMG에 parallax 아이콘과 응용 프로그램 폴더 바로 가기가 보인다. 처음에는 "Apple은 … 확인할 수 없습니다" 창이 뜬다("손상되었기 때문에 열 수 없습니다"가 아니다). 허용하면 1-7처럼 뜨고, 다음부터는 Finder와 `plx` 모두 막히지 않는다 |
 
 ## 2. blame 화면 (M1)
@@ -294,6 +298,26 @@ VS Code(`code`)나 Zed(`zed`)가 PATH에 있는 상태에서 한다. 없으면 �
 | 2 | 같은 파일을 `git-ai blame <파일>` | 1에서 보라 줄인 줄과 git-ai가 AI 도구 이름을 붙인 줄이 같다 |
 | 3 | 보라 줄에서 `i` | 카드에 `AI ✦ 도구 · 모델`, 시킨 사람 |
 | 4 | git-ai 노트가 없는 저장소 | 아무 표시가 없고 blame이 그대로 빠르다 |
+
+## 14. 앱으로 열기와 터미널 명령 (M6-1)
+
+터미널 없이 한다. 확인할 저장소 두세 개(이 저장소도 된다)를 준비한다.
+
+| # | 할 일 | 기대 |
+|---|---|---|
+| 1 | 앱을 끝낸 뒤 Finder·Dock(macOS)·시작 메뉴(Windows)로 띄운다 | 첫 화면에 "저장소 열기… ⌘O"(Windows Ctrl+O), 최근 저장소, "터미널에서 열기"가 보인다 |
+| 2 | "저장소 열기…"(또는 ⌘O·Ctrl+O) → 저장소 폴더를 고른다 | OS 폴더 창이 parallax 창에 붙어 뜨고, 고르면 그 저장소의 그래프가 열린다. 저장소 안의 하위 폴더를 골라도 된다 |
+| 3 | 2에서 저장소가 아닌 폴더를 고른다, 폴더 창을 취소한다 | 저장소가 아니면 화면 아래에 까닭이 빨갛게 뜨고 보던 화면은 그대로다. 취소하면 아무 일도 없다 |
+| 4 | 2를 저장소 몇 개에 한 뒤 앱을 끝내고 다시 띄운다 | 최근 저장소에 최근 순으로 보인다. 마우스로 누르거나 `↑`/`↓`(`j`/`k`)·`Enter`로 연다. ⌘O·Ctrl+O의 폴더 창은 가장 최근 저장소의 상위 폴더에서 시작한다 |
+| 5 | 최근 저장소 하나의 폴더 이름을 바꾸고(또는 외장 디스크를 꺼내고) 창으로 돌아온다 | 그 줄이 흐리게 "없음"으로 보이고 눌러도 열리지 않는다. 줄 끝 ✕나 `Delete`로 목록에서 빠진다(폴더는 그대로) |
+| 6 | Finder·탐색기에서 저장소 폴더를 창에 끌어 놓는다. 저장소 안의 파일도 끌어 놓는다 | 끄는 동안 "놓으면 연다" 안내가 창을 덮는다. 폴더는 그 저장소의 그래프, 파일은 그 파일의 blame이 열린다 |
+| 7 | macOS: 저장소 폴더를 Dock의 parallax 아이콘에 놓는다(앱이 떠 있을 때와 끈 뒤 둘 다) | Dock 아이콘이 받아들이고 그 저장소의 그래프가 열린다. Finder에서 폴더를 더블클릭하면 그대로 Finder가 연다 |
+| 8 | 아무 화면에서 `:` → `저장소`, 트레이(메뉴 막대) → 저장소 열기…(창을 닫아 둔 채로) | 팔레트에 "저장소 열기…"와 최근 저장소가 뜨고 고르면 열린다. 트레이에서는 창이 보이고 폴더 창이 뜬다 |
+| 9 | macOS: 응용 프로그램 폴더의 앱 첫 화면에서 "터미널 명령 설치" | `/usr/local/bin`에 쓸 수 없으면(새 Apple Silicon 맥) macOS 관리자 암호 창이 뜬다. 넣으면 "터미널 명령 plx를 쓸 수 있다: /usr/local/bin/plx", 첫 화면은 "설치됨". 새 터미널의 저장소에서 `plx`가 이 창에 연다. 암호 창을 취소하면 까닭이 뜨고 아무것도 바뀌지 않는다 |
+| 10 | Windows: 첫 화면에서 "터미널 명령 설치"(설치 프로그램으로 설치한 앱, zip의 `plx.exe` 둘 다) | 관리자 권한을 묻지 않는다. 새로 연 터미널(PowerShell·Git Bash)에서 `plx --version`이 된다. 설정 → "환경 변수"의 사용자 Path에서 다른 항목은 그대로이고 그 폴더가 끝에 붙는다(먼저 잡히는 다른 `plx`가 있으면 그 앞, 11). 다시 띄운 첫 화면은 "설치됨" |
+| 11 | 설치한 뒤 앱을 다른 폴더로 옮겨 다시 띄운다. Windows는 zip을 다른 폴더에 한 번 더 풀고 트레이에서 앱을 종료한 뒤 새 폴더의 `plx.exe`를 띄운다(옛 자리는 남긴 채) | 첫 화면에 다시 설치 단추가 보이고, 누르면 `plx`가 새 자리의 앱을 부른다. Windows는 단추 옆에 "사용자 PATH의 <옛 폴더> 앞에 넣는다"와 "지금 plx 명령은 <옛 폴더>의 plx를 부른다"가 보이고, 누른 뒤 새 터미널의 `plx`가 새 자리의 앱을 부른다 |
+| 12 | macOS: DMG를 연 채 그 안의 앱을 바로 띄운 첫 화면 | 설치 단추 대신 "디스크 이미지(DMG)에서 실행하고 있다…" 또는 "임시 자리에서 실행하고 있다…"가 보인다 |
+| 13 | Windows: 앱이 떠 있을 때 시작 메뉴의 parallax를 다시 누른다 | 창이 앞으로 오고 보던 화면이 그대로다 |
 
 ## 문제를 알릴 때
 - 플랫폼(Windows/macOS 버전), 위 표의 번호, 실제로 본 것
