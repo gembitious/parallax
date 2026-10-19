@@ -76,6 +76,10 @@ export type WorkspaceAction =
   | { type: "cycle"; delta: 1 | -1 }
   | { type: "pin"; tab: number }
   | { type: "close"; tab: number }
+  /** 탭 메뉴: `tab`만 남기고 닫는다(그 탭을 보인다) */
+  | { type: "closeOthers"; tab: number }
+  /** 탭 메뉴: 모든 탭을 닫는다 */
+  | { type: "closeAll" }
   | { type: "focus"; focus: Focus }
   /** 패널 열기·닫기(Mod+J). 빈 패널을 열면 그래프를 연다. */
   | { type: "togglePanel" }
@@ -372,6 +376,15 @@ export function workspaceReducer(state: Workspace, action: WorkspaceAction): Wor
       };
     case "close":
       return closeTab(state, action.tab);
+    case "closeOthers": {
+      const tab = state.tabs.find((t) => t.key === action.tab);
+      return tab ? activate({ ...state, tabs: [tab], recent: [tab.key] }, tab.key) : state;
+    }
+    case "closeAll": {
+      if (state.tabs.length === 0) return state;
+      const focus = state.focus === "editor" && state.panelOpen && state.panel.length > 0 ? "panel" : state.focus;
+      return { ...state, tabs: [], recent: [], active: null, focus };
+    }
     case "focus": {
       const { focus } = action;
       if (focus === state.focus) return state;
@@ -403,6 +416,17 @@ export function focusedEntry(state: Workspace): StackEntry | null {
   const tab = state.tabs.find((t) => t.key === state.active);
   if (tab) return topOf(tab);
   return state.panelOpen && state.panel.length > 0 ? state.panel[state.panel.length - 1] : null;
+}
+
+/**
+ * 도구 막대·메뉴 막대가 명령을 보내는 칸: 키를 받는 칸. 트리에 있으면(또는 키를 받는 칸에 화면이 없으면) 보이는 탭,
+ * 탭이 없거나 패널이 가렸으면 열린 패널. 보이는 화면이 없으면 null.
+ */
+export function targetPane(state: Workspace): Pane | null {
+  const panel = state.panelOpen && state.panel.length > 0;
+  if (state.focus === "panel" && panel) return "panel";
+  if (state.active !== null && !(state.panelOpen && state.panelMax)) return "editor";
+  return panel ? "panel" : null;
 }
 
 /** 창 제목: 키를 받는 화면. plx 요청으로 연 화면은 그 호출의 요약이다. 화면이 없으면 저장소 이름. */

@@ -203,6 +203,10 @@ fi
 # 없다) 아래 두 blame 확인이 경합에 진다.
 check "blame이 끝까지 와서 거터를 그림 (콜드 스타트, package.json)" \
   wait_for_all '"kind":"blame"' '"label":"blame package.json (콜드 스타트)"'
+# macOS: 화면의 명령으로 시스템 메뉴 막대를 만들었다(Windows·Linux는 창 안의 HTML 메뉴라 기록이 없다).
+if [ "$os" = macos ]; then
+  check "macOS 메뉴 막대를 만듦" wait_for_all '"kind":"menu"' '"ok":true'
+fi
 
 start="$(now_ms)"
 status=0

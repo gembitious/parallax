@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { appInfo, onRequest, scriptStartMs, type AppInfo } from "./boot";
 import { Hud } from "./Hud";
+import { MenuHost } from "./menu/Menu";
+import { useNativeMenu } from "./menu/native";
 import { Notices, useNoticesRequest } from "./notices/Notices";
 import { call } from "./ipc";
 import { Start } from "./start/Start";
@@ -11,6 +13,7 @@ import { openPath, openRepoDialog } from "./start/open";
 import { Toasts } from "./Toasts";
 import type { Navigation, PlxRequest, Shown } from "./nav";
 import { afterPaint, bootMarks, getPerfInfo, nowMs, phasesBetween, record } from "./perf";
+import { IS_MAC } from "./workspace/keys";
 import { WorkspaceView } from "./workspace/Workspace";
 import {
   emptyWorkspace,
@@ -100,6 +103,11 @@ export default function App({ initial }: { initial: PlxRequest | null }) {
   const navigate = useCallback((navigation: Navigation, from: Place) => {
     if (!noticesRef.current) dispatch({ type: "navigate", navigation, from });
   }, []);
+  // macOS 메뉴 막대(Windows·Linux는 작업 공간의 도구 막대가 그린다). 항목을 고르면 라이선스 창을 닫고 실행한다.
+  useNativeMenu(IS_MAC, () => {
+    noticesRef.current = false;
+    setNotices(false);
+  });
   useEffect(() => {
     if (notices) return;
     const actions = deferredReloads.current;
@@ -204,6 +212,7 @@ export default function App({ initial }: { initial: PlxRequest | null }) {
           <p>놓으면 연다: 폴더는 그 저장소의 그래프, 파일은 blame</p>
         </div>
       )}
+      <MenuHost />
       <Toasts />
       <Hud />
     </div>

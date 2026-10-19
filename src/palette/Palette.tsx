@@ -7,17 +7,48 @@ import { filterByLabel } from "./match";
 import { openNotices } from "../notices/Notices";
 import { OPEN_REPO_KEYS } from "../start/keys";
 import { installCli, openPath, openRepoDialog, recentRepos } from "../start/open";
-import { workspaceCommands } from "../workspace/commands";
+import { workspaceCommands } from "../menu/registry";
+import { MOD } from "../workspace/keys";
 
 export type Command = {
   /** 팔레트에 보이는 이름(검색 대상) */
   label: string;
-  /** 단축키(보이기만 한다) */
+  /** 단축키(보이기만 한다). 여럿이면 ` · `로 잇는다. */
   keys?: string;
   /** 덧붙이는 설명(흐리게) */
   detail?: string;
   run(): void;
+  /** 도구 막대·메뉴 막대가 찾는 일. 화면이 달라도 같은 일이면 같은 이름이다. */
+  id?: CommandId;
+  /** 앱 전역 명령(파일 찾기, 저장소 열기, 작업 공간 …). 메뉴 막대는 화면 메뉴에 넣지 않고 제자리(파일·보기·도움말)에 둔다. */
+  app?: boolean;
+  /** macOS 메뉴 막대에 시스템 단축키로 넣는 키. ⌘가 붙은 것만 넣는다(예: "CmdOrCtrl+B", src/menu/model.ts). */
+  accelerator?: string;
 };
+
+/** 도구 막대 단추와 메뉴 막대 자리(src/menu/model.ts, src/workspace/Toolbar.tsx) */
+export type CommandId =
+  // 화면
+  | "commit"
+  | "parent"
+  | "blame"
+  | "older"
+  | "newer"
+  | "history"
+  | "lineHistory"
+  | "graph"
+  | "gutter"
+  | "worktrees"
+  | "help"
+  | "back"
+  // 작업 공간
+  | "tree"
+  | "treeFocus"
+  | "panel"
+  | "panelMax"
+  | "closeTab"
+  | "nextTab"
+  | "previousTab";
 
 /**
  * 화면에 팔레트를 붙인다. `open()`으로 열고 `overlay`를 화면 끝에 그린다. 고르면 닫은 뒤 그 명령을 실행하고,
@@ -148,18 +179,25 @@ export function commonCommands(actions: {
   hud?: () => void;
 }): Command[] {
   const list: Command[] = [
-    { label: "파일 찾기 (Quick Open)", keys: "f · Ctrl+P", run: actions.files },
+    { label: "파일 찾기 (Quick Open)", keys: `f · ${MOD}P`, accelerator: "CmdOrCtrl+P", app: true, run: actions.files },
     ...workspaceCommands(),
-    { label: "워크트리 고르기", keys: "W", run: actions.worktrees },
-    { label: "저장소 열기…", keys: OPEN_REPO_KEYS, detail: "폴더를 골라 그 저장소의 그래프", run: openRepoDialog },
+    { label: "워크트리 고르기", keys: "W", id: "worktrees", run: actions.worktrees },
+    {
+      label: "저장소 열기…",
+      keys: OPEN_REPO_KEYS,
+      accelerator: "CmdOrCtrl+O",
+      detail: "폴더를 골라 그 저장소의 그래프",
+      app: true,
+      run: openRepoDialog,
+    },
     ...recentRepos()
       .filter((repo) => !repo.missing)
-      .map((repo) => ({ label: `최근 저장소: ${repo.name}`, detail: repo.display, run: () => openPath(repo.path) })),
-    { label: "단축키 도움말", keys: "?", run: actions.help },
-    { label: "뒤로 (맨 앞 화면이면 창 숨기기)", keys: "q", run: actions.back },
-    { label: "터미널 명령 plx 설치", detail: "터미널에서 plx로 이 창에 연다", run: () => void installCli() },
-    { label: "오픈 소스 라이선스", detail: "앱에 든 다른 프로젝트의 저작권 고지", run: openNotices },
+      .map((repo): Command => ({ label: `최근 저장소: ${repo.name}`, detail: repo.display, app: true, run: () => openPath(repo.path) })),
+    { label: "단축키 도움말", keys: "?", id: "help", run: actions.help },
+    { label: "뒤로 (맨 앞 화면이면 창 숨기기)", keys: "q", id: "back", run: actions.back },
+    { label: "터미널 명령 plx 설치", detail: "터미널에서 plx로 이 창에 연다", app: true, run: () => void installCli() },
+    { label: "오픈 소스 라이선스", detail: "앱에 든 다른 프로젝트의 저작권 고지", app: true, run: openNotices },
   ];
-  if (actions.hud) list.push({ label: "성능 HUD 보이기·숨기기", keys: "`", run: actions.hud });
+  if (actions.hud) list.push({ label: "성능 HUD 보이기·숨기기", keys: "`", app: true, run: actions.hud });
   return list;
 }

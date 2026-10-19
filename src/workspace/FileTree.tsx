@@ -1,12 +1,17 @@
 // 파일 트리(왼쪽): 저장소의 추적 파일을 폴더별로 보인다(인덱스, 백엔드 files_dir. Quick Open과 같은 목록). 파일을
-// 누르면 미리보기 탭, 두 번 누르거나 Enter면 보통 탭으로 연다. 보이는 탭의 파일은 펼쳐서 고른다. 저장소가 바뀌거나
-// (HEAD·참조) 창으로 돌아오면 펼친 폴더를 다시 읽는다(git add로 늘어난 파일).
+// 누르면 미리보기 탭, 두 번 누르거나 Enter면 보통 탭으로 연다. 우클릭은 열기·히스토리·에디터로 열기·경로 복사.
+// 보이는 탭의 파일은 펼쳐서 고른다. 저장소가 바뀌거나(HEAD·참조) 창으로 돌아오면 펼친 폴더를 다시 읽는다(git add로
+// 늘어난 파일).
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { openInEditor } from "../editor";
 import { call } from "../ipc";
 import { isComposing } from "../keys";
+import { openContextMenu, type MenuEntry } from "../menu/Menu";
 import { drawWindow, insideDrawn, type DrawnRange } from "../scrollWindow";
+import { toast } from "../Toasts";
 import { watchRepo } from "../watch";
-import { ancestorsOf, sortListing, treeKey, treeRows, type DirListing, type TreeMove } from "./tree";
+import { absolutePath, copyPath } from "./paths";
+import { ancestorsOf, sortListing, treeKey, treeRows, type DirListing, type TreeMove, type TreeRow } from "./tree";
 
 /** 행 높이(px). styles.css의 .tree-row와 같다. */
 const ROW_HEIGHT = 22;
@@ -22,11 +27,13 @@ type Props = {
   /** 보이는 탭의 작업트리 파일(저장소 기준). 펼쳐서 고른다. */
   activeFile: string | null;
   onOpen(path: string, missing: boolean, preview: boolean): void;
+  /** 우클릭 메뉴: 파일(폴더면 그 아래) 히스토리 */
+  onHistory(path: string): void;
   /** Esc·q: 에디터(또는 패널)로 돌아간다 */
   onLeave(): void;
 };
 
-export function FileTree({ repo, focused, focusTick, activeFile, onOpen, onLeave }: Props) {
+export function FileTree({ repo, focused, focusTick, activeFile, onOpen, onHistory, onLeave }: Props) {
   const [listings, setListings] = useState<ReadonlyMap<string, DirListing>>(() => new Map());
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const [selected, setSelected] = useState<string | null>(null);
@@ -136,6 +143,36 @@ export function FileTree({ repo, focused, focusTick, activeFile, onOpen, onLeave
     }
   };
 
+  /** 우클릭 메뉴 */
+  const rowMenu = (row: TreeRow): MenuEntry[] => {
+    const copies: MenuEntry[] = [
+      { label: "경로 복사", detail: "저장소 기준", run: () => copyPath(row.path) },
+      { label: "전체 경로 복사", run: () => copyPath(absolutePath(repo, row.path)) },
+    ];
+    if (row.dir) {
+      return [
+        { label: row.open ? "접기" : "펼치기", run: () => apply({ kind: "toggle", path: row.path }) },
+        { label: "폴더 히스토리", detail: "이 아래를 바꾼 커밋", run: () => onHistory(row.path) },
+        "separator",
+        ...copies,
+      ];
+    }
+    return [
+      { label: "열기", keys: "Enter", run: () => apply({ kind: "open", path: row.path, missing: row.missing, preview: false }) },
+      { label: "미리보기로 열기", run: () => apply({ kind: "open", path: row.path, missing: row.missing, preview: true }) },
+      "separator",
+      { label: "파일 히스토리", run: () => onHistory(row.path) },
+      {
+        label: "에디터로 열기",
+        detail: row.missing ? "작업트리에서 지운 파일" : undefined,
+        disabled: row.missing,
+        run: () => void openInEditor({ repo, path: row.path, rev: null, line: null }).then((message) => toast(message)),
+      },
+      "separator",
+      ...copies,
+    ];
+  };
+
   const { start, end } = drawWindow(viewport.top, viewport.height, ROW_HEIGHT, rows.length);
   drawnRange.current = { start, end, height: viewport.height };
   const page = Math.max(1, Math.floor(viewport.height / ROW_HEIGHT) - 1);
@@ -189,6 +226,10 @@ export function FileTree({ repo, focused, focusTick, activeFile, onOpen, onLeave
               }
               onDoubleClick={() => {
                 if (!row.dir) onOpen(row.path, row.missing, false);
+              }}
+              onContextMenu={(e) => {
+                setSelected(row.path);
+                openContextMenu(e, rowMenu(row), row.name);
               }}
             >
               <span className={`tree-twisty${row.dir ? (row.open ? " open" : " closed") : ""}`} aria-hidden="true" />

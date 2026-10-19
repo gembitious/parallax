@@ -5,6 +5,7 @@ import {
   emptyWorkspace,
   focusedEntry,
   tabFile,
+  targetPane,
   topOf,
   windowTitle,
   workspaceReducer,
@@ -306,6 +307,37 @@ describe("탭", () => {
     state = run(state, { type: "togglePanel" });
     expect(state.focus).toBe("editor");
     expect(windowTitle(state)).toBe("repo");
+  });
+
+  it("탭 메뉴: 다른 탭 닫기는 그 탭을 보이고, 모든 탭 닫기는 패널이나 빈 화면", () => {
+    let state = run(emptyWorkspace("/repo"), open("a.rs"), open("b.rs"), open("c.rs"));
+    const [a, b] = state.tabs.map((t) => t.key);
+    state = run(state, { type: "closeOthers", tab: b });
+    expect([state.tabs.map(tabFile), state.active, state.recent]).toEqual([["b.rs"], b, [b]]);
+    expect(run(state, { type: "closeOthers", tab: a })).toBe(state);
+    state = run(state, open("d.rs"), { type: "togglePanel" }, { type: "focus", focus: "editor" }, { type: "closeAll" });
+    expect([state.tabs, state.active, state.recent, state.focus]).toEqual([[], null, [], "panel"]);
+    expect(run(state, { type: "closeAll" })).toBe(state);
+  });
+
+  it("도구 막대가 명령을 보내는 칸: 키를 받는 칸, 트리면 보이는 화면", () => {
+    let state = emptyWorkspace("/repo");
+    expect(targetPane(state)).toBeNull();
+    state = run(state, open("a.rs"));
+    expect(targetPane(state)).toBe("editor");
+    state = run(state, { type: "focus", focus: "tree" });
+    expect(targetPane(state)).toBe("editor");
+    state = run(state, { type: "togglePanel" });
+    expect(targetPane(state)).toBe("panel");
+    state = run(state, { type: "focus", focus: "tree" });
+    expect(targetPane(state)).toBe("editor");
+    // 패널이 에디터를 가리면 패널, 탭이 없으면 패널
+    state = run(state, { type: "maximizePanel" });
+    expect(targetPane(state)).toBe("panel");
+    state = run(state, { type: "maximizePanel" }, { type: "closeAll" });
+    expect([state.focus, targetPane(state)]).toEqual(["tree", "panel"]);
+    state = run(state, { type: "togglePanel" });
+    expect(targetPane(state)).toBeNull();
   });
 
   it("다시 열기(reload)는 그 자리의 화면만 새 key로 바꾼다", () => {

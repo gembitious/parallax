@@ -27,7 +27,8 @@ export function toggleBlameGutter(): void {
   for (const listener of listeners) listener();
 }
 
-const subscribe = (listener: () => void) => {
+/** 바뀌면 부른다(메뉴 막대의 이름) */
+export const subscribeBlameGutter = (listener: () => void) => {
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
@@ -35,5 +36,5 @@ const subscribe = (listener: () => void) => {
 };
 
 export function useBlameGutter(): boolean {
-  return useSyncExternalStore(subscribe, blameGutterShown);
+  return useSyncExternalStore(subscribeBlameGutter, blameGutterShown);
 }

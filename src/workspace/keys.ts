@@ -11,8 +11,8 @@ export const MOD = IS_MAC ? "⌘" : "Ctrl+";
 
 /**
  * Mod(macOS ⌘, 나머지 Ctrl)+B 트리, Mod+Shift+E 트리로, Mod+J 패널, Ctrl+Tab·Ctrl+Shift+Tab(Ctrl+PageDown·PageUp)
- * 탭 옮기기, Ctrl+W 탭 닫기(macOS의 ⌘W는 창 닫기 메뉴가 받는다). 글자는 자판 자리(`code`)로도 본다: 한글 입력
- * 상태면 `key`가 한글 자모다.
+ * 탭 옮기기, Mod+W 탭 닫기(탭이 없으면 창 숨기기. macOS 메뉴 막대의 ⌘W와 같다). 글자는 자판 자리(`code`)로도 본다:
+ * 한글 입력 상태면 `key`가 한글 자모다.
  */
 export function workspaceKey(e: KeyLike, mac = IS_MAC): WorkspaceKey | null {
   if (e.altKey) return null;
@@ -27,6 +27,6 @@ export function workspaceKey(e: KeyLike, mac = IS_MAC): WorkspaceKey | null {
   if (e.shiftKey) return is("e") ? "focusTree" : null;
   if (is("b")) return "toggleTree";
   if (is("j")) return "togglePanel";
-  if (is("w") && !mac) return "closeTab";
+  if (is("w")) return "closeTab";
   return null;
 }

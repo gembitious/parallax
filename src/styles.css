@@ -604,6 +604,210 @@ button.status-item[aria-pressed="true"] {
   flex: 1;
 }
 
+/* 도구 막대(맨 위): Windows·Linux의 메뉴 막대, 화면의 주요 이동, 파일 찾기·명령 팔레트·도움말 */
+.toolbar {
+  display: flex;
+  flex-shrink: 0;
+  gap: 2px;
+  align-items: center;
+  height: 34px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  user-select: none;
+}
+
+/* 가운데 단추들: 창이 좁으면 이것만 가로로 스크롤한다(오른쪽 파일 찾기·명령은 남는다) */
+.toolbar-tools {
+  display: flex;
+  flex: 0 1 auto;
+  gap: 2px;
+  align-items: center;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.toolbar-tools::-webkit-scrollbar {
+  display: none;
+}
+
+.toolbar-spacer {
+  flex: 1;
+  min-width: 8px;
+}
+
+.tool {
+  flex-shrink: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: none;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tool:hover:not(.off) {
+  border-color: var(--border);
+  background: var(--bg);
+}
+
+.tool:active:not(.off) {
+  background: var(--line-active);
+}
+
+/* 이 화면에 없는 일: 자리는 그대로 두고 흐리게(풍선 도움말이 어느 화면의 일인지 알린다) */
+.tool.off {
+  color: var(--muted);
+  opacity: 0.5;
+  cursor: default;
+}
+
+.tool:focus-visible,
+.menubar-title:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.tool-sep {
+  flex-shrink: 0;
+  width: 1px;
+  height: 18px;
+  margin: 0 6px;
+  background: var(--border);
+}
+
+/* 파일 찾기: 검색 칸처럼 보이는 단추 */
+.tool.tool-search {
+  display: flex;
+  flex-shrink: 1;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  width: 220px;
+  min-width: 120px;
+  border-color: var(--border);
+  background: var(--bg);
+  color: var(--muted);
+}
+
+.tool-search span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool.tool-help {
+  width: 26px;
+  padding: 0;
+}
+
+.menubar {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+}
+
+.menubar-title {
+  height: 26px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  font-size: 12px;
+  cursor: default;
+}
+
+.menubar-title:hover,
+.menubar-title.open {
+  background: var(--line-active);
+}
+
+/* 우클릭 메뉴·메뉴 막대 드롭다운: 떠 있는 창(30)·알림(40·50)보다 위 */
+.menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 200px;
+  max-width: min(560px, calc(100vw - 8px));
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  outline: none;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  user-select: none;
+}
+
+.menu-item {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 4px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.menu-item.selected {
+  background: var(--accent);
+  color: #fff;
+}
+
+.menu-item.disabled {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+.menu-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.menu-detail {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+}
+
+kbd.menu-keys {
+  flex-shrink: 0;
+  min-width: 0;
+  margin-left: auto;
+  padding: 0 0 0 16px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 12px;
+}
+
+.menu-item.selected .menu-detail,
+.menu-item.selected kbd.menu-keys {
+  color: inherit;
+  opacity: 0.85;
+}
+
+.menu-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+
+.menu-header {
+  padding: 4px 10px 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
 /* 첫 화면(띄울 화면 없이 앱을 열었을 때): 저장소 열기, 최근 저장소, 터미널 명령 */
 .start-screen {
   flex: 1;

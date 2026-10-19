@@ -27,13 +27,14 @@ describe("workspaceKey", () => {
     expect(workspaceKey(key("ㅓ", { metaKey: true }, "KeyJ"), true)).toBe("togglePanel");
   });
 
-  it("탭 옮기기는 어느 플랫폼이든 Ctrl, 탭 닫기는 macOS에서 받지 않는다(⌘W는 창 닫기)", () => {
+  it("탭 옮기기는 어느 플랫폼이든 Ctrl, 탭 닫기는 Mod+W", () => {
     expect(workspaceKey(key("Tab", { ctrlKey: true }), true)).toBe("nextTab");
     expect(workspaceKey(key("Tab", { ctrlKey: true, shiftKey: true }), false)).toBe("previousTab");
     expect(workspaceKey(key("PageDown", { ctrlKey: true }), false)).toBe("nextTab");
     expect(workspaceKey(key("PageUp", { ctrlKey: true }), true)).toBe("previousTab");
     expect(workspaceKey(key("w", { ctrlKey: true }), false)).toBe("closeTab");
-    expect(workspaceKey(key("w", { metaKey: true }), true)).toBeNull();
+    expect(workspaceKey(key("w", { metaKey: true }), true)).toBe("closeTab");
+    expect(workspaceKey(key("w", { ctrlKey: true }), true)).toBeNull();
     expect(workspaceKey(key("Tab"), false)).toBeNull();
     expect(workspaceKey(key("b"), false)).toBeNull();
     expect(workspaceKey(key("b", { ctrlKey: true, altKey: true }), false)).toBeNull();

@@ -9,6 +9,8 @@ import { call } from "../ipc";
 import { useQuickOpen } from "../quickopen/QuickOpen";
 import { commonCommands, usePalette, type Command } from "../palette/Palette";
 import { isComposing, routeKey } from "../keys";
+import { openContextMenu, type MenuEntry } from "../menu/Menu";
+import { usePublish } from "../menu/registry";
 import { openInEditor } from "../editor";
 import { toggleHud } from "../Hud";
 import { historySwitch } from "../worktree/switch";
@@ -119,10 +121,10 @@ export function HistoryView({
   const [accelRequest, setAccelRequest] = useState(0);
   // 명령 팔레트: 키로 하는 일 모두와 머리줄의 가속 설정 버튼. 함수들은 아래에 있다(누를 때 부른다).
   const commands: Command[] = [
-    { label: "커밋 상세 (이 파일 diff)", keys: "Enter", run: () => openCommit() },
-    { label: "이 리비전의 파일 blame", keys: "b", run: () => openBlame(false) },
-    { label: "바꾸기 전 리비전의 파일 blame", keys: ",", run: () => openBlame(true) },
-    { label: "커밋 그래프 (고른 커밋)", keys: "G", run: () => openGraph() },
+    { id: "commit", label: "커밋 상세 (이 파일 diff)", keys: "Enter", run: () => openCommit() },
+    { id: "blame", label: "이 리비전의 파일 blame", keys: "b", run: () => openBlame(false) },
+    { id: "parent", label: "바꾸기 전 리비전의 파일 blame", keys: ",", run: () => openBlame(true) },
+    { id: "graph", label: "커밋 그래프 (고른 커밋)", keys: "G", run: () => openGraph() },
     { label: "커밋 sha 복사", keys: "y", run: () => copySha() },
     { label: "검색 (요약·작성자·sha·경로)", keys: "/", run: () => openSearch() },
     { label: "다음 검색 결과", keys: "n", run: () => findNext(1) },
@@ -140,6 +142,12 @@ export function HistoryView({
     }),
   ];
   const palette = usePalette(commands, () => listRef.current?.focus({ preventScroll: true }));
+  // 도구 막대·메뉴 막대(보이는 동안)
+  usePublish("panel", visible, lines ? "라인 히스토리" : "히스토리", commands, {
+    palette: palette.open,
+    help: () => setHelp(true),
+    files: quickOpen.open,
+  });
   const mounted = useMounted();
   /** 가속 설정 확인 창이 열려 있다 */
   const [accelDialog, setAccelDialog] = useState(false);
@@ -426,6 +434,22 @@ export function HistoryView({
     );
   };
 
+  /** 행 우클릭: 그 커밋을 고르고 그 커밋의 일을 보인다. */
+  const rowMenu = (index: number): MenuEntry[] => {
+    const e = entries.current[index];
+    const file = isFileHistory();
+    const before = file && e !== undefined && e.status !== "added" && e.parents.length > 0;
+    return [
+      { label: "커밋 상세", keys: "Enter", detail: file ? "이 파일 diff" : undefined, run: () => openCommit(index) },
+      { label: "이 리비전의 파일 blame", keys: "b", disabled: !file, run: () => openBlame(false) },
+      { label: "바꾸기 전 리비전의 파일 blame", keys: ",", disabled: !before, run: () => openBlame(true) },
+      { label: "커밋 그래프", keys: "G", detail: "이 커밋", run: openGraph },
+      "separator",
+      { label: "커밋 sha 복사", keys: "y", run: copySha },
+      { label: "에디터로 열기", keys: "o", detail: "작업트리 파일", run: openEditor },
+    ];
+  };
+
   /** 검색 칸을 연다. 이미 열려 있으면(목록을 눌러 포커스가 떠났다) 그리로 포커스를 옮긴다. */
   const openSearch = () => {
     setSearch((s) => ({ ...s, open: true }));
@@ -641,6 +665,10 @@ export function HistoryView({
                 onDoubleClick={() => {
                   select(i);
                   openCommit(i);
+                }}
+                onContextMenu={(e) => {
+                  select(i);
+                  openContextMenu(e, rowMenu(i), "커밋");
                 }}
               >
                 <Row entry={entry} path={path} nowMs={nowAtOpen.current} />

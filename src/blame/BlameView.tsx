@@ -1,6 +1,6 @@
 // blame 뷰: 파일 내용을 먼저 그리고, 거터를 blame 결과로 점진적으로 채운다.
 // 에디터(CodeMirror)는 React 밖에서 직접 다룬다. 이벤트 처리기는 한 번 만들어지므로 최신 상태는 ref로 읽는다.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { Help } from "../Help";
 import { copyText } from "../clipboard";
 import { call } from "../ipc";
@@ -21,7 +21,9 @@ import { routeKey } from "../keys";
 import { openInEditor } from "../editor";
 import { toggleHud } from "../Hud";
 import { gotoLine, openSearchPanel } from "@codemirror/search";
-import { runScopeHandlers } from "@codemirror/view";
+import { runScopeHandlers, type EditorView } from "@codemirror/view";
+import { copyItem, openContextMenu, type MenuEntry } from "../menu/Menu";
+import { usePublish } from "../menu/registry";
 import { blameSwitch } from "../worktree/switch";
 import { openBlame, type BlameTarget } from "./session";
 import type { BlameBlock, BlameMeta, BlameStats, CommitInfo, Neighbor, Version } from "./types";
@@ -185,18 +187,19 @@ export function BlameView({
   // 명령 팔레트: 키로 하는 일 모두와 마우스로만 되던 카드 고정. 동작은 actions(아래)를 부른다.
   const run = (name: keyof Actions) => () => void (actions.current[name] as () => boolean)();
   const commands: Command[] = [
-    { label: "이 줄 커밋의 상세", keys: "Enter", run: run("enter") },
+    { id: "commit", label: "이 줄 커밋의 상세", keys: "Enter", run: run("enter") },
     { label: "커밋 카드 보이기·닫기", keys: "i", detail: "전체 메시지, 날짜, 바뀐 파일 수", run: run("card") },
-    { label: "부모 리비전 blame (이 줄을 바꾸기 전)", keys: ",", run: run("parent") },
-    { label: "이전 리비전", keys: "<", run: run("older") },
-    { label: "다음 리비전", keys: ">", run: run("newer") },
-    { label: "파일 히스토리", keys: "H", run: run("history") },
-    { label: "라인 히스토리 (선택한 줄)", keys: "L", run: run("lineHistory") },
-    { label: "커밋 그래프 (이 줄의 커밋)", keys: "G", run: run("graph") },
+    { id: "parent", label: "부모 리비전 blame (이 줄을 바꾸기 전)", keys: ",", run: run("parent") },
+    { id: "older", label: "이전 리비전", keys: "<", run: run("older") },
+    { id: "newer", label: "다음 리비전", keys: ">", run: run("newer") },
+    { id: "history", label: "파일 히스토리", keys: "H", run: run("history") },
+    { id: "lineHistory", label: "라인 히스토리 (선택한 줄)", keys: "L", run: run("lineHistory") },
+    { id: "graph", label: "커밋 그래프 (이 줄의 커밋)", keys: "G", run: run("graph") },
     { label: "커밋 sha 복사", keys: "y", run: run("copySha") },
     { label: "파일 안에서 찾기", keys: "/", run: run("search") },
     { label: "에디터로 열기", keys: "o", detail: "작업트리 파일의 이 줄", run: run("openEditor") },
     {
+      id: "gutter",
       label: showGutter ? "blame 거터 숨기기" : "blame 거터 보이기",
       keys: "b",
       detail: showGutter ? "커서 줄 끝에만 blame 한 줄" : "줄마다 커밋·작성자·나이",
@@ -212,6 +215,12 @@ export function BlameView({
     }),
   ];
   const palette = usePalette(commands, () => editor.current?.view.focus());
+  // 도구 막대·메뉴 막대(보이는 동안)
+  usePublish("editor", visible, "blame", commands, {
+    palette: palette.open,
+    help: () => setHelp(true),
+    files: quickOpen.open,
+  });
 
   const timers = useRef({ show: 0, hide: 0, toast: 0 });
   const pointerInCard = useRef(false);
@@ -775,6 +784,50 @@ export function BlameView({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  /**
+   * 코드 뷰·거터 우클릭: 그 줄로 커서를 옮기고(고른 글 안을 눌렀으면 고른 것을 둔다) 그 줄의 일을 보인다. 코드 뷰가
+   * 없으면(바이너리, 열지 못한 파일) 파일의 일만. 검색 칸은 기본 메뉴(붙여넣기 등)를 쓴다.
+   */
+  const contextMenu = (e: ReactMouseEvent) => {
+    if ((e.target as Element).closest("input, textarea")) return;
+    const act = (name: keyof Actions) => () => void (actions.current[name] as () => boolean)();
+    const fileItems: MenuEntry[] = [
+      { label: "파일 히스토리", keys: "H", run: act("history") },
+      { label: "커밋 그래프", keys: "G", run: act("graph") },
+    ];
+    const view = editor.current?.view;
+    if (!view) {
+      openContextMenu(e, [...fileItems, "separator", { label: "에디터로 열기", keys: "o", run: act("openEditor") }], "파일");
+      return;
+    }
+    const pos = pointerPos(view, e.nativeEvent);
+    const chosen = view.state.selection.main;
+    if (pos !== null && !(chosen.from < chosen.to && pos >= chosen.from && pos <= chosen.to)) {
+      view.dispatch({ selection: { anchor: pos } });
+    }
+    view.focus();
+    const { from, to } = view.state.selection.main;
+    const block = model.current?.block(cursorLine());
+    const committed = block !== undefined && !isUncommitted(block.sha);
+    openContextMenu(
+      e,
+      [
+        { label: "이 줄 커밋의 상세", keys: "Enter", disabled: !committed, run: act("enter") },
+        { label: "부모 리비전 blame", keys: ",", detail: "이 줄을 바꾸기 전", disabled: !block?.previous, run: act("parent") },
+        { label: "라인 히스토리", keys: "L", detail: from < to ? "고른 줄" : "이 줄", run: act("lineHistory") },
+        { label: "커밋 카드", keys: "i", disabled: block === undefined, run: act("card") },
+        "separator",
+        ...fileItems,
+        "separator",
+        copyItem(view.state.sliceDoc(from, to)),
+        { label: "커밋 sha 복사", keys: "y", disabled: !committed, run: act("copySha") },
+        "separator",
+        { label: "에디터로 열기", keys: "o", detail: "이 줄", run: act("openEditor") },
+      ],
+      "코드",
+    );
+  };
+
   const blame = model.current;
   const lineCount = meta?.content?.lineCount ?? 0;
   // AI가 쓴 줄 수(git-ai 노트). 응답이 오거나 blame이 끝나면 다시 센다.
@@ -836,7 +889,7 @@ export function BlameView({
           ?
         </button>
       </header>
-      <div className="blame-body">
+      <div className="blame-body" onContextMenu={contextMenu}>
         {/* CodeMirror가 직접 다루는 자리. React 자식과 섞지 않는다. */}
         <div className="blame-editor" ref={container} />
         {fatal && (
@@ -909,6 +962,16 @@ export function BlameView({
       )}
     </section>
   );
+}
+
+/** 우클릭한 자리의 글자 위치. 거터(줄 밖)면 그 높이 줄의 맨 앞. */
+function pointerPos(view: EditorView, e: MouseEvent): number | null {
+  if ((e.target as Element | null)?.closest?.(".cm-content")) {
+    const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+    if (pos !== null) return pos;
+  }
+  if (!(e.target as Element | null)?.closest?.(".cm-editor")) return null;
+  return view.lineBlockAtHeight(e.clientY - view.documentTop).from;
 }
 
 function FilePath({ path }: { path: string }) {

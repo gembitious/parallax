@@ -22,7 +22,7 @@ const WORKSPACE: Key[] = [
   { keys: IS_MAC ? "⌘⇧E" : "Ctrl+Shift+E", what: "파일 트리로", note: "Esc로 돌아온다" },
   { keys: `${MOD}J`, what: "아래 패널 열기·닫기", note: "히스토리·그래프·커밋 상세" },
   { keys: "Ctrl+Tab / Ctrl+Shift+Tab", what: "다음·이전 탭", note: "Ctrl+PageDown·PageUp" },
-  ...(IS_MAC ? [] : [{ keys: "Ctrl+W", what: "탭 닫기", note: "가운데 단추로 탭을 눌러도 닫는다" }]),
+  { keys: `${MOD}W`, what: "탭 닫기", note: "탭이 없으면 창 숨기기 · 가운데 단추로 탭을 눌러도 닫는다" },
 ];
 
 /** 파일 트리에는 없는 화면 키(에디터로 열기, 워크트리, 뒤로) */
@@ -119,6 +119,10 @@ export function Help({ view, onClose }: { view: HelpView; onClose(): void }) {
             ))}
           </tbody>
         </table>
+        <p className="muted help-footer">
+          마우스로도 모두 한다: 맨 위 도구 막대, {IS_MAC ? "화면 위 메뉴 막대" : "왼쪽 위 메뉴(파일 · 보기 · 화면 이름 · 도움말)"},
+          줄·행·파일·탭의 우클릭 메뉴. 메뉴에 단축키가 함께 보인다.
+        </p>
         <p className="muted help-footer">
           <button
             type="button"

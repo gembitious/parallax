@@ -20,6 +20,8 @@ import { WorktreePicker } from "../worktree/WorktreePicker";
 import { useQuickOpen } from "../quickopen/QuickOpen";
 import { commonCommands, usePalette, type Command } from "../palette/Palette";
 import { isComposing, routeKey } from "../keys";
+import { openContextMenu } from "../menu/Menu";
+import { usePublish } from "../menu/registry";
 import { openInEditor } from "../editor";
 import { toggleHud } from "../Hud";
 import { ScrollMeter } from "../scrollMeter";
@@ -211,7 +213,7 @@ function GraphPane({
   const [accelRequest, setAccelRequest] = useState(0);
   // 명령 팔레트: 키로 하는 일 모두와 머리줄 버튼(범위, 가속 설정). 함수들은 아래에 있다(누를 때 부른다).
   const commands: Command[] = [
-    { label: "커밋 상세", keys: "Enter", run: () => openCommit() },
+    { id: "commit", label: "커밋 상세", keys: "Enter", run: () => openCommit() },
     { label: "커밋 sha 복사", keys: "y", run: () => copySha() },
     ...SCOPES.map(
       (s): Command => ({
@@ -237,6 +239,12 @@ function GraphPane({
     }),
   ];
   const commandPalette = usePalette(commands, () => listRef.current?.focus({ preventScroll: true }));
+  // 도구 막대·메뉴 막대(보이는 동안)
+  usePublish("panel", visible, "그래프", commands, {
+    palette: commandPalette.open,
+    help: () => setHelp(true),
+    files: quickOpen.open,
+  });
   const latest = useRef({
     visible,
     active,
@@ -970,6 +978,17 @@ function GraphPane({
                   onDoubleClick={() => {
                     select(i);
                     openCommit(i);
+                  }}
+                  onContextMenu={(e) => {
+                    select(i);
+                    openContextMenu(
+                      e,
+                      [
+                        { label: "커밋 상세", keys: "Enter", disabled: !row, run: () => openCommit(i) },
+                        { label: "커밋 sha 복사", keys: "y", disabled: !row, run: copySha },
+                      ],
+                      "커밋",
+                    );
                   }}
                 >
                   {row ? <Row row={row} nowMs={nowAtOpen.current} /> : <span className="muted">…</span>}

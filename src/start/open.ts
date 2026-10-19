@@ -51,7 +51,8 @@ function start() {
   refresh();
 }
 
-function subscribe(notify: () => void) {
+/** 최근 저장소가 바뀌면 부른다(처음 부르면 읽기 시작한다). */
+export function subscribeRecent(notify: () => void) {
   start();
   subscribers.add(notify);
   return () => {
@@ -61,7 +62,7 @@ function subscribe(notify: () => void) {
 
 /** 첫 화면: 최근 저장소(최근 순)와 처음 읽기를 마쳤는지 */
 export function useRecentRepos(): RecentState {
-  return useSyncExternalStore(subscribe, () => state);
+  return useSyncExternalStore(subscribeRecent, () => state);
 }
 
 /** 지금 아는 최근 저장소. 명령 팔레트가 렌더할 때 읽는다(처음 부르면 읽기 시작한다). */

@@ -1,5 +1,6 @@
 mod git;
 mod instance;
+mod menu;
 mod open;
 mod perf;
 mod tray;
@@ -77,12 +78,15 @@ pub fn run() {
             open::install_cli,
             window::app_ready,
             window::hide_window,
+            window::quit_app,
             window::set_window_title,
+            menu::set_app_menu,
             perf::perf_info,
             perf::perf_record,
             perf::perf_ping,
             perf::perf_stream,
         ])
+        .on_menu_event(|app, event| menu::on_menu_event(app, event.id().as_ref()))
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();

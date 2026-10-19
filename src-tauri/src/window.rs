@@ -37,6 +37,12 @@ pub fn hide_window(window: Window) {
     hide(&window);
 }
 
+/// 메뉴 막대(Windows·Linux)의 종료. 트레이 메뉴의 종료와 같다.
+#[tauri::command]
+pub fn quit_app(app: AppHandle) {
+    app.exit(0);
+}
+
 /// 탐색으로 화면이 바뀌면 창 제목을 바꾼다.
 #[tauri::command]
 pub fn set_window_title(app: AppHandle, title: String) {

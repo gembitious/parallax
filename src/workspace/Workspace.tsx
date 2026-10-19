@@ -6,19 +6,24 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactElement,
 } from "react";
+import { flushSync } from "react-dom";
 import { BlameView, requestGotoLine, type EditorStatus } from "../blame/BlameView";
 import { shortSha } from "../blame/format";
 import { toggleBlameGutter, useBlameGutter } from "../blame/gutterSetting";
 import { CommitView } from "../commit/CommitView";
+import { openInEditor } from "../editor";
 import { GraphView } from "../graph/GraphView";
 import { Help } from "../Help";
 import { HistoryView } from "../history/HistoryView";
 import { toggleHud } from "../Hud";
 import { call } from "../ipc";
 import { isComposing } from "../keys";
+import { openContextMenu, type MenuEntry } from "../menu/Menu";
+import { setTarget, usePublish } from "../menu/registry";
 import { backDirectionAt, lastName, titleOf, type Navigation, type StackEntry } from "../nav";
 import { commonCommands, usePalette, type Command } from "../palette/Palette";
 import { isPaletteKey } from "../palette/keys";
@@ -27,11 +32,13 @@ import { useQuickOpen } from "../quickopen/QuickOpen";
 import { isQuickOpenKey } from "../quickopen/pick";
 import { OPEN_REPO_KEYS } from "../start/keys";
 import { openRepoDialog } from "../start/open";
+import { toast } from "../Toasts";
 import { watchRepo } from "../watch";
-import { setWorkspaceCommands } from "./commands";
 import { FileTree } from "./FileTree";
 import { IS_MAC, MOD, workspaceKey, type WorkspaceKey } from "./keys";
-import { canGoBack, topOf, type Pane, type Place, type Tab, type Workspace, type WorkspaceAction } from "./state";
+import { absolutePath, copyPath } from "./paths";
+import { canGoBack, targetPane, topOf, type Pane, type Place, type Tab, type Workspace, type WorkspaceAction } from "./state";
+import { Toolbar } from "./Toolbar";
 
 /** src-tauri/src/git.rs RepoState */
 type RepoState = { repo: string; name: string; branch: string | null; head: string | null };
@@ -214,12 +221,15 @@ function TabBar({
   onActivate,
   onPin,
   onClose,
+  onMenu,
 }: {
   tabs: Tab[];
   active: number | null;
   onActivate(tab: number): void;
   onPin(tab: number): void;
   onClose(tab: number): void;
+  /** 우클릭: 탭 메뉴 */
+  onMenu(tab: Tab, e: ReactMouseEvent): void;
 }) {
   const activeRef = useRef<HTMLDivElement>(null);
   useEffect(() => activeRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" }), [active]);
@@ -248,6 +258,7 @@ function TabBar({
             }}
             onClick={() => onActivate(tab.key)}
             onDoubleClick={() => onPin(tab.key)}
+            onContextMenu={(e) => onMenu(tab, e)}
           >
             <span className="tab-name">{name}</span>
             {rev && <span className="tab-rev">{shortSha(rev)}</span>}
@@ -255,7 +266,7 @@ function TabBar({
               type="button"
               className="tab-close"
               aria-label={`${name} 닫기`}
-              title={IS_MAC ? "닫기" : "닫기 (Ctrl+W)"}
+              title={`닫기 (${MOD}W)`}
               onClick={(e) => {
                 e.stopPropagation();
                 onClose(tab.key);
@@ -300,6 +311,10 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
   const focusPane = (focus: Pane | "tree") => {
     if (latest.current.state.focus !== focus) dispatch({ type: "focus", focus });
   };
+  /** 메뉴·도구 막대가 명령을 실행하기 전에: 그 칸에 포커스를 주고 화면이 키를 받는 화면이 된 뒤에 돌아온다(registry runIn). */
+  const focusSlot = (pane: Pane) => {
+    if (latest.current.state.focus !== pane) flushSync(() => dispatch({ type: "focus", focus: pane }));
+  };
   const back = (from: Place) => {
     if (canGoBack(latest.current.state, from)) dispatch({ type: "back", from });
     else hideWindow();
@@ -307,6 +322,12 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
   const openGraph = () => {
     const { repo } = latest.current.state;
     if (repo) dispatch({ type: "navigate", navigation: { kind: "graph", repo, rev: null }, from: { pane: "editor", tab: -1 } });
+  };
+  /** Mod+W·메뉴 막대: 보이는 탭을 닫는다. 탭이 없으면 창을 숨긴다(패널이 에디터를 가렸으면 아무것도 하지 않는다). */
+  const closeTabOrHide = () => {
+    const s = latest.current.state;
+    if (s.active === null) hideWindow();
+    else if (!(s.panelOpen && s.panelMax)) dispatch({ type: "close", tab: s.active });
   };
   const toggleTree = () => {
     const open = !latest.current.treeOpen;
@@ -336,30 +357,60 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
     onClosed: refocus,
   });
 
+  // 작업 공간 명령: 어느 화면의 팔레트에도 넣고(commonCommands가 읽는다), 메뉴 막대의 보기·파일 메뉴에 둔다.
   const workspaceCommands: Command[] = [
-    { label: treeOpen ? "파일 트리 숨기기" : "파일 트리 보이기", keys: `${MOD}B`, run: toggleTree },
-    { label: "파일 트리로", keys: `${SHIFT_MOD}E`, detail: "키로 파일을 고른다", run: focusTree },
     {
+      id: "tree",
+      label: treeOpen ? "파일 트리 숨기기" : "파일 트리 보이기",
+      keys: `${MOD}B`,
+      accelerator: "CmdOrCtrl+B",
+      app: true,
+      run: toggleTree,
+    },
+    {
+      id: "treeFocus",
+      label: "파일 트리로",
+      keys: `${SHIFT_MOD}E`,
+      accelerator: "CmdOrCtrl+Shift+E",
+      detail: "키로 파일을 고른다",
+      app: true,
+      run: focusTree,
+    },
+    {
+      id: "panel",
       label: state.panelOpen ? "아래 패널 닫기" : "아래 패널 열기",
       keys: `${MOD}J`,
+      accelerator: "CmdOrCtrl+J",
       detail: "히스토리·그래프·커밋 상세",
+      app: true,
       run: () => dispatch({ type: "togglePanel" }),
     },
     ...(state.panelOpen
-      ? [{ label: state.panelMax ? "아래 패널 되돌리기" : "아래 패널 최대화", run: () => dispatch({ type: "maximizePanel" }) }]
+      ? [
+          {
+            id: "panelMax" as const,
+            label: state.panelMax ? "아래 패널 되돌리기" : "아래 패널 최대화",
+            app: true,
+            run: () => dispatch({ type: "maximizePanel" }),
+          },
+        ]
       : []),
     ...(activeTab
-      ? [{ label: "탭 닫기", keys: IS_MAC ? undefined : "Ctrl+W", run: () => dispatch({ type: "close", tab: activeTab.key }) }]
+      ? [{ id: "closeTab" as const, label: "탭 닫기", keys: `${MOD}W`, accelerator: "CmdOrCtrl+W", app: true, run: closeTabOrHide }]
       : []),
     ...(state.tabs.length > 1
       ? [
-          { label: "다음 탭", keys: "Ctrl+Tab", run: () => dispatch({ type: "cycle", delta: 1 }) },
-          { label: "이전 탭", keys: "Ctrl+Shift+Tab", run: () => dispatch({ type: "cycle", delta: -1 }) },
+          { id: "nextTab" as const, label: "다음 탭", keys: "Ctrl+Tab", app: true, run: () => dispatch({ type: "cycle", delta: 1 }) },
+          {
+            id: "previousTab" as const,
+            label: "이전 탭",
+            keys: "Ctrl+Shift+Tab",
+            app: true,
+            run: () => dispatch({ type: "cycle", delta: -1 }),
+          },
         ]
       : []),
   ];
-  // 화면마다의 팔레트에도 넣는다(commonCommands가 읽는다).
-  useEffect(() => setWorkspaceCommands(workspaceCommands));
 
   const palette = usePalette([
     { label: "커밋 그래프 (아래 패널)", keys: "G", run: openGraph },
@@ -373,12 +424,24 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
     }).filter((command) => command.keys !== "W"),
   ], refocus);
 
+  usePublish("workspace", true, "작업 공간", workspaceCommands, {
+    palette: palette.open,
+    help: () => setHelp(true),
+    files: quickOpen.open,
+    graph: openGraph,
+    closeTab: closeTabOrHide,
+  });
+  // 도구 막대·메뉴 막대가 명령을 보내는 칸(키를 받는 칸, 트리면 보이는 화면). 화면들이 명령을 낸 뒤에 정한다.
+  const target = targetPane(state);
+  useEffect(() => setTarget(target, focusSlot));
+  useEffect(() => () => setTarget(null, () => {}), []);
+
   const overlay = help || quickOpen.isOpen || palette.isOpen;
   const latest = useRef({ state, treeOpen, noView, help, overlay, quickOpen, palette });
   latest.current = { state, treeOpen, noView, help, overlay, quickOpen, palette };
 
   // 작업 공간 키(트리·패널·탭)는 어느 칸에서든 화면보다 먼저 받는다. 떠 있는 창(팔레트·Quick Open의 Ctrl+J 등,
-  // 라이선스)의 키는 그 창의 것이다. 키를 받는 화면이 없으면(트리, 탭이 없는 에디터) Quick Open·팔레트·도움말·
+  // 라이선스)과 메뉴의 키는 그 창의 것이다. 키를 받는 화면이 없으면(트리, 탭이 없는 에디터) Quick Open·팔레트·도움말·
   // 그래프·q도 여기서 받는다.
   useEffect(() => {
     const run: Record<WorkspaceKey, () => void> = {
@@ -387,13 +450,10 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
       togglePanel: () => dispatch({ type: "togglePanel" }),
       nextTab: () => dispatch({ type: "cycle", delta: 1 }),
       previousTab: () => dispatch({ type: "cycle", delta: -1 }),
-      closeTab: () => {
-        const { state: s } = latest.current;
-        if (s.active !== null && s.focus !== "panel") dispatch({ type: "close", tab: s.active });
-      },
+      closeTab: closeTabOrHide,
     };
     const onCapture = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || isComposing(e) || (e.target as Element | null)?.closest?.(".overlay")) return;
+      if (e.defaultPrevented || isComposing(e) || (e.target as Element | null)?.closest?.(".overlay, .menu")) return;
       const key = workspaceKey(e);
       if (!key) return;
       e.preventDefault();
@@ -533,8 +593,50 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
 
   const repoName = repoState?.name ?? (state.repo ? lastName(state.repo) : "");
 
+  // 도구 막대의 뒤로: 명령을 보내는 칸의 화면에서 `q`와 같다(맨 앞 화면이면 꺼 둔다. `q`는 창을 숨긴다).
+  const targetPlace: Place | null =
+    target === "editor" && activeTab ? { pane: "editor", tab: activeTab.key } : target === "panel" ? { pane: "panel" } : null;
+
+  /** 파일 히스토리(트리·탭 메뉴). 디렉터리면 그 아래를 바꾼 커밋이다. */
+  const openHistory = (repo: string, path: string, rev: string | null, from: Place) =>
+    navigate({ kind: "history", target: { repo, path, rev } }, from);
+
+  /** 탭 우클릭 메뉴 */
+  const tabMenu = (tab: Tab, e: ReactMouseEvent) => {
+    const top = topOf(tab);
+    const { repo, path, rev } = top.target;
+    const place: Place = { pane: "editor", tab: tab.key };
+    // 보이는 탭이면 커서 줄을 에디터로 연다.
+    const cursor = cursors.get();
+    const line = cursor && cursor.key === top.key ? cursor.status.line : null;
+    const entries: MenuEntry[] = [
+      { label: "닫기", keys: tab.key === state.active ? `${MOD}W` : undefined, run: () => dispatch({ type: "close", tab: tab.key }) },
+      { label: "다른 탭 닫기", disabled: state.tabs.length < 2, run: () => dispatch({ type: "closeOthers", tab: tab.key }) },
+      { label: "모든 탭 닫기", run: () => dispatch({ type: "closeAll" }) },
+      ...(tab.preview ? [{ label: "탭 고정", detail: "미리보기를 보통 탭으로 (두 번 누르기)", run: () => dispatch({ type: "pin", tab: tab.key }) }] : []),
+      "separator",
+      {
+        label: "파일 히스토리",
+        keys: "H",
+        disabled: repo === null,
+        run: () => repo !== null && openHistory(repo, path, rev, place),
+      },
+      {
+        label: "에디터로 열기",
+        keys: "o",
+        disabled: repo === null,
+        run: () => repo !== null && void openInEditor({ repo, path, rev, line }).then((message) => toast(message)),
+      },
+      "separator",
+      { label: "경로 복사", detail: "저장소 기준", disabled: repo === null, run: () => copyPath(path) },
+      { label: "전체 경로 복사", disabled: repo === null, run: () => repo !== null && copyPath(absolutePath(repo, path)) },
+    ];
+    openContextMenu(e, entries, `${lastName(path)} 탭`);
+  };
+
   return (
     <div className="workspace">
+      <Toolbar canBack={targetPlace !== null && canGoBack(state, targetPlace)} onBack={() => targetPlace && back(targetPlace)} />
       <div className="workspace-main" ref={mainRef}>
         {treeOpen && state.repo && (
           <>
@@ -555,6 +657,7 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
                 focusTick={focusTick}
                 activeFile={activeFile}
                 onOpen={(path, missing, preview) => dispatch({ type: "open", repo: state.repo!, path, missing, preview })}
+                onHistory={(path) => openHistory(state.repo!, path, null, { pane: "editor", tab: state.active ?? -1 })}
                 onLeave={leaveTree}
               />
             </aside>
@@ -583,6 +686,7 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
                 onActivate={(tab) => dispatch({ type: "activate", tab })}
                 onPin={(tab) => dispatch({ type: "pin", tab })}
                 onClose={(tab) => dispatch({ type: "close", tab })}
+                onMenu={tabMenu}
               />
             )}
             <div className="editor-views">

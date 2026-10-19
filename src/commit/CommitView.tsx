@@ -9,7 +9,10 @@ import { WorktreePicker } from "../worktree/WorktreePicker";
 import { useQuickOpen } from "../quickopen/QuickOpen";
 import { commonCommands, usePalette, type Command } from "../palette/Palette";
 import { routeKey } from "../keys";
+import { openContextMenu, type MenuEntry } from "../menu/Menu";
+import { usePublish } from "../menu/registry";
 import { openInEditor } from "../editor";
+import { absolutePath, copyPath } from "../workspace/paths";
 import { toggleHud } from "../Hud";
 import { commitSwitch } from "../worktree/switch";
 import { copyText } from "../clipboard";
@@ -155,12 +158,12 @@ export function CommitView({ repo, rev, path, only = false, visible, active, dep
     { label: "다음 바뀐 부분", keys: "n", run: () => diff.current?.next() },
     { label: "이전 바뀐 부분", keys: "N", run: () => diff.current?.previous() },
     { label: "분할 ↔ 통합 보기", keys: "u", run: () => toggleMode() },
-    { label: "이 리비전의 파일 blame", keys: "Enter", run: () => openBlame() },
+    { id: "blame", label: "이 리비전의 파일 blame", keys: "Enter", run: () => openBlame() },
     ...(path !== null ? [{ label: "이 파일만 ↔ 모든 파일", keys: "a", run: () => toggleNarrow() }] : []),
     ...(shown?.tooLarge != null ? [{ label: "큰 파일도 diff 보기", run: () => fetchVersions(true) }] : []),
     ...(isError(current) ? [{ label: "이 파일 다시 받기", run: () => retry() }] : []),
     { label: "커밋 sha 복사", keys: "y", run: () => copySha() },
-    { label: "커밋 그래프 (이 커밋)", keys: "G", run: () => openGraph() },
+    { id: "graph", label: "커밋 그래프 (이 커밋)", keys: "G", run: () => openGraph() },
     { label: "에디터로 열기", keys: "o", detail: "고른 파일의 첫 바뀐 줄(작업트리)", run: () => openEditor() },
     ...commonCommands({
       files: quickOpen.open,
@@ -171,6 +174,8 @@ export function CommitView({ repo, rev, path, only = false, visible, active, dep
     }),
   ];
   const palette = usePalette(commands, focusDiff);
+  // 도구 막대·메뉴 막대(보이는 동안)
+  usePublish("panel", visible, "커밋", commands, { palette: palette.open, help: () => setHelp(true), files: quickOpen.open });
   const snapshot = () => ({
     visible,
     active,
@@ -453,6 +458,30 @@ export function CommitView({ repo, rev, path, only = false, visible, active, dep
     }
   };
 
+  /** 파일 행 우클릭: 그 파일을 고르고 그 파일의 일을 보인다. UTF-8이 아닌 경로는 그 경로로 찾을 수 없다. */
+  const fileMenu = (f: FileChange): MenuEntry[] => {
+    const lossy = f.pathLossy;
+    const sha = latest.current.detail?.info.sha ?? rev;
+    return [
+      {
+        label: "이 리비전의 파일 blame",
+        keys: "Enter",
+        disabled: lossy || f.status === "deleted" || f.submodule || f.stat?.binary === true,
+        run: openBlame,
+      },
+      {
+        label: "파일 히스토리",
+        detail: "이 커밋부터",
+        disabled: lossy,
+        run: () => onNavigate({ kind: "history", target: { repo, path: f.path, rev: sha } }),
+      },
+      { label: "에디터로 열기", keys: "o", detail: "첫 바뀐 줄", disabled: lossy, run: openEditor },
+      "separator",
+      { label: "경로 복사", detail: "저장소 기준", disabled: lossy, run: () => copyPath(f.path) },
+      { label: "전체 경로 복사", disabled: lossy, run: () => copyPath(absolutePath(repo, f.path)) },
+    ];
+  };
+
   const copySha = () => {
     const sha = latest.current.detail?.info.sha ?? rev;
     copyText(sha).then(
@@ -699,6 +728,14 @@ export function CommitView({ repo, rev, path, only = false, visible, active, dep
                   className={i === selected ? "file-row selected" : "file-row"}
                   style={{ top: i * ROW_HEIGHT, height: ROW_HEIGHT }}
                   onClick={() => setSelected(i)}
+                  onDoubleClick={() => {
+                    setSelected(i);
+                    openBlame();
+                  }}
+                  onContextMenu={(e) => {
+                    setSelected(i);
+                    openContextMenu(e, fileMenu(f), "파일");
+                  }}
                   title={rowTitle(f)}
                 >
                   <span className={`status status-${f.status}`} title={STATUS_NAME[f.status]}>
