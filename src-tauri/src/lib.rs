@@ -57,6 +57,8 @@ pub fn run() {
             git::worktrees,
             git::files_search,
             git::files_touch,
+            git::files_dir,
+            git::repo_state,
             git::open_in_editor,
             git::ai_attribution,
             git::unwatch_repo,

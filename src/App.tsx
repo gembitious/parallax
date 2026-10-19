@@ -2,10 +2,6 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { appInfo, onRequest, scriptStartMs, type AppInfo } from "./boot";
-import { BlameView } from "./blame/BlameView";
-import { CommitView } from "./commit/CommitView";
-import { GraphView } from "./graph/GraphView";
-import { HistoryView } from "./history/HistoryView";
 import { Hud } from "./Hud";
 import { Notices, useNoticesRequest } from "./notices/Notices";
 import { call } from "./ipc";
@@ -13,19 +9,17 @@ import { Start } from "./start/Start";
 import { isOpenRepoKey } from "./start/keys";
 import { openPath, openRepoDialog } from "./start/open";
 import { Toasts } from "./Toasts";
-import {
-  backDirectionAt,
-  titleOf,
-  viewReducer,
-  type Navigation,
-  type PlxRequest,
-  type Shown,
-  type StackEntry,
-  type ViewAction,
-  type ViewState,
-} from "./nav";
+import type { Navigation, PlxRequest, Shown } from "./nav";
 import { afterPaint, bootMarks, getPerfInfo, nowMs, phasesBetween, record } from "./perf";
-import type { SearchState } from "./blame/editor";
+import { WorkspaceView } from "./workspace/Workspace";
+import {
+  emptyWorkspace,
+  windowTitle,
+  workspaceReducer,
+  type Place,
+  type Workspace,
+  type WorkspaceAction,
+} from "./workspace/state";
 
 // docs/MILESTONES.md 성능 예산
 const COLD_BUDGET_MS = 1000;
@@ -79,16 +73,17 @@ function recordShown({ request, receivedMs }: Shown, committedMs: number, painte
 
 const hideWindow = () => invoke("hide_window").catch((e) => console.error("창 숨기기 실패", e));
 
-const NOTHING: ViewState = { shown: null, stack: [] };
-const firstState = (request: PlxRequest | null): ViewState =>
-  request ? viewReducer(NOTHING, { type: "request", request, receivedMs: nowMs() }) : NOTHING;
+type Reload = Extract<WorkspaceAction, { type: "reload" }>;
+
+const firstState = (request: PlxRequest | null): Workspace =>
+  request ? workspaceReducer(emptyWorkspace(), { type: "request", request, receivedMs: nowMs() }) : emptyWorkspace();
 
 /** initial: 첫 렌더에 띄울 요청(boot.ts가 물어 둔 것) */
 export default function App({ initial }: { initial: PlxRequest | null }) {
   const [info, setInfo] = useState<AppInfo | null>(null);
-  const [{ shown, stack }, dispatch] = useReducer(viewReducer, initial, firstState);
+  const [state, dispatch] = useReducer(workspaceReducer, initial, firstState);
   const shownRef = useRef<Shown | null>(null);
-  shownRef.current = shown;
+  shownRef.current = state.shown;
   const readySent = useRef(false);
   const [notices, setNotices] = useState(false);
   useNoticesRequest(useCallback(() => setNotices(true), []));
@@ -97,11 +92,14 @@ export default function App({ initial }: { initial: PlxRequest | null }) {
   // 새 plx 호출은 그 화면을 보이려는 것이라 창을 닫는다.
   const noticesRef = useRef(notices);
   noticesRef.current = notices;
-  const deferredReloads = useRef<ViewAction[]>([]);
-  const reload = (action: ViewAction) => {
+  const deferredReloads = useRef<Reload[]>([]);
+  const reload = useCallback((action: Reload) => {
     if (noticesRef.current) deferredReloads.current.push(action);
     else dispatch(action);
-  };
+  }, []);
+  const navigate = useCallback((navigation: Navigation, from: Place) => {
+    if (!noticesRef.current) dispatch({ type: "navigate", navigation, from });
+  }, []);
   useEffect(() => {
     if (notices) return;
     const actions = deferredReloads.current;
@@ -137,9 +135,9 @@ export default function App({ initial }: { initial: PlxRequest | null }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 뷰가 첫 화면을 DOM에 넣은 직후(페인트 전) 시각을 받아, 다음 페인트까지 기다려 기록한다.
+  // 화면이 첫 화면을 DOM에 넣은 직후(페인트 전) 시각을 받아, 다음 페인트까지 기다려 기록한다.
   // 창이 숨겨져 있으면 페인트가 없으므로 먼저 창을 보인다.
-  // 요청마다 한 번만 잰다(저장소가 바뀌어 다시 연 맨 아래 화면은 재지 않는다).
+  // 요청마다 한 번만 잰다(저장소가 바뀌어 다시 연 화면은 재지 않는다).
   const measured = useRef(new Set<number>());
   const onShown = useCallback((requestId: number, committedMs: number) => {
     markReady();
@@ -177,76 +175,26 @@ export default function App({ initial }: { initial: PlxRequest | null }) {
     };
   }, []);
 
-  // 탐색으로 화면이 바뀌면 창 제목도 바꾼다. plx 호출로 연 맨 아래 화면은 호출 요약(백엔드가 처음 정한 제목)이다.
-  const top = stack[stack.length - 1];
-  const rootLabel = shown?.request.label;
-  const titled = useRef<StackEntry | null>(null);
+  // 창 제목은 키를 받는 화면을 따른다. plx 요청을 받으면 백엔드가 먼저 그 호출의 요약으로 바꿔 둔다.
+  const title = windowTitle(state);
+  const titled = useRef(initial?.label ?? null);
   useEffect(() => {
-    if (!top || titled.current === top) return;
-    const first = titled.current === null;
-    titled.current = top;
-    if (top.via === "request" && first) return;
-    const title = top.via === "request" ? rootLabel : titleOf(top);
-    if (title) invoke("set_window_title", { title }).catch(() => {});
-  }, [top, rootLabel]);
+    if (!title || title === titled.current) return;
+    titled.current = title;
+    invoke("set_window_title", { title }).catch(() => {});
+  }, [title]);
 
-  // 키 처리기를 한 번만 만드는 화면은 처음 받은 onBack을 계속 부른다. 그때의 스택이 아니라 지금 스택을 본다
-  // (스택이 MAX_STACK을 넘어 아래를 버리면 그 화면이 맨 아래가 될 수 있다).
-  const stackRef = useRef(stack);
-  stackRef.current = stack;
-  const back = () => {
-    if (stackRef.current.length > 1) dispatch({ type: "back" });
-    else hideWindow();
-  };
-
-  const request = shown?.request;
   return (
     <div className="app">
-      {request ? (
-        <main className="view">
-          {stack.map((entry, i) => {
-            const isTop = i === stack.length - 1;
-            const common = {
-              active: isTop,
-              depth: i + 1,
-              onShown: entry.via === "request" ? (ms: number) => onShown(request.id, ms) : undefined,
-              onBack: back,
-              onNavigate: (navigation: Navigation) => {
-                if (!noticesRef.current) dispatch({ type: "navigate", navigation });
-              },
-              onReload: (line?: number | null, search?: SearchState) =>
-                reload({ type: "reload", key: entry.key, line, search }),
-            };
-            const cold = entry.via === "request" && request.cold;
-            return (
-              <div key={entry.key} className="stack-entry" hidden={!isTop}>
-                {entry.view === "blame" ? (
-                  <BlameView
-                    {...common}
-                    target={entry.target}
-                    line={entry.line}
-                    backDirection={backDirectionAt(stack, i)}
-                    search={entry.search}
-                    cold={cold}
-                  />
-                ) : entry.view === "history" ? (
-                  <HistoryView
-                    {...common}
-                    onReload={(lines, query) => reload({ type: "reload", key: entry.key, lines, query })}
-                    target={entry.target}
-                    lines={entry.lines}
-                    query={entry.query}
-                    cold={cold}
-                  />
-                ) : entry.view === "graph" ? (
-                  <GraphView {...common} repo={entry.repo} focus={entry.focus} cold={cold} />
-                ) : (
-                  <CommitView {...common} repo={entry.repo} rev={entry.rev} path={entry.path} only={entry.only} />
-                )}
-              </div>
-            );
-          })}
-        </main>
+      {state.shown || state.repo ? (
+        <WorkspaceView
+          state={state}
+          dispatch={dispatch}
+          reload={reload}
+          navigate={navigate}
+          onShown={onShown}
+          hideWindow={hideWindow}
+        />
       ) : (
         <Start version={info?.version ?? null} />
       )}

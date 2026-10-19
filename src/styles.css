@@ -149,17 +149,459 @@ kbd,
   height: 100%;
 }
 
-.view {
-  flex: 1;
-  min-height: 0;
-}
-
 .stack-entry {
   height: 100%;
 }
 
 .stack-entry[hidden] {
   display: none;
+}
+
+/* ---------------------------------------------------------------- 작업 공간: 파일 트리·탭·아래 패널·상태 막대 */
+
+.workspace {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.workspace-main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  min-width: 0;
+  background: var(--panel);
+}
+
+/* 탭 막대와 같은 높이라 아래 선이 이어진다 */
+.sidebar-header {
+  flex-shrink: 0;
+  height: 32px;
+  padding: 0 12px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 31px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-list {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  outline: none;
+}
+
+.tree-rows {
+  position: relative;
+}
+
+/* 행 높이는 FileTree.tsx의 ROW_HEIGHT(22px)와 같다 */
+.tree-row {
+  position: absolute;
+  right: 0;
+  left: 0;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding-right: 8px;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tree-row:hover {
+  background: var(--line-active);
+}
+
+.tree-row.selected {
+  background: var(--line-active);
+}
+
+.sidebar.focused .tree-row.selected {
+  background: var(--selection);
+}
+
+/* 폴더 펼침 표시(글꼴과 상관없이 같은 모양): 접힘 ›, 펼침 ⌄ */
+.tree-twisty {
+  position: relative;
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+}
+
+.tree-twisty.closed::before,
+.tree-twisty.open::before {
+  position: absolute;
+  top: 3px;
+  left: 2px;
+  width: 5px;
+  height: 5px;
+  border: solid var(--muted);
+  border-width: 0 1.5px 1.5px 0;
+  content: "";
+  transform: rotate(-45deg);
+}
+
+.tree-twisty.open::before {
+  top: 2px;
+  left: 3px;
+  transform: rotate(45deg);
+}
+
+.tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree-row.missing .tree-name {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.tree-note {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.tree-message {
+  padding: 8px 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tree-message.error {
+  color: var(--danger);
+  white-space: pre-wrap;
+}
+
+/* 끌어서 크기를 바꾸는 막대: 보이는 선은 1px, 잡는 자리는 넓다 */
+.splitter {
+  position: relative;
+  flex-shrink: 0;
+  background: var(--border);
+  touch-action: none;
+}
+
+.splitter::after {
+  position: absolute;
+  z-index: 5;
+  content: "";
+}
+
+.splitter.vertical {
+  width: 1px;
+  cursor: col-resize;
+}
+
+.splitter.vertical::after {
+  inset: 0 -3px;
+}
+
+.splitter.horizontal {
+  height: 1px;
+  cursor: row-resize;
+}
+
+.splitter.horizontal::after {
+  inset: -3px 0;
+}
+
+.splitter:hover,
+.splitter:active {
+  background: var(--accent);
+}
+
+.workspace-center {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.editor-area {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.editor-area[hidden],
+.panel[hidden] {
+  display: none;
+}
+
+.editor-views {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.tab-bar {
+  display: flex;
+  flex-shrink: 0;
+  height: 32px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  scrollbar-width: thin;
+}
+
+.tab {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+  align-items: center;
+  max-width: 260px;
+  padding: 0 4px 0 12px;
+  border-right: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tab.active {
+  background: var(--bg);
+  box-shadow: inset 0 2px 0 var(--border);
+  color: var(--fg);
+}
+
+.editor-area.focused .tab.active {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.tab.preview .tab-name {
+  font-style: italic;
+}
+
+.tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab-rev {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.tab-close {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  line-height: 1;
+  cursor: pointer;
+  visibility: hidden;
+}
+
+.tab.active .tab-close,
+.tab:hover .tab-close {
+  visibility: visible;
+}
+
+.tab-close:hover {
+  background: var(--line-active);
+  color: var(--fg);
+}
+
+/* 탭이 없을 때: 할 수 있는 일과 키 */
+.editor-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  overflow: auto;
+  outline: none;
+}
+
+.editor-empty-panel {
+  width: min(360px, calc(100% - 32px));
+}
+
+.editor-empty-title {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.editor-empty-actions {
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.editor-empty-actions li {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  padding: 3px 0;
+}
+
+.editor-empty-actions li button {
+  margin-right: auto;
+}
+
+.editor-empty-panel .muted {
+  font-size: 12px;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  min-height: 0;
+}
+
+.panel.max {
+  flex: 1;
+}
+
+.panel-header {
+  display: flex;
+  flex-shrink: 0;
+  gap: 2px;
+  align-items: center;
+  height: 28px;
+  padding: 0 4px 0 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 12px;
+}
+
+.panel-crumbs {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.panel-crumb {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.panel-crumb button {
+  max-width: 320px;
+  padding: 0 4px;
+  overflow: hidden;
+  border: none;
+  background: none;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.panel-crumb button:hover {
+  color: var(--fg);
+  text-decoration: underline;
+}
+
+.panel-crumb button.current {
+  color: var(--fg);
+  font-weight: 600;
+  text-decoration: none;
+  cursor: default;
+}
+
+.panel.focused .panel-crumb button.current {
+  color: var(--accent);
+}
+
+.panel-crumb-sep {
+  color: var(--muted);
+}
+
+.panel-button {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.panel-button:hover {
+  background: var(--line-active);
+  color: var(--fg);
+}
+
+.panel-views {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.status-bar {
+  display: flex;
+  flex-shrink: 0;
+  gap: 2px;
+  align-items: center;
+  height: 22px;
+  padding: 0 6px;
+  overflow: hidden;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.status-item {
+  min-width: 0;
+  padding: 0 6px;
+  overflow: hidden;
+  border: none;
+  background: none;
+  color: inherit;
+  line-height: 20px;
+  text-overflow: ellipsis;
+}
+
+button.status-item {
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+button.status-item:hover {
+  background: var(--line-active);
+  color: var(--fg);
+}
+
+button.status-item[aria-pressed="true"] {
+  color: var(--fg);
+}
+
+.status-spacer {
+  flex: 1;
 }
 
 /* 첫 화면(띄울 화면 없이 앱을 열었을 때): 저장소 열기, 최근 저장소, 터미널 명령 */
@@ -444,6 +886,31 @@ button.link {
 .blame-message.error {
   color: var(--danger);
   white-space: pre-wrap;
+}
+
+/* 커서 줄 끝의 blame 한 줄(거터를 끈 동안) */
+.cm-inline-blame {
+  margin-left: 3em;
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  white-space: pre;
+  cursor: pointer;
+  opacity: 0.8;
+  user-select: none;
+}
+
+.cm-inline-blame:hover {
+  color: var(--fg);
+  opacity: 1;
+}
+
+.cm-inline-blame.uncommitted {
+  color: var(--uncommitted);
+}
+
+.cm-inline-blame.ai {
+  color: var(--ai);
 }
 
 /* blame 거터. 줄 높이는 에디터와 같다(20px). */
@@ -882,6 +1349,12 @@ button.toggle.primary {
   border-color: var(--accent);
   background: var(--accent);
   color: var(--bg);
+}
+
+/* 켜고 끄는 단추가 켜져 있다(blame 거터) */
+button.toggle.on {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .help.confirm {

@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{encoding, git, git_text, history, scratch_repo};
+use common::{commit_all, encoding, git, git_text, history, scratch_repo};
 use plx_core::repo::Repo;
 
 #[test]
@@ -196,4 +196,20 @@ fn head_of_a_repository_without_commits() {
         other.starts_with("리비전을 찾을 수 없다 (no-such-ref)"),
         "{other}"
     );
+}
+
+/// 상태 막대의 브랜치 이름. 커밋이 없는 브랜치도 이름이 있고, detached면 없다. 열어 둔 저장소가 체크아웃을 따라간다
+/// (앱은 저장소를 캐시에 두고 쓴다).
+#[test]
+fn head_branch_follows_checkouts() {
+    let dir = scratch_repo("repo-head-branch");
+    let repo = Repo::discover(&dir).unwrap();
+    assert_eq!(repo.head_branch().unwrap().as_deref(), Some("main"));
+    std::fs::write(dir.join("a.txt"), "a\n").unwrap();
+    let first = commit_all(&dir, "첫 커밋");
+    git(&dir, &["checkout", "-q", "-b", "기능/한글"]);
+    assert_eq!(repo.head_branch().unwrap().as_deref(), Some("기능/한글"));
+    git(&dir, &["checkout", "-q", "--detach", &first]);
+    assert_eq!(repo.head_branch().unwrap(), None);
+    assert_eq!(repo.head().unwrap().map(|id| id.to_string()), Some(first));
 }

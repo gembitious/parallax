@@ -31,7 +31,9 @@ type Props = {
   repo: string;
   /** 처음 고를 커밋(리비전). 없으면 첫 행. */
   focus?: string | null;
-  /** 탐색 스택 맨 위(보이는 화면)인가 */
+  /** 보이는 화면인가(열린 패널의 스택 맨 위) */
+  visible: boolean;
+  /** 키를 받는 화면인가(보이고, 패널에 포커스가 있다) */
   active: boolean;
   depth: number;
   /** 콜드 스타트의 첫 요청. 창이 보일 때까지 페인트가 없어 예산과 비교하지 않는다. */
@@ -131,6 +133,7 @@ function GraphPane({
   focus = null,
   scope,
   onScope,
+  visible,
   active,
   depth,
   cold = false,
@@ -234,7 +237,17 @@ function GraphPane({
     }),
   ];
   const commandPalette = usePalette(commands, () => listRef.current?.focus({ preventScroll: true }));
-  const latest = useRef({ active, meta, selected, help, total, found, openFiles: quickOpen.open, palette: commandPalette.open });
+  const latest = useRef({
+    visible,
+    active,
+    meta,
+    selected,
+    help,
+    total,
+    found,
+    openFiles: quickOpen.open,
+    palette: commandPalette.open,
+  });
   // 스크롤 프레임 측정(성능 HUD가 켜져 있을 때만)
   const scrollMeter = useRef<ScrollMeter | null>(null);
   scrollMeter.current ??= new ScrollMeter(
@@ -242,7 +255,17 @@ function GraphPane({
     ROW_HEIGHT,
   );
   useEffect(() => () => scrollMeter.current?.dispose(), []);
-  latest.current = { active, meta, selected, help, total, found, openFiles: quickOpen.open, palette: commandPalette.open };
+  latest.current = {
+    visible,
+    active,
+    meta,
+    selected,
+    help,
+    total,
+    found,
+    openFiles: quickOpen.open,
+    palette: commandPalette.open,
+  };
   {
     const row = cache.current.get(selected);
     if (selectedSha.current.index !== selected) selectedSha.current = { index: selected, sha: row?.sha ?? null };
@@ -408,12 +431,12 @@ function GraphPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 저장소의 HEAD·참조가 바뀌면(다른 터미널·워크트리의 커밋 등) 다시 읽는다. 다른 화면 아래 숨어 있으면(스크롤
-  // 위치를 읽을 수 없다) 표시만 해 두고 다시 보일 때 읽는다.
+  // 저장소의 HEAD·참조가 바뀌면(다른 터미널·워크트리의 커밋 등) 다시 읽는다. 숨어 있으면(다른 화면 아래, 닫은 패널:
+  // 스크롤 위치를 읽을 수 없다) 표시만 해 두고 다시 보일 때 읽는다.
   const stale = useRef(false);
   useEffect(() => {
     return watchRepo(repo, () => {
-      if (latest.current.active) reload();
+      if (latest.current.visible) reload();
       else stale.current = true;
     });
     // reload는 ref만 읽는다. 범위마다 새 컴포넌트다.
@@ -515,24 +538,32 @@ function GraphPane({
     return () => media.removeEventListener("change", update);
   }, []);
 
+  // 다시 보이면 스크롤을 되돌리고(숨은 동안에는 읽을 수 없다) 그사이 바뀐 저장소를 읽는다.
   useEffect(() => {
     const list = listRef.current;
-    if (active && list) {
-      if (list.scrollTop !== savedTop.current) list.scrollTop = savedTop.current;
-      setViewport({ top: list.scrollTop, height: list.clientHeight });
-      list.focus({ preventScroll: true });
-      if (stale.current) {
-        stale.current = false;
-        reload();
-      }
+    if (!visible || !list) return;
+    if (list.scrollTop !== savedTop.current) list.scrollTop = savedTop.current;
+    setViewport({ top: list.scrollTop, height: list.clientHeight });
+    if (stale.current) {
+      stale.current = false;
+      reload();
+    }
+    // reload는 ref만 읽는다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible]);
+
+  // 키를 받는 화면이 되면 목록에 포커스를 준다. 키를 놓으면(숨거나 다른 칸으로) 떠 있는 창을 닫는다(돌아왔을 때
+  // 포커스 없이 남지 않게).
+  useEffect(() => {
+    if (active) {
+      listRef.current?.focus({ preventScroll: true });
     } else {
-      // 숨을 때 떠 있는 창은 닫는다(돌아왔을 때 포커스 없이 남지 않게).
       setHelp(false);
       setWorktrees(false);
       quickOpen.close();
       commandPalette.close();
     }
-    // reload는 ref만 읽는다. close는 상태만 바꾼다.
+    // close는 상태만 바꾼다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
@@ -741,12 +772,12 @@ function GraphPane({
 
   const count = total ?? 0;
   const { start, end } = drawWindow(viewport.top, viewport.height, ROW_HEIGHT, count);
-  const visible: Visible[] = [];
+  const drawnRows: Visible[] = [];
   let visibleLanes = 1;
   for (let i = start; i < end; i++) {
     const row = cache.current.get(i);
     if (row) {
-      visible.push({ index: i, row });
+      drawnRows.push({ index: i, row });
       visibleLanes = Math.max(visibleLanes, rowWidth(row));
     }
   }
@@ -780,7 +811,7 @@ function GraphPane({
       if (ctx) {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, width, height);
-        drawRows(ctx, visible, start * ROW_HEIGHT, width, palette, meta?.head ?? null);
+        drawRows(ctx, drawnRows, start * ROW_HEIGHT, width, palette, meta?.head ?? null);
       }
       const drawnAt = nowMs();
       canvasMs = drawnAt - t0;
@@ -907,7 +938,7 @@ function GraphPane({
           aria-activedescendant={chosen ? `graph-row-${selected}` : undefined}
           onScroll={(e) => {
             const list = e.currentTarget;
-            if (latest.current.active) savedTop.current = list.scrollTop;
+            if (latest.current.visible) savedTop.current = list.scrollTop;
             const meter = scrollMeter.current;
             meter?.scrolled(list.scrollTop);
             // 미리 그린 범위 안이면 브라우저가 옮기기만 한다(다시 그리지 않는다).
@@ -982,7 +1013,7 @@ function GraphPane({
           onClose={() => setWorktrees(false)}
           onPick={(worktree) => {
             setWorktrees(false);
-            if (!worktree.current) onNavigate({ kind: "graph", repo: worktree.path, rev: null });
+            if (!worktree.current) onNavigate({ kind: "graph", repo: worktree.path, rev: null, worktree: true });
           }}
         />
       )}

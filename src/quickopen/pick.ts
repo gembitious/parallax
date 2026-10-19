@@ -15,13 +15,13 @@ export type QuickOpenPick = {
 };
 
 /**
- * 고른 파일로 가는 탐색: 작업트리 파일의 blame(그 줄) 또는 파일 히스토리. 작업트리에서 지운 파일은 작업트리
- * blame을 열 수 없어 HEAD 버전의 blame으로 간다(히스토리는 지운 경로도 된다).
+ * 고른 파일로 가는 탐색: 작업트리 파일의 blame(그 줄, 미리보기가 아닌 탭) 또는 파일 히스토리. 작업트리에서 지운 파일은
+ * 작업트리 blame을 열 수 없어 HEAD 버전의 blame으로 간다(히스토리는 지운 경로도 된다).
  */
 export function quickOpenNavigation(pick: QuickOpenPick): Navigation {
   const target = { repo: pick.repo, path: pick.path, rev: null };
   if (pick.history) return { kind: "history", target };
-  return { kind: "file", target: pick.missing ? { ...target, rev: "HEAD" } : target, line: pick.line };
+  return { kind: "file", target: pick.missing ? { ...target, rev: "HEAD" } : target, line: pick.line, pinned: true };
 }
 
 type KeyLike = Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey" | "target">;

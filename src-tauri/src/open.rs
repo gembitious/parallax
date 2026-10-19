@@ -48,8 +48,9 @@ fn open(app: &AppHandle, path: &Path) -> Result<(), String> {
         }
     };
     // 화면이 곧 같은 저장소를 열므로 앱의 저장소 캐시로 열어 본다.
-    app.state::<Arc<GitState>>()
-        .repo_root(request.repo_path(&cwd))
+    let located = app
+        .state::<Arc<GitState>>()
+        .locate(&request, &cwd)
         .map_err(|e| e.to_string())?;
     let cwd = cwd.into_os_string().into_string().map_err(|cwd| {
         format!(
@@ -57,7 +58,7 @@ fn open(app: &AppHandle, path: &Path) -> Result<(), String> {
             cwd.to_string_lossy()
         )
     })?;
-    app.state::<Arc<Requests>>().open(request, cwd);
+    app.state::<Arc<Requests>>().open(request, cwd, located);
     Ok(())
 }
 
@@ -74,13 +75,14 @@ pub fn remember(app: &AppHandle, request: &PlxRequest) {
         .request
         .repo_path(Path::new(&request.cwd))
         .to_path_buf();
+    let located = request.repo.clone();
     let app = app.clone();
     std::thread::spawn(move || {
-        let Some(root) = git
-            .repo_root(&path)
-            .ok()
-            .and_then(|root| root.into_os_string().into_string().ok())
-        else {
+        let Some(root) = located.or_else(|| {
+            git.repo_root(&path)
+                .ok()
+                .and_then(|root| root.into_os_string().into_string().ok())
+        }) else {
             return;
         };
         match recent.add(&root) {

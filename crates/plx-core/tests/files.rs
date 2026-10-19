@@ -252,6 +252,72 @@ fn marks_files_deleted_from_the_worktree() {
     assert_eq!(missing(""), ["src/lib.rs", "core/util.rs"]);
 }
 
+/// 파일 트리: 폴더마다 바로 아래의 추적 폴더·파일이고(추적하지 않는 파일은 없다) 따라 내려가면 `git ls-files`와
+/// 같다. 지운 파일과 폴더로 바뀐 파일은 없음으로 표시한다.
+#[test]
+fn tree_lists_tracked_children() {
+    fn walk(
+        lists: &FileLists,
+        repo: &Repo,
+        dir: &str,
+        paths: &mut Vec<String>,
+        gone: &mut Vec<String>,
+    ) {
+        let listing = lists.list_dir(repo, dir).unwrap();
+        assert_eq!(listing.dir, dir);
+        assert_eq!(listing.repo, repo.workdir().display().to_string());
+        let join = |name: &str| {
+            if dir.is_empty() {
+                name.to_owned()
+            } else {
+                format!("{dir}/{name}")
+            }
+        };
+        for file in &listing.files {
+            paths.push(join(&file.name));
+            if file.missing {
+                gone.push(join(&file.name));
+            }
+        }
+        for sub in &listing.dirs {
+            walk(lists, repo, &join(sub), paths, gone);
+        }
+    }
+
+    for fixture in [history(), encoding()] {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_dir = dir.path().join("저장소");
+        clone(&fixture, &repo_dir);
+        let repo = Repo::discover(&repo_dir).unwrap();
+        let lists = FileLists::new();
+        let mut expected = ls_files(&repo_dir, &[]);
+        // 지우고 아직 커밋하지 않은 파일, 폴더로 바뀐 파일, 추적하지 않는 파일
+        let deleted = expected[0].clone();
+        let replaced = expected[expected.len() - 1].clone();
+        std::fs::remove_file(repo_dir.join(&deleted)).unwrap();
+        std::fs::remove_file(repo_dir.join(&replaced)).unwrap();
+        std::fs::create_dir(repo_dir.join(&replaced)).unwrap();
+        std::fs::write(repo_dir.join("추적 안 함.txt"), "x\n").unwrap();
+
+        let (mut paths, mut gone) = (Vec::new(), Vec::new());
+        walk(&lists, &repo, "", &mut paths, &mut gone);
+        paths.sort();
+        expected.sort();
+        assert_eq!(paths, expected, "{}", fixture.display());
+        gone.sort();
+        let mut want = vec![deleted, replaced];
+        want.sort();
+        assert_eq!(gone, want, "{}", fixture.display());
+    }
+    // 앞뒤 `/`는 떼고 본다(화면은 `a/b` 꼴로 준다).
+    let repo = Repo::discover(&history()).unwrap();
+    let lists = FileLists::new();
+    assert_eq!(
+        lists.list_dir(&repo, "src/").unwrap(),
+        lists.list_dir(&repo, "src").unwrap()
+    );
+}
+
 #[test]
 fn clearing_the_query_starts_over() {
     let repo = Repo::discover(&history()).unwrap();

@@ -13,7 +13,7 @@ use plx_core::instance::{self, Claim, Endpoint, Invocation, PROTOCOL_VERSION, Re
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::git::GitState;
+use crate::git::{GitState, Located};
 use crate::window;
 
 pub const APP_ID: &str = "com.gembitious.parallax";
@@ -57,6 +57,11 @@ pub struct PlxRequest {
     pub recv_ms: f64,
     /// 콜드 스타트(이 프로세스를 띄운 호출)인지.
     pub cold: bool,
+    /// 요청 대상 저장소의 작업트리. 화면이 같은 저장소의 작업 공간을 찾는다. 앱이 뜨기 전에 받은 요청(콜드
+    /// 스타트)은 비었다(화면이 따로 묻는다).
+    pub repo: Option<String>,
+    /// 파일을 준 요청(blame·log)의 저장소 기준 경로(`/` 구분). 화면이 같은 파일의 탭을 찾는다.
+    pub path: Option<String>,
 }
 
 /// 받은 요청을 앱이 준비되면 창에 전달한다. 준비 전에 온 요청은 모아 뒀다가 넘긴다.
@@ -88,17 +93,18 @@ impl Requests {
             Ok(None) => return Err("넘길 요청이 없다".to_owned()),
             Err(e) => return Err(e.to_string()),
         };
+        // 저장소는 화면이 곧 열 앱의 저장소 캐시로 찾는다. 앱이 아직 뜨는 중이면(콜드 스타트, 두 번 눌렀다) 찾지 않는다.
+        let app = self.inner.lock().unwrap().app.clone();
+        let located = app
+            .as_ref()
+            .and_then(|app| app.try_state::<Arc<GitState>>())
+            .map(|git| git.locate(&request, Path::new(&cwd)));
         // 떠 있는 앱을 인자 없이 다시 띄웠으면(시작 메뉴·Finder, 작업 디렉터리가 저장소가 아니다) 화면은 그대로 두고
         // 창만 앞으로 가져온다. 터미널에서 친 `plx`는 저장소가 아니면 넘기기 전에 그 터미널에서 실패한다.
-        // 저장소는 화면이 곧 열 앱의 저장소 캐시로 본다. 앱이 아직 뜨는 중이면(두 번 눌렀다) 넘기기 전 확인과 같이
-        // 보고, 창은 뜨는 앱이 보인다.
+        // 앱이 아직 뜨는 중이면 넘기기 전 확인과 같이 보고, 창은 뜨는 앱이 보인다.
         if invocation.args.is_empty() {
-            let app = self.inner.lock().unwrap().app.clone();
-            let opens_repo = match app
-                .as_ref()
-                .and_then(|app| app.try_state::<Arc<GitState>>())
-            {
-                Some(git) => git.repo_root(Path::new(&cwd)).is_ok(),
+            let opens_repo = match &located {
+                Some(located) => located.is_ok(),
                 None => cli::check_repo(&request, Path::new(&cwd)).is_ok(),
             };
             if !opens_repo {
@@ -108,6 +114,7 @@ impl Requests {
                 return Ok(());
             }
         }
+        let located = located.and_then(Result::ok);
         let label = request.label(Path::new(&cwd));
         let mut inner = self.inner.lock().unwrap();
         inner.next_id += 1;
@@ -122,6 +129,8 @@ impl Requests {
             main_ms: invocation.main_ms,
             recv_ms,
             cold,
+            repo: located.as_ref().map(|located| located.repo.clone()),
+            path: located.and_then(|located| located.path),
         };
         self.push(inner, request, true);
         Ok(())
@@ -129,7 +138,7 @@ impl Requests {
 
     /// 앱 안에서 연 요청(첫 화면·끌어 놓기·Dock·트레이). `plx`를 `cwd`에서 부른 것처럼 보낸다. 에디터를 고르는 셸
     /// 환경은 마지막 `plx` 호출의 것을 그대로 둔다.
-    pub fn open(&self, request: Request, cwd: String) {
+    pub fn open(&self, request: Request, cwd: String, located: Located) {
         let now_ms = plx_core::time::epoch_ms();
         let label = request.label(Path::new(&cwd));
         let mut inner = self.inner.lock().unwrap();
@@ -144,6 +153,8 @@ impl Requests {
             main_ms: 0.0,
             recv_ms: now_ms,
             cold: false,
+            repo: Some(located.repo),
+            path: located.path,
         };
         // Dock에 놓아 띄운 앱은 프론트엔드가 첫 화면을 그린 뒤(app_ready) 창을 보인다.
         self.push(inner, request, window::is_ready());

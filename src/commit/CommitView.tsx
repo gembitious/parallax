@@ -49,6 +49,9 @@ type Props = {
   path: string | null;
   /** `path` 파일만 보인다(파일 히스토리에서 열었다). */
   only?: boolean;
+  /** 보이는 화면인가(열린 패널의 스택 맨 위) */
+  visible: boolean;
+  /** 키를 받는 화면인가(보이고, 패널에 포커스가 있다) */
   active: boolean;
   depth: number;
   onShown?(committedMs: number): void;
@@ -95,7 +98,7 @@ function diffable(state: VersionsState | undefined): FileVersions | null {
 /** 파일 하나의 두 버전을 기억하는 열쇠. `diff` 속성이 경로를 보므로 경로도 넣는다. */
 const versionsKey = (f: FileChange) => `${f.oldId ?? ""}:${f.newId ?? ""}:${f.path}`;
 
-export function CommitView({ repo, rev, path, only = false, active, depth, onShown, onBack, onNavigate }: Props) {
+export function CommitView({ repo, rev, path, only = false, visible, active, depth, onShown, onBack, onNavigate }: Props) {
   const [full, setFull] = useState<CommitDetail | null>(null);
   /** 이 파일만 보는 중(히스토리에서 열었고 그 파일이 이 커밋에 있다) */
   const [narrow, setNarrow] = useState(only);
@@ -169,6 +172,7 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
   ];
   const palette = usePalette(commands, focusDiff);
   const snapshot = () => ({
+    visible,
     active,
     full,
     detail,
@@ -347,7 +351,7 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
   // 고른 파일이 목록에서 보이게 한다. 줄 수가 와서 목록이 바뀔 때는 움직이지 않는다(마우스로 내려 본 자리를 둔다).
   useLayoutEffect(() => {
     const list = listRef.current;
-    if (!list || !latest.current.active) return;
+    if (!list || !latest.current.visible) return;
     const top = scrollToRow(selected, list.scrollTop, list.clientHeight, ROW_HEIGHT);
     if (top === list.scrollTop) return;
     list.scrollTop = top;
@@ -355,22 +359,25 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
     setViewport({ top: list.scrollTop, height: list.clientHeight });
   }, [selected, narrow, hasDetail]);
 
-  // 다시 보이면 목록 스크롤을 되돌리고(그리기 전에) diff에 포커스를 준다.
+  // 다시 보이면 목록 스크롤을 되돌린다(그리기 전에. 숨은 동안에는 읽을 수 없다).
   useLayoutEffect(() => {
-    if (!active) {
-      // 숨을 때 떠 있는 창은 닫는다(돌아왔을 때 포커스 없이 남지 않게).
-      setHelp(false);
-      setWorktrees(false);
-      quickOpen.close();
-      palette.close();
+    const list = listRef.current;
+    if (!visible || !list) return;
+    if (list.scrollTop !== savedTop.current) list.scrollTop = savedTop.current;
+    setViewport({ top: list.scrollTop, height: list.clientHeight });
+  }, [visible]);
+
+  // 키를 받는 화면이 되면 diff에 포커스를 준다. 키를 놓으면(숨거나 다른 칸으로) 떠 있는 창을 닫는다(돌아왔을 때
+  // 포커스 없이 남지 않게).
+  useLayoutEffect(() => {
+    if (active) {
+      diff.current?.focus();
       return;
     }
-    const list = listRef.current;
-    if (list) {
-      if (list.scrollTop !== savedTop.current) list.scrollTop = savedTop.current;
-      setViewport({ top: list.scrollTop, height: list.clientHeight });
-    }
-    diff.current?.focus();
+    setHelp(false);
+    setWorktrees(false);
+    quickOpen.close();
+    palette.close();
     // close는 상태만 바꾼다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
@@ -530,7 +537,7 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
             setWorktrees(false);
             // 그 워크트리의 그래프에서 이 커밋을 고른다(객체는 워크트리끼리 같다).
             const next = commitSwitch(worktree, latest.current.detail?.info.sha ?? rev);
-            if (next) onNavigate(next);
+            if (next) onNavigate({ ...next, worktree: true });
             else focusDiff();
           }}
         />
@@ -674,7 +681,7 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
           aria-label="바뀐 파일"
           onScroll={(e) => {
             const list = e.currentTarget;
-            if (latest.current.active) savedTop.current = list.scrollTop;
+            if (latest.current.visible) savedTop.current = list.scrollTop;
             const n = latest.current.detail?.files.length ?? 0;
             // 미리 그린 범위 안이면 브라우저가 옮기기만 한다(다시 그리지 않는다).
             if (insideDrawn(list.scrollTop, list.clientHeight, ROW_HEIGHT, n, drawnRange.current)) return;

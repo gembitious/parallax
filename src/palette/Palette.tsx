@@ -7,6 +7,7 @@ import { filterByLabel } from "./match";
 import { openNotices } from "../notices/Notices";
 import { OPEN_REPO_KEYS } from "../start/keys";
 import { installCli, openPath, openRepoDialog, recentRepos } from "../start/open";
+import { workspaceCommands } from "../workspace/commands";
 
 export type Command = {
   /** 팔레트에 보이는 이름(검색 대상) */
@@ -148,6 +149,7 @@ export function commonCommands(actions: {
 }): Command[] {
   const list: Command[] = [
     { label: "파일 찾기 (Quick Open)", keys: "f · Ctrl+P", run: actions.files },
+    ...workspaceCommands(),
     { label: "워크트리 고르기", keys: "W", run: actions.worktrees },
     { label: "저장소 열기…", keys: OPEN_REPO_KEYS, detail: "폴더를 골라 그 저장소의 그래프", run: openRepoDialog },
     ...recentRepos()

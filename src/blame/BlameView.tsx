@@ -9,6 +9,7 @@ import { CommitCard, type InfoState } from "./CommitCard";
 import { createEditor, restoreSearch, searchStateOf, type Editor, type SearchState } from "./editor";
 import { formatCount, isUncommitted, shortSha } from "./format";
 import { blameChanged } from "./gutter";
+import { blameGutterShown, toggleBlameGutter, useBlameGutter } from "./gutterSetting";
 import { BlameModel } from "./model";
 import { aiSummary, type AiAttribution, type AiItem } from "./ai";
 import type { Navigation } from "../nav";
@@ -19,7 +20,7 @@ import { commonCommands, usePalette, type Command } from "../palette/Palette";
 import { routeKey } from "../keys";
 import { openInEditor } from "../editor";
 import { toggleHud } from "../Hud";
-import { openSearchPanel } from "@codemirror/search";
+import { gotoLine, openSearchPanel } from "@codemirror/search";
 import { runScopeHandlers } from "@codemirror/view";
 import { blameSwitch } from "../worktree/switch";
 import { openBlame, type BlameTarget } from "./session";
@@ -32,7 +33,9 @@ type Props = {
   target: BlameTarget;
   /** 처음 선택할 줄 */
   line: number | null;
-  /** 탐색 스택 맨 위(보이는 화면)인가. 아래 화면은 숨긴 채 살려 둔다. */
+  /** 보이는 화면인가(보이는 탭의 스택 맨 위). 아래 화면·다른 탭의 화면은 숨긴 채 살려 둔다. */
+  visible: boolean;
+  /** 키를 받는 화면인가(보이고, 에디터 칸에 포커스가 있다) */
   active: boolean;
   /** 탐색 스택 깊이. 1이면 맨 아래다. */
   depth: number;
@@ -49,6 +52,23 @@ type Props = {
   search?: SearchState;
   /** 저장소가 바뀌었다(작업트리 blame의 HEAD 이동): 이 화면을 `line` 줄로 새로 연다. `search`는 새 화면으로 넘긴다. */
   onReload?(line: number | null, search?: SearchState): void;
+  /** 파일을 열었다: 저장소(작업트리)와 저장소 기준 경로. 절대 경로로 연 화면(콜드 스타트)의 자리를 고친다. */
+  onLocated?(repo: string, path: string): void;
+  /** 상태 막대에 보일 커서 줄·열과 파일 정보. 커서가 옮겨 가거나 다시 보일 때 부른다. */
+  onStatus?(status: EditorStatus): void;
+};
+
+/** 상태 막대의 줄·열을 누르면 보이는 코드 뷰가 줄 이동 칸을 연다. */
+const GOTO_LINE_EVENT = "plx-goto-line";
+export const requestGotoLine = () => window.dispatchEvent(new Event(GOTO_LINE_EVENT));
+
+/** 상태 막대에 보이는 코드 뷰의 상태 */
+export type EditorStatus = {
+  line: number;
+  col: number;
+  /** 파일 인코딩(UTF-8, EUC-KR …). 바이너리·열지 못한 파일은 null */
+  encoding: string | null;
+  crlf: boolean;
 };
 
 type Progress =
@@ -80,6 +100,7 @@ type Actions = {
   back(): boolean;
   help(): boolean;
   escape(): boolean;
+  toggleGutter(): boolean;
 };
 
 type NoEditorAction = "back" | "help" | "history" | "worktrees" | "graph" | "openEditor" | "older" | "newer" | "escape";
@@ -115,6 +136,7 @@ export function displayText(text: string): { text: string; crlf: boolean } {
 export function BlameView({
   target,
   line,
+  visible,
   active,
   depth,
   backDirection,
@@ -124,6 +146,8 @@ export function BlameView({
   onBack,
   onNavigate,
   onReload,
+  onLocated,
+  onStatus,
 }: Props) {
   const { path, rev } = target;
   const container = useRef<HTMLDivElement>(null);
@@ -147,6 +171,9 @@ export function BlameView({
   const [changed, setChanged] = useState(false);
   /** HEAD가 움직였다는 마지막 알림의 HEAD(없었으면 undefined) */
   const [movedTo, setMovedTo] = useState<string | null | undefined>(undefined);
+  const showGutter = useBlameGutter();
+  /** 상태 막대에 마지막으로 알린 것(다시 보일 때 다시 알린다) */
+  const status = useRef<EditorStatus | null>(null);
   // 저장소를 아직 모르면(meta 전) 연 파일 경로로 찾는다(저장소 안의 아무 경로면 된다).
   const quickOpen = useQuickOpen({
     repo: meta?.repo ?? target.repo ?? path,
@@ -169,6 +196,13 @@ export function BlameView({
     { label: "커밋 sha 복사", keys: "y", run: run("copySha") },
     { label: "파일 안에서 찾기", keys: "/", run: run("search") },
     { label: "에디터로 열기", keys: "o", detail: "작업트리 파일의 이 줄", run: run("openEditor") },
+    {
+      label: showGutter ? "blame 거터 숨기기" : "blame 거터 보이기",
+      keys: "b",
+      detail: showGutter ? "커서 줄 끝에만 blame 한 줄" : "줄마다 커밋·작성자·나이",
+      run: run("toggleGutter"),
+    },
+    { label: "줄로 이동", keys: "Ctrl+G", run: () => void (editor.current && gotoLine(editor.current.view)) },
     ...commonCommands({
       files: run("files"),
       worktrees: run("worktrees"),
@@ -186,8 +220,8 @@ export function BlameView({
   const mounted = useMounted();
   /** 키를 가져가는 창(도움말·워크트리·Quick Open·팔레트)이 열려 있다 */
   const overlay = help || worktrees || quickOpen.isOpen || palette.isOpen;
-  const latest = useRef({ hover, help, meta, infos, active, fatal, overlay });
-  latest.current = { hover, help, meta, infos, active, fatal, overlay };
+  const latest = useRef({ hover, help, meta, infos, visible, active, fatal, overlay });
+  latest.current = { hover, help, meta, infos, visible, active, fatal, overlay };
 
   const showToast = (message: string) => {
     setToast(message);
@@ -206,14 +240,19 @@ export function BlameView({
     call<CommitInfo>("commit_info", { repo, rev: sha }).then(put, (e: unknown) => put({ error: String(e) }));
   };
 
-  /** 줄 `n`의 거터 칸 위치(키보드로 카드를 열 때). */
+  /** 줄 `n`의 거터 칸 위치(키보드로 카드를 열 때). 거터를 껐으면 줄 끝의 blame 한 줄, 그것도 없으면 줄 맨 앞. */
   const anchorOf = (n: number): DOMRect | null => {
     const view = editor.current?.view;
     if (!view) return null;
-    const coords = view.coordsAtPos(view.state.doc.line(n).from);
+    const line = view.state.doc.line(n);
+    const coords = view.coordsAtPos(line.from);
+    if (!coords) return null;
     const gutter = view.dom.querySelector(".cm-blame-gutter")?.getBoundingClientRect();
-    if (!coords || !gutter) return null;
-    return new DOMRect(gutter.left, coords.top, gutter.width, coords.bottom - coords.top);
+    if (gutter) return new DOMRect(gutter.left, coords.top, gutter.width, coords.bottom - coords.top);
+    const inline = view.dom.querySelector(".cm-inline-blame")?.getBoundingClientRect();
+    if (inline && view.state.doc.lineAt(view.state.selection.main.head).number === n) return inline;
+    const end = view.coordsAtPos(line.to) ?? coords;
+    return new DOMRect(end.right, coords.top, 1, coords.bottom - coords.top);
   };
 
   const cursorLine = () => {
@@ -458,6 +497,10 @@ export function BlameView({
       setHelp(true);
       return true;
     },
+    toggleGutter() {
+      toggleBlameGutter();
+      return true;
+    },
     escape() {
       if (latest.current.help) {
         setHelp(false);
@@ -561,6 +604,7 @@ export function BlameView({
           relPath = m.path;
           aiRepo = m.repo;
           setMeta(m);
+          if (target.repo === null) onLocated?.(m.repo, m.path);
           // 빈 검색어 Quick Open의 최근 연 파일
           call("files_touch", { repo: m.repo, path: m.path }).catch(() => {});
           const parent = container.current;
@@ -569,10 +613,16 @@ export function BlameView({
             setCrlf(shown.crlf);
             const blame = new BlameModel(m.content.lineCount);
             model.current = blame;
+            const report = (n: number, col: number) => {
+              status.current = { line: n, col, encoding: m.content?.encoding ?? null, crlf: shown.crlf };
+              if (latest.current.visible) onStatus?.(status.current);
+            };
             editor.current = createEditor(parent, {
               doc: shown.text,
               path: m.path,
               line,
+              showGutter: blameGutterShown(),
+              onCursor: report,
               gutter: {
                 model: blame,
                 nowMs: nowAtOpen.current,
@@ -592,6 +642,7 @@ export function BlameView({
                 files: () => actions.current.files(),
                 card: () => actions.current.card(),
                 openEditor: () => actions.current.openEditor(),
+                toggleGutter: () => actions.current.toggleGutter(),
                 palette: () => actions.current.palette(),
                 back: () => actions.current.back(),
                 help: () => actions.current.help(),
@@ -600,7 +651,8 @@ export function BlameView({
               onSearchPanel: setSearching,
             });
             if (search) restoreSearch(editor.current.view, search);
-            editor.current.view.focus();
+            // 다른 칸(패널·트리)에 포커스가 있는 동안 다시 연 화면은 포커스를 가져가지 않는다.
+            if (latest.current.active) editor.current.view.focus();
             setProgress({ kind: "streaming", blamed: 0 });
           } else {
             setProgress({ kind: "done" });
@@ -653,8 +705,8 @@ export function BlameView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 다시 맨 위 화면이 되면(뒤로 와서) 키 입력을 받게 에디터에 포커스를 준다. 숨길 때는 떠 있는 것을 닫는다(숨은
-  // 화면에 남은 창은 돌아왔을 때 포커스 없이 떠 있어 Esc로도 닫히지 않았다).
+  // 키를 받는 화면이 되면(뒤로 와서, 탭을 골라서, 에디터를 눌러서) 에디터에 포커스를 준다. 키를 놓으면(숨거나
+  // 다른 칸으로) 떠 있는 것을 닫는다(숨은 화면에 남은 창은 돌아왔을 때 포커스 없이 떠 있어 Esc로도 닫히지 않았다).
   useEffect(() => {
     if (active) {
       editor.current?.view.focus();
@@ -669,6 +721,35 @@ export function BlameView({
     // close는 상태만 바꾼다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
+
+  // 거터 ↔ 커서 줄 끝의 blame 한 줄(모든 탭이 함께 바꾼다). 떠 있는 카드는 자리가 바뀌므로 닫는다.
+  const shownGutter = useRef(showGutter);
+  useEffect(() => {
+    if (shownGutter.current === showGutter) return;
+    shownGutter.current = showGutter;
+    editor.current?.setGutter(showGutter);
+    window.clearTimeout(timers.current.show);
+    setHover(null);
+  }, [showGutter]);
+
+  // 상태 막대의 줄·열을 눌렀다: 보이는 코드 뷰가 줄 이동 칸을 연다.
+  useEffect(() => {
+    const onGoto = () => {
+      const view = editor.current?.view;
+      if (!latest.current.visible || !view) return;
+      view.focus();
+      gotoLine(view);
+    };
+    window.addEventListener(GOTO_LINE_EVENT, onGoto);
+    return () => window.removeEventListener(GOTO_LINE_EVENT, onGoto);
+  }, []);
+
+  // 다시 보이면(탭을 골랐다) 상태 막대에 이 화면의 커서를 알린다.
+  useEffect(() => {
+    if (visible && status.current) onStatus?.(status.current);
+    // onStatus는 보일 때의 것을 쓴다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible]);
 
   // 코드 뷰 밖(머리줄·카드·버튼을 누른 뒤, 클립보드 대신 쓰기 뒤)에 포커스가 있어도 화면 키가 먹게 한다.
   useEffect(() => {
@@ -742,6 +823,15 @@ export function BlameView({
         <span className="blame-status" aria-live="polite">
           <ProgressText progress={progress} blamed={blame?.blamedLines ?? 0} lines={lineCount} commits={blame?.commits.size ?? 0} />
         </span>
+        <button
+          type="button"
+          className={showGutter ? "toggle on" : "toggle"}
+          aria-pressed={showGutter}
+          onClick={() => toggleBlameGutter()}
+          title={showGutter ? "blame 거터 숨기기: 커서 줄 끝에만 blame 한 줄 (b)" : "blame 거터 보이기: 줄마다 커밋 (b)"}
+        >
+          blame 거터
+        </button>
         <button type="button" className="icon" onClick={() => setHelp(true)} aria-label="단축키 (?)" title="단축키 (?)">
           ?
         </button>
@@ -805,7 +895,7 @@ export function BlameView({
             setWorktrees(false);
             // 작업트리 blame은 그 워크트리의 같은 파일·줄, 리비전 blame은 같은 리비전(src/worktree/switch.ts)
             const next = blameSwitch(worktree, meta, editor.current ? cursorLine() : null);
-            if (next) onNavigate(next);
+            if (next) onNavigate({ ...next, worktree: true });
             else editor.current?.view.focus();
           }}
         />

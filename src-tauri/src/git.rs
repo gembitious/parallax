@@ -6,9 +6,10 @@ use std::sync::Arc;
 use plx_core::ai_notes::{AiAttribution, AiItem, AiNotes};
 use plx_core::blame_session::{SessionEvent, Sessions};
 use plx_core::cache::DiskCache;
+use plx_core::cli::Request;
 use plx_core::commit::{self, CommitDetail, FileStat, FileVersions, StatRequest};
 use plx_core::commit_graph::{self, GraphStatus, Progress};
-use plx_core::files::{FileLists, FileSearch};
+use plx_core::files::{DirListing, FileLists, FileSearch};
 use plx_core::graph::{GraphEvent, GraphOptions, GraphSessions, GraphWindow};
 use plx_core::history::{HistoryEvent, HistorySessions, LineRange};
 use plx_core::navigate::{self, Direction, Version};
@@ -20,6 +21,15 @@ use tauri::ipc::Channel;
 
 /// 결과 캐시 한도. 넘으면 오래 안 쓴 것부터 지운다.
 const CACHE_MAX_BYTES: u64 = 512 << 20;
+
+/// 요청 대상의 저장소와 파일([`GitState::locate`]).
+#[derive(Debug, Clone)]
+pub struct Located {
+    /// 작업트리 경로(blame 화면의 `meta.repo`와 같은 문자열)
+    pub repo: String,
+    /// 파일을 준 요청의 저장소 기준 경로(`/` 구분)
+    pub path: Option<String>,
+}
 
 /// 앱 전체가 나눠 쓰는 저장소 캐시와 진행 중인 요청.
 pub struct GitState {
@@ -69,6 +79,25 @@ impl GitState {
     /// `path`(파일·디렉터리)를 담은 저장소의 작업트리. 앱의 저장소 캐시로 연다(곧 화면이 같은 저장소를 연다).
     pub fn repo_root(&self, path: &Path) -> Result<PathBuf, plx_core::repo::Error> {
         Ok(self.repos.for_path(path)?.workdir().to_path_buf())
+    }
+
+    /// `plx` 요청의 저장소(작업트리)와, 파일을 준 요청이면 그 파일의 저장소 기준 경로(blame은 심볼릭 링크를 푼
+    /// 경로: blame 화면이 보이는 파일이다). 화면이 같은 저장소의 작업 공간과 같은 파일의 탭을 이것으로 찾는다.
+    /// 앱의 저장소 캐시로 연다(곧 화면이 같은 저장소를 연다).
+    pub fn locate(&self, request: &Request, cwd: &Path) -> Result<Located, plx_core::repo::Error> {
+        let repo = self.repos.for_path(request.repo_path(cwd))?;
+        let path = match request {
+            Request::Blame { path, .. } => repo
+                .relative_path(path)
+                .and_then(|rel| repo.resolve_link(&rel))
+                .ok(),
+            Request::Log { path } | Request::LineLog { path, .. } => repo.relative_path(path).ok(),
+            Request::Graph | Request::Show { .. } => None,
+        };
+        Ok(Located {
+            repo: repo.workdir().to_string_lossy().into_owned(),
+            path,
+        })
     }
 
     /// 캐시가 한도를 넘었으면 줄인다. 시작할 때 백그라운드에서 한 번 부른다.
@@ -338,6 +367,58 @@ pub async fn files_touch(
         let repo = git.repos.for_path(Path::new(&repo))?;
         git.files.touch(&repo, &path);
         Ok(())
+    })
+    .await
+}
+
+/// 파일 트리: `dir`(저장소 기준, `/` 구분, 루트는 빈 문자열) 바로 아래의 추적 폴더·파일. 목록은 Quick Open과
+/// 같은 인덱스이고 인덱스가 바뀌었으면 다시 읽는다.
+#[tauri::command]
+pub async fn files_dir(
+    git: State<'_, Arc<GitState>>,
+    repo: String,
+    dir: String,
+) -> Result<DirListing, String> {
+    let git = git.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = git
+            .repos
+            .for_path(Path::new(&repo))
+            .map_err(|e| e.to_string())?;
+        git.files.list_dir(&repo, &dir)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoState {
+    /// 작업트리 경로
+    repo: String,
+    /// 작업트리 폴더 이름
+    name: String,
+    /// 체크아웃한 브랜치. detached면 `null`
+    branch: Option<String>,
+    /// HEAD 커밋. 커밋이 하나도 없으면 `null`
+    head: Option<String>,
+}
+
+/// 작업 공간의 머리줄·상태 막대: `path`를 담은 저장소의 작업트리와 HEAD(브랜치, 커밋).
+#[tauri::command]
+pub async fn repo_state(git: State<'_, Arc<GitState>>, path: String) -> Result<RepoState, String> {
+    blocking(git, move |git| {
+        let repo = git.repos.for_path(Path::new(&path))?;
+        let workdir = repo.workdir();
+        Ok(RepoState {
+            repo: workdir.display().to_string(),
+            name: workdir.file_name().map_or_else(
+                || workdir.display().to_string(),
+                |name| name.to_string_lossy().into_owned(),
+            ),
+            branch: repo.head_branch()?,
+            head: repo.head()?.map(|id| id.to_string()),
+        })
     })
     .await
 }

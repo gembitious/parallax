@@ -38,7 +38,9 @@ type Props = {
   target: HistoryTarget;
   /** 있으면 그 줄 범위의 라인 히스토리 */
   lines?: LineRange | null;
-  /** 탐색 스택 맨 위(보이는 화면)인가 */
+  /** 보이는 화면인가(열린 패널의 스택 맨 위) */
+  visible: boolean;
+  /** 키를 받는 화면인가(보이고, 패널에 포커스가 있다) */
   active: boolean;
   depth: number;
   /** 콜드 스타트의 첫 요청. 창이 보일 때까지 페인트가 없어 예산과 비교하지 않는다. */
@@ -54,6 +56,8 @@ type Props = {
    * 새 작업트리의 줄로 옮겨 넘긴다(못 옮기면 없다). 검색어는 새 화면으로 넘긴다.
    */
   onReload?(lines?: LineRange, query?: string): void;
+  /** 히스토리를 열었다: 저장소(작업트리)와 저장소 기준 경로. 절대 경로로 연 화면(콜드 스타트)의 자리를 고친다. */
+  onLocated?(repo: string, path: string): void;
 };
 
 type Progress =
@@ -71,6 +75,7 @@ const CACHE_HIT_BUDGET_MS = 16;
 export function HistoryView({
   target,
   lines = null,
+  visible,
   active,
   depth,
   cold = false,
@@ -79,6 +84,7 @@ export function HistoryView({
   onBack,
   onNavigate,
   onReload,
+  onLocated,
 }: Props) {
   const [meta, setMeta] = useState<HistoryMeta | null>(null);
   /** 받은 커밋. 수천 개가 쌓이므로 배열은 고치고 길이만 상태로 둔다. */
@@ -141,7 +147,19 @@ export function HistoryView({
   const overlay = help || worktrees || quickOpen.isOpen || palette.isOpen || accelDialog;
   /** 다시 열기를 미룬다: 보이는 화면에 창이나 검색 칸이 열려 있다 */
   const busy = active && (overlay || search.open);
-  const snapshot = { active, meta, selected, help, search, count, overlay, busy, openFiles: quickOpen.open, palette: palette.open };
+  const snapshot = {
+    visible,
+    active,
+    meta,
+    selected,
+    help,
+    search,
+    count,
+    overlay,
+    busy,
+    openFiles: quickOpen.open,
+    palette: palette.open,
+  };
   const latest = useRef(snapshot);
   latest.current = snapshot;
   // 스크롤 프레임 측정(성능 HUD가 켜져 있을 때만)
@@ -167,6 +185,7 @@ export function HistoryView({
         case "meta": {
           const { kind: _kind, ...m } = event;
           setMeta(m);
+          if (target.repo === null) onLocated?.(m.repo, m.path);
           setProgress({ kind: "streaming" });
           call("files_touch", { repo: m.repo, path: m.path }).catch(() => {});
           break;
@@ -294,14 +313,20 @@ export function HistoryView({
     return () => observer.disconnect();
   }, []);
 
+  // 다시 보이면 스크롤을 되돌린다(숨은 동안에는 읽을 수 없다).
   useEffect(() => {
     const list = listRef.current;
-    if (active && list) {
-      if (list.scrollTop !== savedTop.current) list.scrollTop = savedTop.current;
-      setViewport({ top: list.scrollTop, height: list.clientHeight });
-      list.focus({ preventScroll: true });
+    if (!visible || !list) return;
+    if (list.scrollTop !== savedTop.current) list.scrollTop = savedTop.current;
+    setViewport({ top: list.scrollTop, height: list.clientHeight });
+  }, [visible]);
+
+  // 키를 받는 화면이 되면 목록에 포커스를 준다. 키를 놓으면(숨거나 다른 칸으로) 떠 있는 창을 닫는다(돌아왔을 때
+  // 포커스 없이 남지 않게).
+  useEffect(() => {
+    if (active) {
+      listRef.current?.focus({ preventScroll: true });
     } else {
-      // 숨을 때 떠 있는 창은 닫는다(돌아왔을 때 포커스 없이 남지 않게).
       setHelp(false);
       setSearch((s) => ({ ...s, open: false }));
       setWorktrees(false);
@@ -587,7 +612,7 @@ export function HistoryView({
         aria-activedescendant={chosen ? `history-row-${selected}` : undefined}
         onScroll={(e) => {
           const list = e.currentTarget;
-          if (latest.current.active) savedTop.current = list.scrollTop;
+          if (latest.current.visible) savedTop.current = list.scrollTop;
           const meter = scrollMeter.current;
           meter?.scrolled(list.scrollTop);
           // 미리 그린 범위 안이면 브라우저가 옮기기만 한다(다시 그리지 않는다).
@@ -664,7 +689,9 @@ export function HistoryView({
               return { start, end: Math.max(start, end) };
             }).then((next) => {
               // 줄을 옮기는 동안 이 화면을 닫았거나 다른 화면·창을 열었으면 가지 않는다.
-              if (next && mounted.current && latest.current.active && !latest.current.overlay) onNavigate(next);
+              if (next && mounted.current && latest.current.active && !latest.current.overlay) {
+                onNavigate({ ...next, worktree: true });
+              }
             });
           }}
         />
