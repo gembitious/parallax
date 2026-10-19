@@ -49,7 +49,7 @@ cleanup() {
     # 다음 측정이 이 인스턴스에 넘어가지 않게 끝날 때까지 기다린다.
     wait "$primary" 2>/dev/null || true
   fi
-  rm -rf "$log" "$log.files" "$log.logs" "$log.cache"
+  rm -rf "$log" "$log.files" "$log.logs" "$log.cache" "$log.data"
 }
 trap cleanup EXIT
 
@@ -86,7 +86,9 @@ summary() {
 cd "$root"
 target="bench/app-latency.sh" # 콜드 스타트 대상: 이 스크립트 자신(항상 있는 파일)
 # 사용자 캐시와 섞이지 않게, 그리고 처음 여는 파일은 반드시 git blame을 돌게 빈 캐시로 시작한다.
+# 연 저장소가 사용자의 최근 저장소에 남지 않게 앱 데이터도 따로 둔다.
 cache_dir="$log.cache"
+data_dir="$log.data"
 half=$(((runs + 1) / 2))
 files="$log.files"
 git -c core.quotepath=false ls-files -- '*.rs' '*.ts' '*.tsx' '*.sh' '*.md' '*.toml' |
@@ -97,7 +99,7 @@ if [ "$(wc -l <"$files" | tr -d ' ')" -lt "$half" ]; then
 fi
 
 # 콜드 스타트. 분리 실행을 끄고 셸의 자식으로 띄워 끝날 때 정리한다.
-PLX_PERF=1 PLX_PERF_LOG="$log" PLX_CACHE_DIR="$cache_dir" PLX_DETACH=0 "$bin" "$target" >/dev/null 2>&1 &
+PLX_PERF=1 PLX_PERF_LOG="$log" PLX_CACHE_DIR="$cache_dir" PLX_DATA_DIR="$data_dir" PLX_DETACH=0 "$bin" "$target" >/dev/null 2>&1 &
 primary=$!
 if ! wait_for '"kind":"cold"'; then
   if kill -0 "$primary" 2>/dev/null; then

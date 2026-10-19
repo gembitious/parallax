@@ -12,7 +12,8 @@
 #      상주 인스턴스가 셸의 작업 디렉터리를 쥐고 있지 않음(macOS·Linux),
 #      blame이 끝까지 와서 거터가 그려짐(한글 경로의 저장소 파일 포함), 커밋 상세,
 #      파일·라인 히스토리(이름을 바꾼 한글 경로 파일의 옛 이름 구간까지), 커밋 그래프(인자 없는 plx),
-#      다른 터미널의 커밋이 열린 그래프에 반영됨(.git 감시), 고친 파일이 열린 blame에 반영됨
+#      다른 터미널의 커밋이 열린 그래프에 반영됨(.git 감시), 고친 파일이 열린 blame에 반영됨,
+#      폴더를 주면 그 저장소의 그래프(plx <폴더>, macOS 앱 번들은 open -a 앱 <폴더>도), 연 저장소가 최근 저장소에 남음
 #   3. 동시에 여러 번 실행해도 상주 인스턴스는 하나(나머지는 넘기고 끝난다)
 #   4. 강제 종료 뒤 다시 시작(남은 소켓·락 정리), 앱으로 띄운 것처럼(인자·터미널 없이 저장소 밖에서) 띄워도 뜸
 #   5. 파이프로 처음 실행해도(명령 치환) 스스로 분리하고 창을 띄울 준비가 되면 돌아옴(릴리스 빌드),
@@ -81,8 +82,8 @@ cleanup() {
   rm -rf "$work"
 }
 trap cleanup EXIT
-# 사용자의 blame 캐시와 섞이지 않게 캐시도 임시 디렉터리에 둔다.
-export PLX_PERF=1 PLX_PERF_LOG="$log" PLX_CACHE_DIR="$work/cache"
+# 사용자의 blame 캐시·최근 저장소와 섞이지 않게 캐시와 앱 데이터도 임시 디렉터리에 둔다.
+export PLX_PERF=1 PLX_PERF_LOG="$log" PLX_CACHE_DIR="$work/cache" PLX_DATA_DIR="$work/data"
 
 # 기록에 문자열이 나타날 때까지 기다린다(최대 약 15초, 횟수를 주면 그만큼 0.05초씩).
 wait_for() { # wait_for <문자열> [횟수]
@@ -307,6 +308,45 @@ status=0
 (cd "$repo" && "$bin" "한글 폴더/파일 이름.txt:1") || status=$?
 check "한글·공백 경로 전달 → 종료 코드 0" test "$status" -eq 0
 check "한글·공백 경로 전달 → 상주 인스턴스가 그림" wait_for '파일 이름.txt:1"'
+
+# 폴더를 주면 그 저장소의 그래프다(plx <폴더>, 저장소 밖에서 불러도). 탐색기에서 폴더를 실행 파일에 놓아도 같다.
+graphs="$(LC_ALL=C grep -cF '"label":"그래프 한글 저장소"' "$log" || true)"
+status=0
+(cd "$work/저장소 밖" && "$bin" "$repo/소스") || status=$?
+check "폴더 전달 (plx <폴더>, 저장소 밖에서) → 종료 코드 0" test "$status" -eq 0
+check "폴더 전달 → 그 저장소의 그래프를 그림" wait_records '"label":"그래프 한글 저장소"' $((graphs + 1))
+# macOS: Dock 아이콘에 놓은 폴더와 `open -a`는 실행 중인 앱에 Apple 이벤트로 온다(인자가 아니다). shim으로 띄운
+# 앱 번들이어야 확인할 수 있다(target/release/plx를 바로 돌리면 건너뜀).
+if [ "$os" = macos ]; then
+  case "$primary_exe" in
+    *.app/Contents/MacOS/plx)
+      bundle="${primary_exe%/Contents/MacOS/plx}"
+      graphs="$(LC_ALL=C grep -cF '"label":"그래프 한글 저장소"' "$log" || true)"
+      status=0
+      open -a "$bundle" "$repo" || status=$?
+      check "open -a 앱 <폴더> → 종료 코드 0" test "$status" -eq 0
+      check "open -a 앱 <폴더> → 실행 중인 앱이 그 저장소의 그래프를 그림" \
+        wait_records '"label":"그래프 한글 저장소"' $((graphs + 1))
+      ;;
+    *) result PASS "open -a 앱 <폴더>: 앱 번들이 아니라 건너뜀 (${primary_exe:-실행 파일을 찾지 못함})" ;;
+  esac
+fi
+
+# 연 저장소는 최근 저장소(앱 데이터의 recent.json: 첫 화면·명령 팔레트)에 최근 순으로 남는다. 앱이 따로 스레드에서
+# 쓰므로 조금 기다린다(최대 약 5초).
+recent_ok() {
+  local i=0 file="$work/data/recent.json" first
+  while :; do
+    first="$(LC_ALL=C grep -m 1 -F '"path"' "$file" 2>/dev/null || true)"
+    case "$first" in
+      *"한글 저장소"*) if LC_ALL=C grep -qF "$(basename "$root")\"" "$file"; then return 0; fi ;;
+    esac
+    i=$((i + 1))
+    if [ "$i" -gt 100 ]; then return 1; fi
+    sleep 0.05
+  done
+}
+check "연 저장소가 최근 저장소에 최근 순으로 남음 (한글 저장소, $(basename "$root"))" recent_ok
 check "상주 인스턴스는 하나" test "$(plx_count)" -eq 1
 
 # 3. 동시 실행 ------------------------------------------------------------

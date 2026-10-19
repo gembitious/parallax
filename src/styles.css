@@ -162,16 +162,151 @@ kbd,
   display: none;
 }
 
-.empty {
+/* 첫 화면(띄울 화면 없이 앱을 열었을 때): 저장소 열기, 최근 저장소, 터미널 명령 */
+.start-screen {
   flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  min-height: 0;
+  overflow-y: auto;
+  outline: none;
 }
 
-.empty p {
+.start-panel {
+  width: min(640px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 12vh 0 32px;
+}
+
+.start-screen p {
   margin: 4px 0;
+}
+
+.start-title {
+  font-size: 18px;
+}
+
+.start-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  margin: 20px 0 8px;
+}
+
+/* :where로 낮춘 기본 모양: .start-open처럼 이름을 준 단추가 덮어쓴다. */
+.start-screen :where(button:not(.link):not(.start-forget)) {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  cursor: pointer;
+}
+
+.start-screen :where(button:not(.link):not(.start-forget)):hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.start-screen button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.start-screen button.start-open {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 14px;
+}
+
+.start-open kbd {
+  margin-left: 6px;
+  border-color: transparent;
+  background: rgb(255 255 255 / 20%);
+  color: inherit;
+}
+
+.start-section {
+  margin-top: 24px;
+}
+
+.start-section h2 {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.start-recent {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.start-recent-item {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 4px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.start-recent-item.selected {
+  background: var(--selection);
+}
+
+.start-recent-item.missing {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.start-recent-name {
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+.start-recent-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
+
+.start-recent-missing {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.start-forget {
+  visibility: hidden;
+  padding: 0 4px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.start-recent-item.selected .start-forget,
+.start-recent-item:hover .start-forget {
+  visibility: visible;
+}
+
+.start-install {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+}
+
+.start-footer {
+  margin-top: 24px !important;
+  font-size: 12px;
+}
+
+.warn-text {
+  color: var(--warn);
 }
 
 .brand {
@@ -1308,4 +1443,53 @@ mark.quick-open-hit {
 .card-ai .ai-tool {
   color: var(--ai);
   font-weight: 600;
+}
+
+/* 화면 아래 알림(저장소가 아닌 폴더를 열었을 때, 터미널 명령 설치 결과 등). 누르면 닫는다. 화면들의 .toast와 같은
+   자리·모양이다(.toast는 그 자체가 fixed라 이름을 따로 둔다). */
+.toasts {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  width: min(640px, calc(100vw - 32px));
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.app-toast {
+  max-width: 100%;
+  padding: 6px 14px;
+  border-radius: 6px;
+  background: var(--fg);
+  color: var(--bg);
+  font-size: 12px;
+  box-shadow: var(--shadow);
+  overflow-wrap: anywhere;
+  pointer-events: auto;
+  cursor: default;
+}
+
+.app-toast.error {
+  background: var(--danger);
+}
+
+/* 창에 폴더·파일을 끌고 들어왔을 때 */
+.drop-overlay {
+  position: fixed;
+  inset: 8px;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--accent);
+  border-radius: 10px;
+  background: rgb(9 105 218 / 8%);
+  color: var(--accent);
+  font-size: 14px;
+  pointer-events: none;
 }

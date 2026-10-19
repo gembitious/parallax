@@ -11,8 +11,9 @@ use plx_core::cli::{self, Parsed, Request};
 use plx_core::editor::Env;
 use plx_core::instance::{self, Claim, Endpoint, Invocation, PROTOCOL_VERSION, Reply, Server};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
+use crate::git::GitState;
 use crate::window;
 
 pub const APP_ID: &str = "com.gembitious.parallax";
@@ -26,7 +27,7 @@ const ENV_T0: &str = "PLX_T0";
 /// 분리 실행한 자식이 창을 띄울 준비를 마치면 만드는 파일. 부모(셸이 기다리는 프로세스)가 이것을 기다린다.
 const ENV_READY: &str = "PLX_READY";
 /// 상주 인스턴스가 작업 디렉터리를 떠나기 전에 절대 경로로 바꿔 둘 경로 변수(상대 경로로 줄 수 있다).
-const PATH_ENVS: [&str; 2] = ["PLX_CACHE_DIR", "PLX_PERF_LOG"];
+const PATH_ENVS: [&str; 3] = ["PLX_CACHE_DIR", "PLX_DATA_DIR", "PLX_PERF_LOG"];
 /// 있으면 상주 인스턴스에 넘기기까지의 구간(ms)을 표준 오류에 쓴다(측정용, `bench/app-latency.sh`).
 const ENV_TRACE: &str = "PLX_TRACE";
 
@@ -80,14 +81,34 @@ impl Requests {
     /// 받은 호출을 파싱해 창에 보낸다. 인자가 잘못됐으면 호출한 쪽에 보여 줄 오류 문장을 돌려준다.
     pub fn submit(&self, invocation: Invocation, cold: bool) -> Result<(), String> {
         let recv_ms = plx_core::time::epoch_ms();
-        let cwd = Path::new(&invocation.cwd);
-        let request = match cli::parse(&invocation.args, cwd, cli::stat) {
-            Ok(Parsed::Request(request)) => request,
-            // 도움말·버전은 호출한 프로세스가 직접 출력하고 넘기지 않는다.
-            Ok(Parsed::Help | Parsed::Version) => return Err("넘길 요청이 없다".to_owned()),
+        let parsed = cli::parse(&invocation.args, Path::new(&invocation.cwd), cli::stat);
+        // 도움말·버전은 호출한 프로세스가 직접 출력하고 넘기지 않는다.
+        let (request, cwd) = match parsed.map(|parsed| request_at(parsed, &invocation.cwd)) {
+            Ok(Some(target)) => target,
+            Ok(None) => return Err("넘길 요청이 없다".to_owned()),
             Err(e) => return Err(e.to_string()),
         };
-        let label = request.label(cwd);
+        // 떠 있는 앱을 인자 없이 다시 띄웠으면(시작 메뉴·Finder, 작업 디렉터리가 저장소가 아니다) 화면은 그대로 두고
+        // 창만 앞으로 가져온다. 터미널에서 친 `plx`는 저장소가 아니면 넘기기 전에 그 터미널에서 실패한다.
+        // 저장소는 화면이 곧 열 앱의 저장소 캐시로 본다. 앱이 아직 뜨는 중이면(두 번 눌렀다) 넘기기 전 확인과 같이
+        // 보고, 창은 뜨는 앱이 보인다.
+        if invocation.args.is_empty() {
+            let app = self.inner.lock().unwrap().app.clone();
+            let opens_repo = match app
+                .as_ref()
+                .and_then(|app| app.try_state::<Arc<GitState>>())
+            {
+                Some(git) => git.repo_root(Path::new(&cwd)).is_ok(),
+                None => cli::check_repo(&request, Path::new(&cwd)).is_ok(),
+            };
+            if !opens_repo {
+                if let Some(app) = app {
+                    window::show_main(&app);
+                }
+                return Ok(());
+            }
+        }
+        let label = request.label(Path::new(&cwd));
         let mut inner = self.inner.lock().unwrap();
         inner.next_id += 1;
         inner.env = invocation.env;
@@ -96,21 +117,48 @@ impl Requests {
             request,
             label,
             args: invocation.args,
-            cwd: invocation.cwd,
+            cwd,
             t0_ms: invocation.t0_ms,
             main_ms: invocation.main_ms,
             recv_ms,
             cold,
         };
+        self.push(inner, request, true);
+        Ok(())
+    }
+
+    /// 앱 안에서 연 요청(첫 화면·끌어 놓기·Dock·트레이). `plx`를 `cwd`에서 부른 것처럼 보낸다. 에디터를 고르는 셸
+    /// 환경은 마지막 `plx` 호출의 것을 그대로 둔다.
+    pub fn open(&self, request: Request, cwd: String) {
+        let now_ms = plx_core::time::epoch_ms();
+        let label = request.label(Path::new(&cwd));
+        let mut inner = self.inner.lock().unwrap();
+        inner.next_id += 1;
+        let request = PlxRequest {
+            id: inner.next_id,
+            request,
+            label,
+            args: Vec::new(),
+            cwd,
+            t0_ms: now_ms,
+            main_ms: 0.0,
+            recv_ms: now_ms,
+            cold: false,
+        };
+        // Dock에 놓아 띄운 앱은 프론트엔드가 첫 화면을 그린 뒤(app_ready) 창을 보인다.
+        self.push(inner, request, window::is_ready());
+    }
+
+    /// 마지막 요청으로 두고, 앱이 떠 있으면 바로 보낸다(아니면 [`Requests::attach`]가 보낸다).
+    fn push(&self, mut inner: std::sync::MutexGuard<'_, Inner>, request: PlxRequest, show: bool) {
         inner.latest = Some(request.clone());
         match inner.app.clone() {
             Some(app) => {
                 drop(inner);
-                deliver(&app, &request, true);
+                deliver(&app, &request, show);
             }
             None => inner.pending = true,
         }
-        Ok(())
     }
 
     /// 앱 초기화(setup) 끝에서 부른다(창은 이미 있다). 그 전에 온 요청 중 마지막 것만 보여 주면 된다.
@@ -149,7 +197,18 @@ impl Requests {
     }
 }
 
+/// 넘길 요청과 그 요청의 cwd. `plx <폴더>`는 그 폴더에서 부른 인자 없는 `plx`다. 도움말·버전이면 None.
+fn request_at(parsed: Parsed, cwd: &str) -> Option<(Request, String)> {
+    match parsed {
+        Parsed::Request(request) => Some((request, cwd.to_owned())),
+        // 셸이 준 cwd(UTF-8)와 인자(UTF-8)를 이은 경로라 UTF-8이다.
+        Parsed::Open(dir) => Some((Request::Graph, dir.to_string_lossy().into_owned())),
+        Parsed::Help | Parsed::Version => None,
+    }
+}
+
 fn deliver(app: &AppHandle, request: &PlxRequest, show: bool) {
+    crate::open::remember(app, request);
     window::set_title(app, &request.label);
     // 프론트엔드가 아직 듣기 전이면 이벤트는 사라지지만, 뜨자마자 current_request로 가져간다.
     let _ = app.emit_to(window::MAIN, "plx-request", request);
@@ -205,8 +264,9 @@ pub fn start(t_main_ms: f64, requests: Arc<Requests>) -> Server {
     trace.mark("인자");
     let cwd = PathBuf::from(&invocation.cwd);
     // 잘못된 인자는 상주 인스턴스를 건드리지 않고 이 터미널에서 바로 알린다.
-    let request = match cli::parse(&invocation.args, &cwd, cli::stat) {
-        Ok(Parsed::Request(request)) => request,
+    let (request, target) = match cli::parse(&invocation.args, &cwd, cli::stat) {
+        Ok(Parsed::Request(request)) => (request, cwd.clone()),
+        Ok(Parsed::Open(dir)) => (Request::Graph, dir),
         Ok(Parsed::Help) => print_and_exit(cli::USAGE),
         Ok(Parsed::Version) => print_and_exit(&format!("plx {}", env!("CARGO_PKG_VERSION"))),
         Err(e) => fail(&format!("{e}\n자세한 사용법: plx --help"), 2),
@@ -215,7 +275,7 @@ pub fn start(t_main_ms: f64, requests: Arc<Requests>) -> Server {
     // 대상 저장소도 앱과 같은 방법으로 열어 본다. 대상을 줬거나 터미널에서 불렀으면 실패를 이 터미널에 알린다.
     // 인자 없이 앱으로 띄웠으면(Finder·Dock·시작 메뉴, 작업 디렉터리가 `/`나 설치 위치) 알릴 곳이 없으니 그냥 뜨고
     // 첫 화면 안내를 보인다(저장소가 아닌 곳의 그래프 오류 대신).
-    let opens_repo = match cli::check_repo(&request, &cwd) {
+    let opens_repo = match cli::check_repo(&request, &target) {
         Ok(()) => true,
         Err(e) if !invocation.args.is_empty() || cli::has_terminal() => fail(&e.to_string(), 2),
         Err(_) => false,

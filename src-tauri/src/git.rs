@@ -66,6 +66,11 @@ impl GitState {
         }
     }
 
+    /// `path`(파일·디렉터리)를 담은 저장소의 작업트리. 앱의 저장소 캐시로 연다(곧 화면이 같은 저장소를 연다).
+    pub fn repo_root(&self, path: &Path) -> Result<PathBuf, plx_core::repo::Error> {
+        Ok(self.repos.for_path(path)?.workdir().to_path_buf())
+    }
+
     /// 캐시가 한도를 넘었으면 줄인다. 시작할 때 백그라운드에서 한 번 부른다.
     pub fn prune_cache(&self) {
         if let Some(cache) = &self.cache

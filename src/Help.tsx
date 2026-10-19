@@ -6,6 +6,7 @@ type Key = { keys: string; what: string; note?: string; planned?: boolean };
 const COMMON: Key[] = [
   { keys: ": / Ctrl+Shift+P", what: "명령 팔레트", note: "macOS ⌘⇧P · 할 일을 이름·초성으로 찾는다" },
   { keys: "f / Ctrl+P", what: "파일 찾기 (Quick Open)", note: "macOS ⌘P · 초성 ㅍㅇ · 파일:줄 · Shift+Enter 히스토리" },
+  { keys: "Ctrl+O", what: "저장소 열기", note: "macOS ⌘O · 폴더나 파일을 창에 끌어 놓아도 연다" },
   { keys: "o", what: "에디터로 열기", note: "VS Code·Zed 등 작업트리 파일의 그 줄, PLX_EDITOR로 고른다" },
   { keys: "W", what: "워크트리 고르기", note: "그 워크트리의 같은 화면으로" },
   { keys: "q", what: "뒤로", note: "맨 앞 화면이면 창 숨기기" },

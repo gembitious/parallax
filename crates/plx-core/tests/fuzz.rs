@@ -402,6 +402,76 @@ fn commit_table_bytes() {
 }
 
 #[test]
+fn recent_repos_file() {
+    use plx_core::recent;
+    let seeds = vec![
+        recent::serialize(&[
+            "/code/parallax".to_owned(),
+            "/Users/나/코드/한글 저장소".to_owned(),
+            r"C:\code\b".to_owned(),
+        ]),
+        br#"{"version":2,"repos":[{"path":"/x","pinned":true},{"path":7},{},"/y",{"path":"rel"}]}"#
+            .to_vec(),
+    ];
+    fuzz("recent", &seeds, |input, _| {
+        // 사람이나 다른 버전이 고친 recent.json: 읽을 수 있는 항목만, 많아야 LIMIT개, 같은 경로는 한 번.
+        let paths = recent::parse(input);
+        assert!(paths.len() <= recent::LIMIT);
+        for (i, path) in paths.iter().enumerate() {
+            assert!(!paths[..i].contains(path));
+        }
+        assert_eq!(recent::parse(&recent::serialize(&paths)), paths);
+    });
+}
+
+#[test]
+fn cli_install_files() {
+    use plx_core::cli_install::{
+        first_in_path, path_has_dir, path_with_dir, path_with_dir_before, shim_script, shim_target,
+    };
+    let seeds = vec![
+        shim_script("/Applications/parallax.app/Contents/MacOS/plx")
+            .unwrap()
+            .into_bytes(),
+        b"#!/bin/sh\n# parallax plx shim (scripts/install-macos-shim.sh)\nexec '/x y/plx' \"$@\"\n"
+            .to_vec(),
+        br#"C:\bin;%LOCALAPPDATA%\parallax\;"D:\x y";;"#.to_vec(),
+    ];
+    let dir = r"C:\Users\나\AppData\Local\parallax";
+    let expand = |text: &str| text.replace("%LOCALAPPDATA%", r"C:\Users\나\AppData\Local");
+    fuzz("cli-install", &seeds, |input, _| {
+        // `/usr/local/bin/plx`에 있던 파일: 우리 shim으로 읽은 경로는 같은 shim으로 다시 쓸 수 있다.
+        if let Some(bin) = shim_target(input) {
+            let again = shim_script(&bin).expect("읽은 경로로 shim을 만든다");
+            assert_eq!(shim_target(again.as_bytes()).as_deref(), Some(bin.as_str()));
+        }
+        // 레지스트리의 PATH 값: 더한 뒤에는 그 폴더가 들어 있다.
+        let path = String::from_utf8_lossy(input);
+        if let Some(added) = path_with_dir(&path, dir, expand) {
+            assert!(path_has_dir(&added, dir, expand));
+        }
+        // 먼저 불리는 다른 plx 앞으로 옮긴 값: 그 폴더는 한 번만 있고, 다른 (빈 것이 아닌) 항목은 차례 그대로다.
+        let before = input.len() % (path.split(';').count() + 1);
+        let moved = path_with_dir_before(&path, dir, before, expand);
+        let ours = |entry: &&str| path_has_dir(entry, dir, expand);
+        assert_eq!(moved.split(';').filter(ours).count(), 1, "{moved:?}");
+        let others = |value: &str| {
+            value
+                .split(';')
+                .filter(|entry| !entry.trim().is_empty() && !ours(entry))
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(others(&moved), others(&path));
+        // 새 터미널은 시스템 PATH부터 찾는다: 같은 값이 둘에 있으면 시스템 쪽에서 찾는다.
+        let has = |found: &str| found.len().is_multiple_of(3);
+        if let Some(hit) = first_in_path(&path, &path, expand, has) {
+            assert!(!hit.user && has(&hit.dir), "{hit:?}");
+        }
+    });
+}
+
+#[test]
 fn cli_args() {
     const TOKENS: &[&str] = &[
         "log",

@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { appInfo, onRequest, scriptStartMs, type AppInfo } from "./boot";
 import { BlameView } from "./blame/BlameView";
 import { CommitView } from "./commit/CommitView";
 import { GraphView } from "./graph/GraphView";
 import { HistoryView } from "./history/HistoryView";
 import { Hud } from "./Hud";
-import { Notices, openNotices, useNoticesRequest } from "./notices/Notices";
+import { Notices, useNoticesRequest } from "./notices/Notices";
 import { call } from "./ipc";
+import { Start } from "./start/Start";
+import { isOpenRepoKey } from "./start/keys";
+import { openPath, openRepoDialog } from "./start/open";
+import { Toasts } from "./Toasts";
 import {
   backDirectionAt,
   titleOf,
@@ -147,6 +152,31 @@ export default function App({ initial }: { initial: PlxRequest | null }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 저장소 열기(Ctrl+O·⌘O)는 어느 화면에서든 받는다. 화면들은 수정 키가 붙은 키를 건너뛴다(keys.ts routeKey).
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || !isOpenRepoKey(e)) return;
+      e.preventDefault();
+      openRepoDialog();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  // 창에 끌어 놓은 폴더(그 저장소의 그래프)나 파일(작업트리 blame)을 연다. 여럿이면 첫 것만.
+  const [dragging, setDragging] = useState(false);
+  useEffect(() => {
+    const stop = getCurrentWebview().onDragDropEvent(({ payload }) => {
+      // 파일이 아닌 것(글자, 웹 링크)을 끌면 경로가 없다. 그때는 안내를 띄우지 않는다.
+      if (payload.type === "enter") setDragging(payload.paths.length > 0);
+      else if (payload.type !== "over") setDragging(false);
+      if (payload.type === "drop" && payload.paths.length > 0) openPath(payload.paths[0]);
+    });
+    return () => {
+      stop.then((unlisten) => unlisten(), () => {});
+    };
+  }, []);
+
   // 탐색으로 화면이 바뀌면 창 제목도 바꾼다. plx 호출로 연 맨 아래 화면은 호출 요약(백엔드가 처음 정한 제목)이다.
   const top = stack[stack.length - 1];
   const rootLabel = shown?.request.label;
@@ -218,20 +248,15 @@ export default function App({ initial }: { initial: PlxRequest | null }) {
           })}
         </main>
       ) : (
-        <main className="empty">
-          <p>
-            <span className="brand">parallax</span>
-            {info && <span className="muted"> v{info.version}</span>}
-          </p>
-          <p className="muted">터미널에서 plx를 실행하면 이 창에 대상 뷰가 열린다.</p>
-          <p>
-            <button type="button" className="link" onClick={openNotices}>
-              오픈 소스 라이선스
-            </button>
-          </p>
-        </main>
+        <Start version={info?.version ?? null} />
       )}
       {notices && <Notices onClose={() => setNotices(false)} />}
+      {dragging && (
+        <div className="drop-overlay" aria-hidden="true">
+          <p>놓으면 연다: 폴더는 그 저장소의 그래프, 파일은 blame</p>
+        </div>
+      )}
+      <Toasts />
       <Hud />
     </div>
   );

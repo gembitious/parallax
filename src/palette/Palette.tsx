@@ -5,6 +5,8 @@ import { highlightRuns } from "../quickopen/highlight";
 import { Runs } from "../quickopen/QuickOpen";
 import { filterByLabel } from "./match";
 import { openNotices } from "../notices/Notices";
+import { OPEN_REPO_KEYS } from "../start/keys";
+import { installCli, openPath, openRepoDialog, recentRepos } from "../start/open";
 
 export type Command = {
   /** 팔레트에 보이는 이름(검색 대상) */
@@ -59,7 +61,8 @@ function Palette({
   // 명령 목록은 화면이 렌더마다 새로 만든다(실행할 함수가 새 상태를 본다). 맞추기는 이름이 바뀔 때만 다시 하고,
   // 결과는 지금 목록의 명령으로 잇는다.
   const labels = commands.map((command, index) => ({ label: command.label, index }));
-  const labelKey = labels.map(({ label }) => label).join("\n");
+  // 이름이 같은 명령(같은 폴더 이름의 최근 저장소)은 설명으로 가린다.
+  const labelKey = commands.map(({ label, detail }) => `${label}\t${detail ?? ""}`).join("\n");
   const matched = useMemo(() => filterByLabel(query, labels), [query, labelKey]);
   const results = matched.map(({ item, match }) => ({ item: commands[item.index], match }));
 
@@ -112,7 +115,7 @@ function Palette({
         <ul id="palette-list" className="picker-list quick-open-list" role="listbox" ref={listRef}>
           {results.map(({ item, match }, i) => (
             <li
-              key={item.label}
+              key={`${item.label}\t${item.detail ?? ""}`}
               id={`palette-${i}`}
               role="option"
               aria-selected={i === selected}
@@ -146,8 +149,13 @@ export function commonCommands(actions: {
   const list: Command[] = [
     { label: "파일 찾기 (Quick Open)", keys: "f · Ctrl+P", run: actions.files },
     { label: "워크트리 고르기", keys: "W", run: actions.worktrees },
+    { label: "저장소 열기…", keys: OPEN_REPO_KEYS, detail: "폴더를 골라 그 저장소의 그래프", run: openRepoDialog },
+    ...recentRepos()
+      .filter((repo) => !repo.missing)
+      .map((repo) => ({ label: `최근 저장소: ${repo.name}`, detail: repo.display, run: () => openPath(repo.path) })),
     { label: "단축키 도움말", keys: "?", run: actions.help },
     { label: "뒤로 (맨 앞 화면이면 창 숨기기)", keys: "q", run: actions.back },
+    { label: "터미널 명령 plx 설치", detail: "터미널에서 plx로 이 창에 연다", run: () => void installCli() },
     { label: "오픈 소스 라이선스", detail: "앱에 든 다른 프로젝트의 저작권 고지", run: openNotices },
   ];
   if (actions.hud) list.push({ label: "성능 HUD 보이기·숨기기", keys: "`", run: actions.hud });
