@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36">
+  <!--
+    macOS 메뉴 막대 아이콘(템플릿 이미지: 알파만 쓰고 색은 시스템이 칠한다). 앱 아이콘의 어긋난 층 셋.
+    메뉴 막대에서 18pt 높이로 그려지므로 36px(2배)로 만든다: scripts/make-icons.sh → icons/tray-template.png
+  -->
+  <defs>
+    <!-- 아래 층에서 위층과 그 둘레 틈을 지운다 -->
+    <mask id="under-top" maskUnits="userSpaceOnUse" x="0" y="0" width="36" height="36">
+      <rect width="36" height="36" fill="#fff"/>
+      <path d="M21,3 L34,9.5 L21,16 L8,9.5 Z" fill="#000" stroke="#000" stroke-width="3.2" stroke-linejoin="round"/>
+    </mask>
+    <mask id="under-middle" maskUnits="userSpaceOnUse" x="0" y="0" width="36" height="36">
+      <rect width="36" height="36" fill="#fff"/>
+      <path d="M21,3 L34,9.5 L21,16 L8,9.5 Z" fill="#000" stroke="#000" stroke-width="3.2" stroke-linejoin="round"/>
+      <path d="M18,11.5 L31,18 L18,24.5 L5,18 Z" fill="#000" stroke="#000" stroke-width="3.2" stroke-linejoin="round"/>
+    </mask>
+  </defs>
+  <path d="M21,3 L34,9.5 L21,16 L8,9.5 Z" fill="#000" stroke="#000" stroke-width="0.6" stroke-linejoin="round"/>
+  <path d="M18,11.5 L31,18 L18,24.5 L5,18 Z" fill="#000" stroke="#000" stroke-width="0.6" stroke-linejoin="round" mask="url(#under-top)"/>
+  <path d="M15,20 L28,26.5 L15,33 L2,26.5 Z" fill="#000" stroke="#000" stroke-width="0.6" stroke-linejoin="round" mask="url(#under-middle)"/>
+</svg>
