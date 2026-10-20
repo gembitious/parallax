@@ -19,6 +19,7 @@ describe("quickOpenNavigation", () => {
       kind: "file",
       target: { repo: "/r", path: "src/a.rs", rev: null },
       line: 12,
+      pinned: true,
     });
   });
 
@@ -34,6 +35,7 @@ describe("quickOpenNavigation", () => {
       kind: "file",
       target: { repo: "/r", path: "src/a.rs", rev: "HEAD" },
       line: 12,
+      pinned: true,
     });
     expect(quickOpenNavigation({ ...pick, line: null, history: true, missing: true })).toEqual({
       kind: "history",

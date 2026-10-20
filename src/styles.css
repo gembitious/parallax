@@ -149,11 +149,6 @@ kbd,
   height: 100%;
 }
 
-.view {
-  flex: 1;
-  min-height: 0;
-}
-
 .stack-entry {
   height: 100%;
 }
@@ -162,16 +157,802 @@ kbd,
   display: none;
 }
 
-.empty {
-  flex: 1;
+/* ---------------------------------------------------------------- 작업 공간: 파일 트리·탭·아래 패널·상태 막대 */
+
+.workspace {
   display: flex;
+  flex: 1;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  min-height: 0;
 }
 
-.empty p {
+.workspace-main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  min-width: 0;
+  background: var(--panel);
+}
+
+/* 탭 막대와 같은 높이라 아래 선이 이어진다 */
+.sidebar-header {
+  flex-shrink: 0;
+  height: 32px;
+  padding: 0 12px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 31px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-list {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  outline: none;
+}
+
+.tree-rows {
+  position: relative;
+}
+
+/* 행 높이는 FileTree.tsx의 ROW_HEIGHT(22px)와 같다 */
+.tree-row {
+  position: absolute;
+  right: 0;
+  left: 0;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding-right: 8px;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tree-row:hover {
+  background: var(--line-active);
+}
+
+.tree-row.selected {
+  background: var(--line-active);
+}
+
+.sidebar.focused .tree-row.selected {
+  background: var(--selection);
+}
+
+/* 폴더 펼침 표시(글꼴과 상관없이 같은 모양): 접힘 ›, 펼침 ⌄ */
+.tree-twisty {
+  position: relative;
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+}
+
+.tree-twisty.closed::before,
+.tree-twisty.open::before {
+  position: absolute;
+  top: 3px;
+  left: 2px;
+  width: 5px;
+  height: 5px;
+  border: solid var(--muted);
+  border-width: 0 1.5px 1.5px 0;
+  content: "";
+  transform: rotate(-45deg);
+}
+
+.tree-twisty.open::before {
+  top: 2px;
+  left: 3px;
+  transform: rotate(45deg);
+}
+
+.tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree-row.missing .tree-name {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.tree-note {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.tree-message {
+  padding: 8px 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tree-message.error {
+  color: var(--danger);
+  white-space: pre-wrap;
+}
+
+/* 끌어서 크기를 바꾸는 막대: 보이는 선은 1px, 잡는 자리는 넓다 */
+.splitter {
+  position: relative;
+  flex-shrink: 0;
+  background: var(--border);
+  touch-action: none;
+}
+
+.splitter::after {
+  position: absolute;
+  z-index: 5;
+  content: "";
+}
+
+.splitter.vertical {
+  width: 1px;
+  cursor: col-resize;
+}
+
+.splitter.vertical::after {
+  inset: 0 -3px;
+}
+
+.splitter.horizontal {
+  height: 1px;
+  cursor: row-resize;
+}
+
+.splitter.horizontal::after {
+  inset: -3px 0;
+}
+
+.splitter:hover,
+.splitter:active {
+  background: var(--accent);
+}
+
+.workspace-center {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.editor-area {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.editor-area[hidden],
+.panel[hidden] {
+  display: none;
+}
+
+.editor-views {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.tab-bar {
+  display: flex;
+  flex-shrink: 0;
+  height: 32px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  scrollbar-width: thin;
+}
+
+.tab {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+  align-items: center;
+  max-width: 260px;
+  padding: 0 4px 0 12px;
+  border-right: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tab.active {
+  background: var(--bg);
+  box-shadow: inset 0 2px 0 var(--border);
+  color: var(--fg);
+}
+
+.editor-area.focused .tab.active {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.tab.preview .tab-name {
+  font-style: italic;
+}
+
+.tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab-rev {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.tab-close {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  line-height: 1;
+  cursor: pointer;
+  visibility: hidden;
+}
+
+.tab.active .tab-close,
+.tab:hover .tab-close {
+  visibility: visible;
+}
+
+.tab-close:hover {
+  background: var(--line-active);
+  color: var(--fg);
+}
+
+/* 탭이 없을 때: 할 수 있는 일과 키 */
+.editor-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  overflow: auto;
+  outline: none;
+}
+
+.editor-empty-panel {
+  width: min(360px, calc(100% - 32px));
+}
+
+.editor-empty-title {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.editor-empty-actions {
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.editor-empty-actions li {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  padding: 3px 0;
+}
+
+.editor-empty-actions li button {
+  margin-right: auto;
+}
+
+.editor-empty-panel .muted {
+  font-size: 12px;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  min-height: 0;
+}
+
+.panel.max {
+  flex: 1;
+}
+
+.panel-header {
+  display: flex;
+  flex-shrink: 0;
+  gap: 2px;
+  align-items: center;
+  height: 28px;
+  padding: 0 4px 0 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 12px;
+}
+
+.panel-crumbs {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.panel-crumb {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.panel-crumb button {
+  max-width: 320px;
+  padding: 0 4px;
+  overflow: hidden;
+  border: none;
+  background: none;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.panel-crumb button:hover {
+  color: var(--fg);
+  text-decoration: underline;
+}
+
+.panel-crumb button.current {
+  color: var(--fg);
+  font-weight: 600;
+  text-decoration: none;
+  cursor: default;
+}
+
+.panel.focused .panel-crumb button.current {
+  color: var(--accent);
+}
+
+.panel-crumb-sep {
+  color: var(--muted);
+}
+
+.panel-button {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.panel-button:hover {
+  background: var(--line-active);
+  color: var(--fg);
+}
+
+.panel-views {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.status-bar {
+  display: flex;
+  flex-shrink: 0;
+  gap: 2px;
+  align-items: center;
+  height: 22px;
+  padding: 0 6px;
+  overflow: hidden;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.status-item {
+  min-width: 0;
+  padding: 0 6px;
+  overflow: hidden;
+  border: none;
+  background: none;
+  color: inherit;
+  line-height: 20px;
+  text-overflow: ellipsis;
+}
+
+button.status-item {
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+button.status-item:hover {
+  background: var(--line-active);
+  color: var(--fg);
+}
+
+button.status-item[aria-pressed="true"] {
+  color: var(--fg);
+}
+
+.status-spacer {
+  flex: 1;
+}
+
+/* 도구 막대(맨 위): Windows·Linux의 메뉴 막대, 화면의 주요 이동, 파일 찾기·명령 팔레트·도움말 */
+.toolbar {
+  display: flex;
+  flex-shrink: 0;
+  gap: 2px;
+  align-items: center;
+  height: 34px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  user-select: none;
+}
+
+/* 가운데 단추들: 창이 좁으면 이것만 가로로 스크롤한다(오른쪽 파일 찾기·명령은 남는다) */
+.toolbar-tools {
+  display: flex;
+  flex: 0 1 auto;
+  gap: 2px;
+  align-items: center;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.toolbar-tools::-webkit-scrollbar {
+  display: none;
+}
+
+.toolbar-spacer {
+  flex: 1;
+  min-width: 8px;
+}
+
+.tool {
+  flex-shrink: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: none;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tool:hover:not(.off) {
+  border-color: var(--border);
+  background: var(--bg);
+}
+
+.tool:active:not(.off) {
+  background: var(--line-active);
+}
+
+/* 이 화면에 없는 일: 자리는 그대로 두고 흐리게(풍선 도움말이 어느 화면의 일인지 알린다) */
+.tool.off {
+  color: var(--muted);
+  opacity: 0.5;
+  cursor: default;
+}
+
+.tool:focus-visible,
+.menubar-title:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.tool-sep {
+  flex-shrink: 0;
+  width: 1px;
+  height: 18px;
+  margin: 0 6px;
+  background: var(--border);
+}
+
+/* 파일 찾기: 검색 칸처럼 보이는 단추 */
+.tool.tool-search {
+  display: flex;
+  flex-shrink: 1;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  width: 220px;
+  min-width: 120px;
+  border-color: var(--border);
+  background: var(--bg);
+  color: var(--muted);
+}
+
+.tool-search span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool.tool-help {
+  width: 26px;
+  padding: 0;
+}
+
+.menubar {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+}
+
+.menubar-title {
+  height: 26px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  font-size: 12px;
+  cursor: default;
+}
+
+.menubar-title:hover,
+.menubar-title.open {
+  background: var(--line-active);
+}
+
+/* 우클릭 메뉴·메뉴 막대 드롭다운: 떠 있는 창(30)·알림(40·50)보다 위 */
+.menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 200px;
+  max-width: min(560px, calc(100vw - 8px));
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  outline: none;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  user-select: none;
+}
+
+.menu-item {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 4px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.menu-item.selected {
+  background: var(--accent);
+  color: #fff;
+}
+
+.menu-item.disabled {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+.menu-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.menu-detail {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+}
+
+kbd.menu-keys {
+  flex-shrink: 0;
+  min-width: 0;
+  margin-left: auto;
+  padding: 0 0 0 16px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 12px;
+}
+
+.menu-item.selected .menu-detail,
+.menu-item.selected kbd.menu-keys {
+  color: inherit;
+  opacity: 0.85;
+}
+
+.menu-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+
+.menu-header {
+  padding: 4px 10px 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* 첫 화면(띄울 화면 없이 앱을 열었을 때): 저장소 열기, 최근 저장소, 터미널 명령 */
+.start-screen {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  outline: none;
+}
+
+.start-panel {
+  width: min(640px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 12vh 0 32px;
+}
+
+.start-screen p {
   margin: 4px 0;
+}
+
+.start-title {
+  font-size: 18px;
+}
+
+.start-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  margin: 20px 0 8px;
+}
+
+/* :where로 낮춘 기본 모양: .start-open처럼 이름을 준 단추가 덮어쓴다. */
+.start-screen :where(button:not(.link):not(.start-forget)) {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  cursor: pointer;
+}
+
+.start-screen :where(button:not(.link):not(.start-forget)):hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.start-screen button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.start-screen button.start-open {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 14px;
+}
+
+.start-open kbd {
+  margin-left: 6px;
+  border-color: transparent;
+  background: rgb(255 255 255 / 20%);
+  color: inherit;
+}
+
+.start-section {
+  margin-top: 24px;
+}
+
+.start-section h2 {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.start-recent {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.start-recent-item {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 4px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.start-recent-item.selected {
+  background: var(--selection);
+}
+
+.start-recent-item.missing {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.start-recent-name {
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+.start-recent-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
+
+.start-recent-missing {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.start-forget {
+  visibility: hidden;
+  padding: 0 4px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.start-recent-item.selected .start-forget,
+.start-recent-item:hover .start-forget {
+  visibility: visible;
+}
+
+.start-install {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+}
+
+.start-footer {
+  margin-top: 24px !important;
+  font-size: 12px;
+}
+
+.warn-text {
+  color: var(--warn);
 }
 
 .brand {
@@ -309,6 +1090,31 @@ button.link {
 .blame-message.error {
   color: var(--danger);
   white-space: pre-wrap;
+}
+
+/* 커서 줄 끝의 blame 한 줄(거터를 끈 동안) */
+.cm-inline-blame {
+  margin-left: 3em;
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  white-space: pre;
+  cursor: pointer;
+  opacity: 0.8;
+  user-select: none;
+}
+
+.cm-inline-blame:hover {
+  color: var(--fg);
+  opacity: 1;
+}
+
+.cm-inline-blame.uncommitted {
+  color: var(--uncommitted);
+}
+
+.cm-inline-blame.ai {
+  color: var(--ai);
 }
 
 /* blame 거터. 줄 높이는 에디터와 같다(20px). */
@@ -747,6 +1553,12 @@ button.toggle.primary {
   border-color: var(--accent);
   background: var(--accent);
   color: var(--bg);
+}
+
+/* 켜고 끄는 단추가 켜져 있다(blame 거터) */
+button.toggle.on {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .help.confirm {
@@ -1308,4 +2120,53 @@ mark.quick-open-hit {
 .card-ai .ai-tool {
   color: var(--ai);
   font-weight: 600;
+}
+
+/* 화면 아래 알림(저장소가 아닌 폴더를 열었을 때, 터미널 명령 설치 결과 등). 누르면 닫는다. 화면들의 .toast와 같은
+   자리·모양이다(.toast는 그 자체가 fixed라 이름을 따로 둔다). */
+.toasts {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  width: min(640px, calc(100vw - 32px));
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.app-toast {
+  max-width: 100%;
+  padding: 6px 14px;
+  border-radius: 6px;
+  background: var(--fg);
+  color: var(--bg);
+  font-size: 12px;
+  box-shadow: var(--shadow);
+  overflow-wrap: anywhere;
+  pointer-events: auto;
+  cursor: default;
+}
+
+.app-toast.error {
+  background: var(--danger);
+}
+
+/* 창에 폴더·파일을 끌고 들어왔을 때 */
+.drop-overlay {
+  position: fixed;
+  inset: 8px;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--accent);
+  border-radius: 10px;
+  background: rgb(9 105 218 / 8%);
+  color: var(--accent);
+  font-size: 14px;
+  pointer-events: none;
 }

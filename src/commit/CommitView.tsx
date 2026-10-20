@@ -9,7 +9,10 @@ import { WorktreePicker } from "../worktree/WorktreePicker";
 import { useQuickOpen } from "../quickopen/QuickOpen";
 import { commonCommands, usePalette, type Command } from "../palette/Palette";
 import { routeKey } from "../keys";
+import { openContextMenu, type MenuEntry } from "../menu/Menu";
+import { usePublish } from "../menu/registry";
 import { openInEditor } from "../editor";
+import { absolutePath, copyPath } from "../workspace/paths";
 import { toggleHud } from "../Hud";
 import { commitSwitch } from "../worktree/switch";
 import { copyText } from "../clipboard";
@@ -49,6 +52,9 @@ type Props = {
   path: string | null;
   /** `path` 파일만 보인다(파일 히스토리에서 열었다). */
   only?: boolean;
+  /** 보이는 화면인가(열린 패널의 스택 맨 위) */
+  visible: boolean;
+  /** 키를 받는 화면인가(보이고, 패널에 포커스가 있다) */
   active: boolean;
   depth: number;
   onShown?(committedMs: number): void;
@@ -95,7 +101,7 @@ function diffable(state: VersionsState | undefined): FileVersions | null {
 /** 파일 하나의 두 버전을 기억하는 열쇠. `diff` 속성이 경로를 보므로 경로도 넣는다. */
 const versionsKey = (f: FileChange) => `${f.oldId ?? ""}:${f.newId ?? ""}:${f.path}`;
 
-export function CommitView({ repo, rev, path, only = false, active, depth, onShown, onBack, onNavigate }: Props) {
+export function CommitView({ repo, rev, path, only = false, visible, active, depth, onShown, onBack, onNavigate }: Props) {
   const [full, setFull] = useState<CommitDetail | null>(null);
   /** 이 파일만 보는 중(히스토리에서 열었고 그 파일이 이 커밋에 있다) */
   const [narrow, setNarrow] = useState(only);
@@ -152,12 +158,12 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
     { label: "다음 바뀐 부분", keys: "n", run: () => diff.current?.next() },
     { label: "이전 바뀐 부분", keys: "N", run: () => diff.current?.previous() },
     { label: "분할 ↔ 통합 보기", keys: "u", run: () => toggleMode() },
-    { label: "이 리비전의 파일 blame", keys: "Enter", run: () => openBlame() },
+    { id: "blame", label: "이 리비전의 파일 blame", keys: "Enter", run: () => openBlame() },
     ...(path !== null ? [{ label: "이 파일만 ↔ 모든 파일", keys: "a", run: () => toggleNarrow() }] : []),
     ...(shown?.tooLarge != null ? [{ label: "큰 파일도 diff 보기", run: () => fetchVersions(true) }] : []),
     ...(isError(current) ? [{ label: "이 파일 다시 받기", run: () => retry() }] : []),
     { label: "커밋 sha 복사", keys: "y", run: () => copySha() },
-    { label: "커밋 그래프 (이 커밋)", keys: "G", run: () => openGraph() },
+    { id: "graph", label: "커밋 그래프 (이 커밋)", keys: "G", run: () => openGraph() },
     { label: "에디터로 열기", keys: "o", detail: "고른 파일의 첫 바뀐 줄(작업트리)", run: () => openEditor() },
     ...commonCommands({
       files: quickOpen.open,
@@ -168,7 +174,10 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
     }),
   ];
   const palette = usePalette(commands, focusDiff);
+  // 도구 막대·메뉴 막대(보이는 동안)
+  usePublish("panel", visible, "커밋", commands, { palette: palette.open, help: () => setHelp(true), files: quickOpen.open });
   const snapshot = () => ({
+    visible,
     active,
     full,
     detail,
@@ -347,7 +356,7 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
   // 고른 파일이 목록에서 보이게 한다. 줄 수가 와서 목록이 바뀔 때는 움직이지 않는다(마우스로 내려 본 자리를 둔다).
   useLayoutEffect(() => {
     const list = listRef.current;
-    if (!list || !latest.current.active) return;
+    if (!list || !latest.current.visible) return;
     const top = scrollToRow(selected, list.scrollTop, list.clientHeight, ROW_HEIGHT);
     if (top === list.scrollTop) return;
     list.scrollTop = top;
@@ -355,22 +364,25 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
     setViewport({ top: list.scrollTop, height: list.clientHeight });
   }, [selected, narrow, hasDetail]);
 
-  // 다시 보이면 목록 스크롤을 되돌리고(그리기 전에) diff에 포커스를 준다.
+  // 다시 보이면 목록 스크롤을 되돌린다(그리기 전에. 숨은 동안에는 읽을 수 없다).
   useLayoutEffect(() => {
-    if (!active) {
-      // 숨을 때 떠 있는 창은 닫는다(돌아왔을 때 포커스 없이 남지 않게).
-      setHelp(false);
-      setWorktrees(false);
-      quickOpen.close();
-      palette.close();
+    const list = listRef.current;
+    if (!visible || !list) return;
+    if (list.scrollTop !== savedTop.current) list.scrollTop = savedTop.current;
+    setViewport({ top: list.scrollTop, height: list.clientHeight });
+  }, [visible]);
+
+  // 키를 받는 화면이 되면 diff에 포커스를 준다. 키를 놓으면(숨거나 다른 칸으로) 떠 있는 창을 닫는다(돌아왔을 때
+  // 포커스 없이 남지 않게).
+  useLayoutEffect(() => {
+    if (active) {
+      diff.current?.focus();
       return;
     }
-    const list = listRef.current;
-    if (list) {
-      if (list.scrollTop !== savedTop.current) list.scrollTop = savedTop.current;
-      setViewport({ top: list.scrollTop, height: list.clientHeight });
-    }
-    diff.current?.focus();
+    setHelp(false);
+    setWorktrees(false);
+    quickOpen.close();
+    palette.close();
     // close는 상태만 바꾼다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
@@ -444,6 +456,30 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
       setNarrow(true);
       setSelected(0);
     }
+  };
+
+  /** 파일 행 우클릭: 그 파일을 고르고 그 파일의 일을 보인다. UTF-8이 아닌 경로는 그 경로로 찾을 수 없다. */
+  const fileMenu = (f: FileChange): MenuEntry[] => {
+    const lossy = f.pathLossy;
+    const sha = latest.current.detail?.info.sha ?? rev;
+    return [
+      {
+        label: "이 리비전의 파일 blame",
+        keys: "Enter",
+        disabled: lossy || f.status === "deleted" || f.submodule || f.stat?.binary === true,
+        run: openBlame,
+      },
+      {
+        label: "파일 히스토리",
+        detail: "이 커밋부터",
+        disabled: lossy,
+        run: () => onNavigate({ kind: "history", target: { repo, path: f.path, rev: sha } }),
+      },
+      { label: "에디터로 열기", keys: "o", detail: "첫 바뀐 줄", disabled: lossy, run: openEditor },
+      "separator",
+      { label: "경로 복사", detail: "저장소 기준", disabled: lossy, run: () => copyPath(f.path) },
+      { label: "전체 경로 복사", disabled: lossy, run: () => copyPath(absolutePath(repo, f.path)) },
+    ];
   };
 
   const copySha = () => {
@@ -530,7 +566,7 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
             setWorktrees(false);
             // 그 워크트리의 그래프에서 이 커밋을 고른다(객체는 워크트리끼리 같다).
             const next = commitSwitch(worktree, latest.current.detail?.info.sha ?? rev);
-            if (next) onNavigate(next);
+            if (next) onNavigate({ ...next, worktree: true });
             else focusDiff();
           }}
         />
@@ -674,7 +710,7 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
           aria-label="바뀐 파일"
           onScroll={(e) => {
             const list = e.currentTarget;
-            if (latest.current.active) savedTop.current = list.scrollTop;
+            if (latest.current.visible) savedTop.current = list.scrollTop;
             const n = latest.current.detail?.files.length ?? 0;
             // 미리 그린 범위 안이면 브라우저가 옮기기만 한다(다시 그리지 않는다).
             if (insideDrawn(list.scrollTop, list.clientHeight, ROW_HEIGHT, n, drawnRange.current)) return;
@@ -692,6 +728,14 @@ export function CommitView({ repo, rev, path, only = false, active, depth, onSho
                   className={i === selected ? "file-row selected" : "file-row"}
                   style={{ top: i * ROW_HEIGHT, height: ROW_HEIGHT }}
                   onClick={() => setSelected(i)}
+                  onDoubleClick={() => {
+                    setSelected(i);
+                    openBlame();
+                  }}
+                  onContextMenu={(e) => {
+                    setSelected(i);
+                    openContextMenu(e, fileMenu(f), "파일");
+                  }}
                   title={rowTitle(f)}
                 >
                   <span className={`status status-${f.status}`} title={STATUS_NAME[f.status]}>

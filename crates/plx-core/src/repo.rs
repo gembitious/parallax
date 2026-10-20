@@ -407,6 +407,16 @@ impl Repo {
         }
     }
 
+    /// HEAD가 가리키는 브랜치 이름(`refs/heads/` 뒤). detached면 `None`. 커밋이 없는 브랜치도 이름이 있다.
+    pub fn head_branch(&self) -> Result<Option<String>> {
+        let name = self.local().head_name().map_err(|e| err("HEAD", e))?;
+        Ok(name.and_then(|name| {
+            name.as_bstr()
+                .strip_prefix(b"refs/heads/")
+                .map(|b| b.to_str_lossy().into_owned())
+        }))
+    }
+
     /// 리비전 표현(`HEAD~2`, 태그, sha 일부 등)을 커밋으로 푼다.
     pub fn resolve_commit(&self, rev: &str) -> Result<ObjectId> {
         let repo = self.local();

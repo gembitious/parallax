@@ -1,21 +1,29 @@
-// 화면 상태: 받은 plx 요청과 탐색 스택(blame·커밋 상세·파일 히스토리·그래프). 순수 함수라 단위 테스트한다(nav.test.ts).
+// 화면 하나하나(blame·커밋 상세·파일 히스토리·그래프)와 화면 사이의 탐색. 화면을 탭·패널에 늘어놓는 것은
+// workspace/state.ts가 한다.
 import { shortSha } from "./blame/format";
 import type { SearchState } from "./blame/editor";
 import type { BlameTarget } from "./blame/session";
 import type { HistoryTarget, LineRange } from "./history/types";
 
 /** 화면이 다른 화면으로 가자는 요청. */
-export type Navigation =
+export type Navigation = (
   /** blame → blame: `,` 부모 리비전, `<`·`>` 이전·다음 리비전 */
   | { kind: "parent" | "older" | "newer"; target: BlameTarget; line: number }
   /** blame·히스토리 → 커밋 상세(`Enter`). `path`는 처음 고를 파일, `only`면 그 파일만 보인다(히스토리에서 열 때) */
   | { kind: "commit"; repo: string; rev: string; path: string | null; only?: boolean }
-  /** 커밋 상세·히스토리 → 그 리비전의 파일 blame */
-  | { kind: "file"; target: BlameTarget; line: number | null }
+  /**
+   * 커밋 상세·히스토리 → 그 리비전의 파일 blame, Quick Open → 작업트리 파일 blame. 패널에서 연 파일은 미리보기 탭이고
+   * `pinned`(Quick Open)면 보통 탭이다.
+   */
+  | { kind: "file"; target: BlameTarget; line: number | null; pinned?: boolean }
   /** blame → 파일 히스토리(`H`), `lines`가 있으면 라인 히스토리(`L`) */
   | { kind: "history"; target: HistoryTarget; lines?: LineRange }
   /** 어느 화면에서든 → 커밋 그래프(`G`). `rev`가 있으면 그 커밋을 골라 둔다. */
-  | { kind: "graph"; repo: string; rev: string | null };
+  | { kind: "graph"; repo: string; rev: string | null }
+) & {
+  /** 다른 워크트리로 옮긴다(`W`): 작업 공간을 그 워크트리의 것으로 새로 연다 */
+  worktree?: boolean;
+};
 
 /** 열 뷰. plx-core/src/cli.rs의 Request와 같은 모양. */
 export type ViewRequest =
@@ -37,6 +45,10 @@ export type PlxRequest = {
   mainMs: number;
   recvMs: number;
   cold: boolean;
+  /** 요청 대상 저장소의 작업트리. 앱이 뜨기 전에 받은 요청(콜드 스타트)은 null이다 */
+  repo: string | null;
+  /** 파일을 준 요청(blame·log)의 저장소 기준 경로. 모르면 null */
+  path: string | null;
 };
 
 /** 화면에 띄운 요청과 프론트엔드가 그 요청을 받은 시각. */
@@ -52,6 +64,8 @@ export type BlameEntry = {
   line: number | null;
   /** 이 화면으로 온 방법 */
   via: "request" | "parent" | "older" | "newer" | "file";
+  /** plx 요청으로 연 화면이면 그 요청 id(첫 화면까지의 시간을 잰다) */
+  request?: number;
   /** 다시 열기(reload) 전 화면의 검색 */
   search?: SearchState;
 };
@@ -67,6 +81,7 @@ export type CommitEntry = {
   /** `path` 파일의 diff만 보인다(파일 히스토리에서 연 커밋). 화면에서 전체로 넓힐 수 있다. */
   only: boolean;
   via: "request" | "commit";
+  request?: number;
 };
 
 export type HistoryEntry = {
@@ -76,6 +91,7 @@ export type HistoryEntry = {
   /** 있으면 그 줄 범위의 라인 히스토리 */
   lines: LineRange | null;
   via: "request" | "history";
+  request?: number;
   /** 다시 열기(reload) 전 화면의 검색어(`n`/`N`이 이어서 찾는다) */
   query?: string;
 };
@@ -88,87 +104,11 @@ export type GraphEntry = {
   /** 처음 고를 커밋 */
   focus: string | null;
   via: "request" | "graph";
+  request?: number;
 };
 
-export type ViewState = { shown: Shown | null; stack: StackEntry[] };
-
-export type ViewAction =
-  | { type: "request"; request: PlxRequest; receivedMs: number }
-  | { type: "navigate"; navigation: Navigation }
-  | { type: "back" }
-  /**
-   * 저장소가 바뀌어(HEAD 이동) `key` 화면을 새로 연다. blame은 `line` 줄로, 라인 히스토리는 `lines`(새 작업트리의 줄로
-   * 옮긴 범위)로. 스택 자리는 그대로다. 화면의 검색(blame `search`, 히스토리 `query`)은 새 화면으로 넘긴다.
-   */
-  | { type: "reload"; key: number; line?: number | null; lines?: LineRange; search?: SearchState; query?: string };
-
-/** 탐색 스택이 이보다 깊어지면 가장 아래 화면부터 버린다. */
+/** 탐색 스택(탭 하나, 패널)이 이보다 깊어지면 가장 아래 화면부터 버린다. */
 export const MAX_STACK = 30;
-let nextEntryKey = 1;
-
-export function viewReducer(state: ViewState, action: ViewAction): ViewState {
-  switch (action.type) {
-    case "request": {
-      // 이벤트와 current_request가 같은 요청을 두 번 줄 수 있다. 더 최근 것만 받는다.
-      if (state.shown && state.shown.request.id >= action.request.id) return state;
-      const { request } = action;
-      const view = request.request;
-      const key = nextEntryKey++;
-      const root: StackEntry =
-        view.kind === "blame"
-          ? { key, view: "blame", target: { repo: null, path: view.path, rev: null }, line: view.line, via: "request" }
-          : view.kind === "show"
-            ? { key, view: "commit", repo: request.cwd, rev: view.rev, path: null, only: false, via: "request" }
-            : view.kind === "log" || view.kind === "lineLog"
-              ? {
-                  key,
-                  view: "history",
-                  target: { repo: null, path: view.path, rev: null },
-                  lines: view.kind === "lineLog" ? { start: view.start, end: view.end } : null,
-                  via: "request",
-                }
-              : { key, view: "graph", repo: request.cwd, focus: null, via: "request" };
-      return { shown: { request, receivedMs: action.receivedMs }, stack: [root] };
-    }
-    case "navigate": {
-      const { navigation } = action;
-      const key = nextEntryKey++;
-      const entry: StackEntry =
-        navigation.kind === "commit"
-          ? {
-              key,
-              view: "commit",
-              repo: navigation.repo,
-              rev: navigation.rev,
-              path: navigation.path,
-              only: navigation.only ?? false,
-              via: "commit",
-            }
-          : navigation.kind === "history"
-            ? { key, view: "history", target: navigation.target, lines: navigation.lines ?? null, via: "history" }
-            : navigation.kind === "graph"
-              ? { key, view: "graph", repo: navigation.repo, focus: navigation.rev, via: "graph" }
-              : { key, view: "blame", target: navigation.target, line: navigation.line, via: navigation.kind };
-      return { ...state, stack: [...state.stack, entry].slice(-MAX_STACK) };
-    }
-    case "back":
-      return state.stack.length > 1 ? { ...state, stack: state.stack.slice(0, -1) } : state;
-    case "reload": {
-      const index = state.stack.findIndex((entry) => entry.key === action.key);
-      if (index < 0) return state;
-      const entry = state.stack[index];
-      const key = nextEntryKey++;
-      const stack = state.stack.slice();
-      stack[index] =
-        entry.view === "blame"
-          ? { ...entry, key, line: action.line !== undefined ? action.line : entry.line, search: action.search }
-          : entry.view === "history"
-            ? { ...entry, key, lines: entry.lines && action.lines ? action.lines : entry.lines, query: action.query }
-            : { ...entry, key };
-      return { ...state, stack };
-    }
-  }
-}
 
 /** 탐색으로 온 화면에서 이 방향 키는 바로 아래 화면으로 돌아가는 것이다. */
 export const backDirectionOf = (via: StackEntry["via"]) =>

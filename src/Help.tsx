@@ -1,11 +1,13 @@
 // `?` 도움말. 키맵은 CLAUDE.md를 따른다. 아직 없는 기능은 어느 마일스톤에서 붙는지 적는다.
 import { openNotices } from "./notices/Notices";
+import { IS_MAC, MOD } from "./workspace/keys";
 
 type Key = { keys: string; what: string; note?: string; planned?: boolean };
 
 const COMMON: Key[] = [
   { keys: ": / Ctrl+Shift+P", what: "명령 팔레트", note: "macOS ⌘⇧P · 할 일을 이름·초성으로 찾는다" },
   { keys: "f / Ctrl+P", what: "파일 찾기 (Quick Open)", note: "macOS ⌘P · 초성 ㅍㅇ · 파일:줄 · Shift+Enter 히스토리" },
+  { keys: "Ctrl+O", what: "저장소 열기", note: "macOS ⌘O · 폴더나 파일을 창에 끌어 놓아도 연다" },
   { keys: "o", what: "에디터로 열기", note: "VS Code·Zed 등 작업트리 파일의 그 줄, PLX_EDITOR로 고른다" },
   { keys: "W", what: "워크트리 고르기", note: "그 워크트리의 같은 화면으로" },
   { keys: "q", what: "뒤로", note: "맨 앞 화면이면 창 숨기기" },
@@ -14,9 +16,22 @@ const COMMON: Key[] = [
   { keys: "Esc", what: "닫기" },
 ];
 
-export type HelpView = "blame" | "commit" | "history" | "graph";
+/** 작업 공간(트리·탭·패널) 키. 어느 화면에서든 받는다. */
+const WORKSPACE: Key[] = [
+  { keys: `${MOD}B`, what: "파일 트리 보이기·숨기기" },
+  { keys: IS_MAC ? "⌘⇧E" : "Ctrl+Shift+E", what: "파일 트리로", note: "Esc로 돌아온다" },
+  { keys: `${MOD}J`, what: "아래 패널 열기·닫기", note: "히스토리·그래프·커밋 상세" },
+  { keys: "Ctrl+Tab / Ctrl+Shift+Tab", what: "다음·이전 탭", note: "Ctrl+PageDown·PageUp" },
+  { keys: `${MOD}W`, what: "탭 닫기", note: "탭이 없으면 창 숨기기 · 가운데 단추로 탭을 눌러도 닫는다" },
+];
+
+/** 파일 트리에는 없는 화면 키(에디터로 열기, 워크트리, 뒤로) */
+const TREE_SKIPS = new Set(["o", "W", "q"]);
+
+export type HelpView = "workspace" | "blame" | "commit" | "history" | "graph";
 
 const TITLES: Record<HelpView, string> = {
+  workspace: "파일 트리",
   blame: "blame",
   commit: "커밋 상세",
   history: "파일 히스토리",
@@ -24,6 +39,15 @@ const TITLES: Record<HelpView, string> = {
 };
 
 const KEYS: Record<HelpView, Key[]> = {
+  workspace: [
+    { keys: "j / k", what: "아래·위 파일" },
+    { keys: "→ / ←", what: "폴더 펼치기·접기", note: "l·h, 접힌 다음 ←는 부모 폴더로" },
+    { keys: "Enter", what: "탭으로 열기 (작업트리 blame)", note: "폴더면 펼치기·접기 · 마우스로 두 번 누르기와 같다" },
+    { keys: "Space", what: "미리보기로 열기", note: "마우스로 한 번 누르기와 같다 · 다음 미리보기가 그 탭 자리에 열린다" },
+    { keys: "Esc / q", what: "에디터로 돌아가기" },
+    { keys: "G", what: "커밋 그래프 (아래 패널)" },
+    { keys: "b", what: "blame 거터 보이기·숨기기" },
+  ],
   blame: [
     { keys: "j / k", what: "아래·위 줄" },
     { keys: "J / K", what: "줄 선택 넓히기 (라인 히스토리 범위)" },
@@ -38,6 +62,8 @@ const KEYS: Record<HelpView, Key[]> = {
     { keys: "H", what: "파일 히스토리 (이 리비전부터)" },
     { keys: "L", what: "라인 히스토리 (선택한 줄, 없으면 커서 줄)" },
     { keys: "G", what: "커밋 그래프 (이 줄의 커밋을 골라서)" },
+    { keys: "b", what: "blame 거터 보이기·숨기기", note: "끄면 커서 줄 끝에만 blame 한 줄" },
+    { keys: "Ctrl+G", what: "줄로 이동", note: "상태 막대의 줄·열을 눌러도 된다" },
   ],
   commit: [
     { keys: "j / k", what: "다음·이전 파일" },
@@ -73,13 +99,14 @@ const KEYS: Record<HelpView, Key[]> = {
 };
 
 export function Help({ view, onClose }: { view: HelpView; onClose(): void }) {
+  const rows = [...KEYS[view], ...WORKSPACE, ...COMMON.filter((key) => view !== "workspace" || !TREE_SKIPS.has(key.keys))];
   return (
     <div className="overlay" role="dialog" aria-label="단축키" onClick={onClose}>
       <div className="help" onClick={(e) => e.stopPropagation()}>
         <h2>단축키 · {TITLES[view]}</h2>
         <table>
           <tbody>
-            {[...KEYS[view], ...COMMON].map(({ keys, what, note, planned }) => (
+            {rows.map(({ keys, what, note, planned }) => (
               <tr key={keys} className={planned ? "planned" : undefined}>
                 <td>
                   <kbd>{keys}</kbd>
@@ -92,6 +119,10 @@ export function Help({ view, onClose }: { view: HelpView; onClose(): void }) {
             ))}
           </tbody>
         </table>
+        <p className="muted help-footer">
+          마우스로도 모두 한다: 맨 위 도구 막대, {IS_MAC ? "화면 위 메뉴 막대" : "왼쪽 위 메뉴(파일 · 보기 · 화면 이름 · 도움말)"},
+          줄·행·파일·탭의 우클릭 메뉴. 메뉴에 단축키가 함께 보인다.
+        </p>
         <p className="muted help-footer">
           <button
             type="button"

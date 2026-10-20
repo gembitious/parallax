@@ -26,3 +26,5 @@ plx-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2.12.4", features = ["tray-icon"] }
+# 저장소 폴더 고르기(OS 폴더 창). Rust에서만 부르고 웹뷰에는 dialog 권한을 주지 않는다.
+tauri-plugin-dialog = "2.8.3"

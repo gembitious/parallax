@@ -105,6 +105,40 @@ impl FileList {
             .ok()
     }
 
+    /// `dir`(저장소 기준, 루트는 빈 문자열) 바로 아래의 폴더와 파일 이름. 인덱스 순서(바이트 순서)다.
+    ///
+    /// 한 폴더 아래 경로는 정렬된 목록에서 한 구간이라 접두어 구간만 보고, 하위 폴더의 경로는 그 구간 끝까지
+    /// 한 번에 건너뛴다(큰 저장소의 루트도 하위 폴더 수만큼만 찾는다).
+    pub fn children(&self, dir: &str) -> (Vec<&str>, Vec<&str>) {
+        let dir = dir.trim_matches('/');
+        let prefix = if dir.is_empty() {
+            String::new()
+        } else {
+            format!("{dir}/")
+        };
+        let mut dirs = Vec::new();
+        let mut files = Vec::new();
+        let mut i = self
+            .paths
+            .partition_point(|p| p.as_bytes() < prefix.as_bytes());
+        while let Some(rest) = self.paths.get(i).and_then(|p| p.strip_prefix(&prefix)) {
+            match rest.find('/') {
+                Some(slash) => {
+                    let name = &rest[..slash];
+                    dirs.push(name);
+                    // `<prefix><name>/`로 시작하는 경로는 `<prefix><name>0`보다 앞이다('/' 다음 바이트가 '0').
+                    let end = format!("{prefix}{name}0");
+                    i += self.paths[i..].partition_point(|p| p.as_bytes() < end.as_bytes());
+                }
+                None => {
+                    files.push(rest);
+                    i += 1;
+                }
+            }
+        }
+        (dirs, files)
+    }
+
     fn tier(&self, matcher: &mut Matcher, query: &Query, i: usize) -> Option<i32> {
         let meta = &self.meta[i];
         match &meta.chars {
@@ -196,6 +230,26 @@ pub struct FileMatch {
     /// 맞은 글자 위치(유니코드 코드 포인트 단위, 오름차순)
     pub positions: Vec<u32>,
     /// 인덱스에는 있지만 작업트리에 없다(지우고 아직 커밋하지 않았다). 작업트리 blame을 열 수 없다.
+    pub missing: bool,
+}
+
+/// 파일 트리의 폴더 하나: 바로 아래 폴더와 파일(인덱스 순서. 화면이 이름 순으로 늘어놓는다).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirListing {
+    /// 작업트리 경로
+    pub repo: String,
+    /// 저장소 기준 폴더(`/` 구분, 루트는 빈 문자열)
+    pub dir: String,
+    pub dirs: Vec<String>,
+    pub files: Vec<DirFile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirFile {
+    pub name: String,
+    /// 인덱스에는 있지만 작업트리에 없다(지우고 아직 커밋하지 않았다)
     pub missing: bool,
 }
 
@@ -370,6 +424,33 @@ impl FileLists {
         })
     }
 
+    /// 파일 트리: `dir`(저장소 기준, 루트는 빈 문자열) 바로 아래의 추적 폴더·파일. 목록은 Quick Open과 같다
+    /// (인덱스가 바뀌었으면 다시 읽는다).
+    pub fn list_dir(&self, repo: &Repo, dir: &str) -> Result<DirListing, String> {
+        let files = self.files(repo);
+        let list = {
+            let mut state = lock_or_reset(&files.state);
+            state.refresh(repo)?;
+            state.loaded.as_ref().expect("방금 읽었다").1.clone()
+        };
+        let dir = dir.trim_matches('/');
+        let (dirs, names) = list.children(dir);
+        let missing = missing_in_dir(&repo.workdir().join(dir), &names);
+        Ok(DirListing {
+            repo: repo.workdir().display().to_string(),
+            dir: dir.to_owned(),
+            dirs: dirs.into_iter().map(str::to_owned).collect(),
+            files: names
+                .into_iter()
+                .zip(missing)
+                .map(|(name, missing)| DirFile {
+                    name: name.to_owned(),
+                    missing,
+                })
+                .collect(),
+        })
+    }
+
     /// 최근 연 파일로 기억한다(빈 검색어일 때 앞에 보인다).
     pub fn touch(&self, repo: &Repo, path: &str) {
         let files = self.files(repo);
@@ -384,13 +465,38 @@ impl FileLists {
 /// 견주지 않는다: 지웠는지만 알면 된다). 디렉터리로 바뀐 경로도 파일로 열 수 없어 없는 것으로 본다.
 fn mark_missing(workdir: &Path, items: &mut [FileMatch]) {
     for item in items {
-        item.missing = match std::fs::symlink_metadata(workdir.join(&item.path)) {
-            Ok(meta) => meta.is_dir(),
-            Err(e) => matches!(
-                e.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-            ),
-        };
+        item.missing = missing_in_worktree(&workdir.join(&item.path));
+    }
+}
+
+/// 폴더 `dir` 안의 `names` 가운데 작업트리에 없는 것. 폴더를 한 번 읽어 견주고(파일마다 열어 보지 않는다. Windows는
+/// 파일 하나 여는 데도 비싸다), 이름이 그대로 맞지 않는 것(대소문자를 가리지 않는 파일 시스템, NFD로 저장한 한글
+/// 이름)만 따로 확인한다.
+fn missing_in_dir(dir: &Path, names: &[&str]) -> Vec<bool> {
+    let mut on_disk = HashMap::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            // 심볼릭 링크는 따라가지 않는다(`missing_in_worktree`의 symlink_metadata와 같다).
+            let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
+            on_disk.insert(entry.file_name(), is_dir);
+        }
+    }
+    names
+        .iter()
+        .map(|name| match on_disk.get(std::ffi::OsStr::new(name)) {
+            Some(is_dir) => *is_dir,
+            None => missing_in_worktree(&dir.join(name)),
+        })
+        .collect()
+}
+
+fn missing_in_worktree(path: &Path) -> bool {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta.is_dir(),
+        Err(e) => matches!(
+            e.kind(),
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+        ),
     }
 }
 
@@ -570,6 +676,85 @@ mod tests {
     }
 
     const NEVER: &(dyn Fn() -> bool + Sync) = &|| false;
+
+    #[test]
+    fn lists_one_directory() {
+        let files = list(&[
+            "README.md",
+            "a.txt",
+            "a/b.txt",
+            "a/c/d.txt",
+            "a/c/e/f.txt",
+            "a-b/x.txt",
+            "a0.txt",
+            "b/한글 파일.md",
+            "src/main.rs",
+        ]);
+        // '-'·'.'은 '/'보다 앞이라 `a-b/`·`a.txt`가 `a/` 구간 앞에, `a0.txt`가 뒤에 온다.
+        assert_eq!(
+            files.children(""),
+            (
+                vec!["a-b", "a", "b", "src"],
+                vec!["README.md", "a.txt", "a0.txt"]
+            )
+        );
+        assert_eq!(files.children("a"), (vec!["c"], vec!["b.txt"]));
+        assert_eq!(files.children("a/"), (vec!["c"], vec!["b.txt"]));
+        assert_eq!(files.children("a/c"), (vec!["e"], vec!["d.txt"]));
+        assert_eq!(files.children("b"), (vec![], vec!["한글 파일.md"]));
+        // 파일이나 없는 폴더 아래는 비었다.
+        assert_eq!(files.children("a.txt"), (vec![], vec![]));
+        assert_eq!(files.children("없음"), (vec![], vec![]));
+        assert_eq!(FileList::default().children(""), (vec![], vec![]));
+    }
+
+    #[test]
+    fn walking_the_tree_lists_every_path_once() {
+        // 서로 접두어인 이름('a', 'a-b', 'a.b', 'a0')이 많은 작은 이름 집합으로 경로를 만든다.
+        const NAMES: [&str; 6] = ["a", "a-b", "a.b", "a0", "b", "한"];
+        let mut seed = 0x2545_F491_4F6C_DD1D_u64;
+        let mut below = |n: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % n as u64) as usize
+        };
+        for _ in 0..300 {
+            let mut paths: Vec<String> = (0..below(30))
+                .map(|_| {
+                    (0..1 + below(3))
+                        .map(|_| NAMES[below(NAMES.len())])
+                        .collect::<Vec<_>>()
+                        .join("/")
+                })
+                .collect();
+            paths.sort();
+            paths.dedup();
+            // 인덱스에는 파일과 같은 이름의 폴더가 함께 있을 수 없다.
+            let all = paths.clone();
+            paths.retain(|p| !all.iter().any(|q| q.starts_with(&format!("{p}/"))));
+            let files = list(&paths.iter().map(String::as_str).collect::<Vec<_>>());
+            let mut walked = Vec::new();
+            walk(&files, "", &mut walked);
+            walked.sort();
+            assert_eq!(walked, paths);
+        }
+    }
+
+    fn walk(files: &FileList, dir: &str, out: &mut Vec<String>) {
+        let (dirs, names) = files.children(dir);
+        let join = |name: &str| {
+            if dir.is_empty() {
+                name.to_owned()
+            } else {
+                format!("{dir}/{name}")
+            }
+        };
+        out.extend(names.into_iter().map(join));
+        for sub in dirs {
+            walk(files, &join(sub), out);
+        }
+    }
 
     #[test]
     fn ranks_and_highlights() {

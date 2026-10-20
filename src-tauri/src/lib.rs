@@ -1,5 +1,7 @@
 mod git;
 mod instance;
+mod menu;
+mod open;
 mod perf;
 mod tray;
 mod window;
@@ -33,6 +35,7 @@ pub fn run() {
     std::thread::spawn(plx_core::git::warm_up);
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(requests.clone())
         .manage(perf::Perf::from_env(t_main_ms))
         .invoke_handler(tauri::generate_handler![
@@ -55,6 +58,8 @@ pub fn run() {
             git::worktrees,
             git::files_search,
             git::files_touch,
+            git::files_dir,
+            git::repo_state,
             git::open_in_editor,
             git::ai_attribution,
             git::unwatch_repo,
@@ -65,14 +70,23 @@ pub fn run() {
             git::file_versions,
             git::file_stats,
             instance::current_request,
+            open::open_path,
+            open::open_dialog,
+            open::recent_repos,
+            open::forget_recent,
+            open::cli_status,
+            open::install_cli,
             window::app_ready,
             window::hide_window,
+            window::quit_app,
             window::set_window_title,
+            menu::set_app_menu,
             perf::perf_info,
             perf::perf_record,
             perf::perf_ping,
             perf::perf_stream,
         ])
+        .on_menu_event(|app, event| menu::on_menu_event(app, event.id().as_ref()))
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
@@ -95,9 +109,16 @@ pub fn run() {
             }));
             app.manage(git.clone());
             std::thread::spawn(move || git.prune_cache());
+            // 최근 저장소는 앱 데이터 위치(macOS ~/Library/Application Support, Windows %APPDATA%, Linux
+            // ~/.local/share)에 둔다. 요청을 보낼 때마다 고치므로 요청을 붙이기(attach) 전에 둔다.
+            app.manage(Arc::new(plx_core::recent::Recent::load(
+                open::data_dir(app).as_deref(),
+            )));
             tray::create(app)?;
             window::show_if_not_ready(app.handle().clone());
             requests.attach(app.handle().clone());
+            #[cfg(target_os = "macos")]
+            open::open_pending(app.handle());
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -110,6 +131,9 @@ pub fn run() {
             has_visible_windows: false,
             ..
         } => window::show_main(_app),
+        // Dock 아이콘에 놓은 폴더, `open -a parallax <폴더>`(Info.plist의 폴더 문서 형식)
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Opened { urls } => open::opened(_app, urls),
         tauri::RunEvent::Exit => server.close(),
         _ => {}
     });

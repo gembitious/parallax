@@ -14,6 +14,7 @@ use crate::repo::Repo;
 pub const USAGE: &str = "\
 사용법:
   plx                          현재 저장소 그래프
+  plx <dir>                    그 폴더의 저장소 그래프
   plx <file>[:<line>]          blame, 해당 줄 선택
   plx log <file>               파일 히스토리
   plx log -L <a>,<b>:<file>    라인 범위 히스토리
@@ -57,6 +58,16 @@ impl Request {
             Request::Show { rev } => format!("show {rev}"),
         }
     }
+
+    /// 대상 저장소를 찾을 경로: 파일을 준 요청은 그 파일, 나머지는 `cwd`.
+    pub fn repo_path<'a>(&'a self, cwd: &'a Path) -> &'a Path {
+        match self {
+            Request::Graph | Request::Show { .. } => cwd,
+            Request::Blame { path, .. } | Request::Log { path } | Request::LineLog { path, .. } => {
+                path
+            }
+        }
+    }
 }
 
 /// 경로를 `/` 구분으로 쓴다. Unix에서 `\`는 파일 이름의 일부일 수 있으므로 Windows에서만 바꾼다.
@@ -73,6 +84,8 @@ fn slashed(path: &Path) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Parsed {
     Request(Request),
+    /// `plx <폴더>`: 그 폴더에서 부른 인자 없는 `plx`와 같다(그 저장소의 그래프). cwd 기준으로 푼 절대 경로다.
+    Open(PathBuf),
     Help,
     Version,
 }
@@ -142,11 +155,8 @@ pub fn printable(text: &str) -> String {
 /// 상주 인스턴스에 넘기기 전에 대상 저장소를 앱과 같은 방법으로 열어 본다(저장소 밖의 시스템 설정만 빼고:
 /// [`Repo::discover_for_check`]). 저장소가 아니거나 `plx show`의 리비전이 없으면 창을 띄우지 않고 이 터미널에서 알린다.
 pub fn check_repo(request: &Request, cwd: &Path) -> Result<(), CliError> {
-    let path = match request {
-        Request::Graph | Request::Show { .. } => cwd,
-        Request::Blame { path, .. } | Request::Log { path } | Request::LineLog { path, .. } => path,
-    };
-    let repo = Repo::discover_for_check(path).map_err(|e| CliError(e.to_string()))?;
+    let repo =
+        Repo::discover_for_check(request.repo_path(cwd)).map_err(|e| CliError(e.to_string()))?;
     if let Request::Show { rev } = request {
         repo.resolve_commit(rev)
             .map_err(|e| CliError(e.to_string()))?;
@@ -184,18 +194,27 @@ pub fn parse(
         "-V" | "--version" => return Ok(Parsed::Version),
         "--" => match rest {
             [] => Request::Graph,
-            [spec] => blame(spec, cwd, &stat)?,
+            [spec] => return target(spec, cwd, &stat),
             _ => return err("파일은 하나만 줄 수 있다"),
         },
         "log" => log(rest, cwd)?,
         "show" => show(rest)?,
         option if option.starts_with('-') => return err(format!("알 수 없는 옵션: {option}")),
         spec => match rest {
-            [] => blame(spec, cwd, &stat)?,
+            [] => return target(spec, cwd, &stat),
             _ => return err("파일은 하나만 줄 수 있다"),
         },
     };
     Ok(Parsed::Request(request))
+}
+
+/// `plx <폴더>`는 그 저장소를 열고, 나머지는 파일 blame이다.
+fn target(spec: &str, cwd: &Path, stat: &impl Fn(&Path) -> PathKind) -> Result<Parsed, CliError> {
+    let path = resolve(cwd, spec);
+    if !spec.is_empty() && stat(&path) == PathKind::Dir {
+        return Ok(Parsed::Open(path));
+    }
+    blame(spec, cwd, stat).map(Parsed::Request)
 }
 
 /// `<file>[:<line>]`, 컴파일러·grep이 쓰는 `<file>:<line>:<column>`(열은 버린다).
@@ -573,11 +592,21 @@ mod tests {
     }
 
     #[test]
+    fn directory_opens_its_repository() {
+        let fs = Fs::new();
+        assert_eq!(fs.parse(&["src"]), Ok(Parsed::Open(fs.path("src"))));
+        assert_eq!(fs.parse(&["./src/"]), Ok(Parsed::Open(fs.path("src"))));
+        assert_eq!(fs.parse(&["--", "src"]), Ok(Parsed::Open(fs.path("src"))));
+        // 줄을 붙이면 파일이어야 한다.
+        assert!(fs.error(&["src:3"]).starts_with("디렉터리는"));
+        assert_eq!(fs.error(&["src", "main.rs"]), "파일은 하나만 줄 수 있다");
+    }
+
+    #[test]
     fn blame_errors() {
         let fs = Fs::new();
         assert!(fs.error(&["missing.rs"]).starts_with("파일이 없다"));
         assert!(fs.error(&["missing.rs:3"]).starts_with("파일이 없다"));
-        assert!(fs.error(&["src"]).starts_with("디렉터리는"));
         assert!(fs.error(&["src:3"]).starts_with("디렉터리는"));
         assert_eq!(fs.error(&["main.rs:0"]), "줄 번호는 1부터 센다");
         assert!(

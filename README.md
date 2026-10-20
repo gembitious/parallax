@@ -1,18 +1,20 @@
 # parallax
 
 로컬 git 이력을 생각하는 속도로 보는 **읽기 전용** 데스크탑 뷰어(이름은 가칭).
-터미널에서 `plx <파일>:<줄>` 한 번으로 blame을 열고, 줄 → 커밋 → 부모 리비전 blame → 파일·라인 히스토리 →
-커밋 그래프를 키보드로 오간다. 편집·스테이징·커밋처럼 저장소를 바꾸는 일은 하지 않는다.
+앱 첫 화면에서 저장소를 고르거나(최근 저장소, 폴더 끌어 놓기) 터미널에서 `plx <파일>:<줄>` 한 번으로 연다.
+읽기 전용 에디터 모습(파일 트리·탭·커서 줄 blame)이고, 줄 → 커밋 → 부모 리비전 blame → 파일·라인 히스토리 → 커밋
+그래프를 도구 막대·메뉴·우클릭으로, 또는 키보드로 오간다. 편집·스테이징·커밋처럼 저장소를 바꾸는 일은 하지 않는다.
 
 Tauri 2 + Rust(`gix`, git CLI) + React. Windows와 macOS를 1급으로 지원한다(Linux도 CI에서 확인한다).
 
-**상태:** 개발 중. M0~M5 기능은 구현했고 Windows·macOS 화면 확인이 남았다([docs/MILESTONES.md](docs/MILESTONES.md)).
+**상태:** 개발 중. M0~M6(앱으로 열기, 에디터 화면, 마우스 조작)을 구현했고 Windows·macOS 화면 확인이 남았다
+([docs/MILESTONES.md](docs/MILESTONES.md)).
 
 ## 설치
 
 [Releases](https://github.com/gembitious/parallax/releases)에서 받는다: Windows(x64) 설치 프로그램 또는 설치 없이 쓰는 zip,
-macOS(Apple Silicon) DMG, Linux deb. 코드 서명을 하지 않은 빌드라 처음 실행할 때 OS가 막으면 릴리스 설명의 안내대로 연다
-(macOS는 `plx` 명령을 설치하는 `install-macos-shim.sh`도 함께 받는다).
+macOS(Apple Silicon) DMG, Linux deb. 코드 서명을 하지 않은 빌드라 처음 실행할 때 OS가 막으면 릴리스 설명의 안내대로 연다.
+터미널 명령 `plx`는 앱 첫 화면의 "터미널 명령 설치"로 넣는다(앱만 써도 된다).
 
 ## 빌드
 

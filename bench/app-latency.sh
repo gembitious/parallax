@@ -49,7 +49,7 @@ cleanup() {
     # 다음 측정이 이 인스턴스에 넘어가지 않게 끝날 때까지 기다린다.
     wait "$primary" 2>/dev/null || true
   fi
-  rm -rf "$log" "$log.files" "$log.logs" "$log.cache"
+  rm -rf "$log" "$log.files" "$log.logs" "$log.cache" "$log.data"
 }
 trap cleanup EXIT
 
@@ -64,6 +64,17 @@ wait_for() {
 }
 
 total_of() { sed -n 's/.*"totalMs":\([0-9.]*\).*/\1/p'; }
+
+# 기록이 나오지 않으면 그 까닭과 기록의 끝(종류 · 이름 · ok · 자세히: 화면이 그린 것, 백엔드 요청, 잡지 못한 오류)을
+# 보이고 끝낸다.
+fail() { # fail <설명>
+  echo "$1" >&2
+  echo "--- 기록 끝 20줄" >&2
+  tail -n 20 "$log" 2>/dev/null | perl -ne 'my ($k, $l) = /"kind":"([^"]*)","label":"((?:[^"\\]|\\.)*)"/ or next;
+    my ($d) = /"detail":"((?:[^"\\]|\\.)*)"/;
+    print "$k · $l · ok=", (/"ok":true/ ? "true" : "false"), (defined $d ? " · $d" : ""), "\n"' >&2 || true
+  exit 1
+}
 
 # 기록에 문자열이 든 줄이 n개가 될 때까지 기다린다(최대 약 15초).
 wait_lines() { # wait_lines <문자열> <개수>
@@ -86,22 +97,26 @@ summary() {
 cd "$root"
 target="bench/app-latency.sh" # 콜드 스타트 대상: 이 스크립트 자신(항상 있는 파일)
 # 사용자 캐시와 섞이지 않게, 그리고 처음 여는 파일은 반드시 git blame을 돌게 빈 캐시로 시작한다.
+# 연 저장소가 사용자의 최근 저장소에 남지 않게 앱 데이터도 따로 둔다.
 cache_dir="$log.cache"
+data_dir="$log.data"
 half=$(((runs + 1) / 2))
 files="$log.files"
+# head 대신 sed로 앞 줄만 고른다: head가 먼저 끝나면 목록이 파이프 버퍼(4KB)보다 길 때 grep이 SIGPIPE로 죽고,
+# pipefail이라 스크립트가 아무 말 없이 끝난다.
 git -c core.quotepath=false ls-files -- '*.rs' '*.ts' '*.tsx' '*.sh' '*.md' '*.toml' |
-  LC_ALL=C grep -vxF "$target" | head -n "$half" >"$files"
+  LC_ALL=C grep -vxF "$target" | sed -n "1,${half}p" >"$files"
 if [ "$(wc -l <"$files" | tr -d ' ')" -lt "$half" ]; then
   echo "blame할 파일이 ${half}개보다 적다($root)" >&2
   exit 1
 fi
 
 # 콜드 스타트. 분리 실행을 끄고 셸의 자식으로 띄워 끝날 때 정리한다.
-PLX_PERF=1 PLX_PERF_LOG="$log" PLX_CACHE_DIR="$cache_dir" PLX_DETACH=0 "$bin" "$target" >/dev/null 2>&1 &
+PLX_PERF=1 PLX_PERF_LOG="$log" PLX_CACHE_DIR="$cache_dir" PLX_DATA_DIR="$data_dir" PLX_DETACH=0 "$bin" "$target" >/dev/null 2>&1 &
 primary=$!
 if ! wait_for '"kind":"cold"'; then
   if kill -0 "$primary" 2>/dev/null; then
-    echo "콜드 스타트 기록이 15초 안에 나오지 않았다." >&2
+    fail "콜드 스타트 기록이 15초 안에 나오지 않았다."
   else
     status=0
     wait "$primary" || status=$?
@@ -129,12 +144,10 @@ for pass in 1 2; do
     shell_ms="$shell_ms$(awk -v s="$start" -v e="$end" 'BEGIN { printf "%.1f", e - s }')
 "
     if ! wait_for "\"label\":\"blame $file:$pass\""; then
-      echo "$file:$pass 호출 기록이 나오지 않았다." >&2
-      exit 1
+      fail "$file:$pass 호출 기록이 나오지 않았다."
     fi
     if ! wait_lines '"kind":"blame"' $((calls + 1)); then
-      echo "$file:$pass 호출의 blame 기록이 나오지 않았다." >&2
-      exit 1
+      fail "$file:$pass 호출의 blame 기록이 나오지 않았다."
     fi
   done <"$files"
 done
@@ -145,8 +158,7 @@ shows=5
 for i in $(seq 1 "$shows"); do
   "$bin" show HEAD >/dev/null
   if ! wait_lines '"kind":"commit"' "$i"; then
-    echo "${i}번째 plx show의 커밋 상세 기록이 나오지 않았다." >&2
-    exit 1
+    fail "${i}번째 plx show의 커밋 상세 기록이 나오지 않았다."
   fi
 done
 read -r commit_med commit_p90 commit_max <<<"$(LC_ALL=C grep -F '"kind":"commit"' "$log" | total_of | summary)"
@@ -159,8 +171,7 @@ for pass in 1 2; do
     logs=$((logs + 1))
     "$bin" log "$file" >/dev/null
     if ! wait_lines '"kind":"history"' "$logs"; then
-      echo "plx log $file 의 히스토리 기록이 나오지 않았다." >&2
-      exit 1
+      fail "plx log $file 의 히스토리 기록이 나오지 않았다."
     fi
   done <"$log.logs"
 done
@@ -176,12 +187,11 @@ graphs=5
 for i in $(seq 1 "$graphs"); do
   "$bin" >/dev/null
   if ! wait_lines '"kind":"graph"' "$i"; then
-    echo "${i}번째 plx(그래프)의 기록이 나오지 않았다." >&2
-    exit 1
+    fail "${i}번째 plx(그래프)의 기록이 나오지 않았다."
   fi
 done
 read -r graph_med graph_p90 graph_max <<<"$(LC_ALL=C grep -F '"kind":"graph"' "$log" | total_of | summary)"
-graph_rows="$(LC_ALL=C grep -F '"kind":"graph"' "$log" | head -n 1 | sed -n 's/.*"detail":"커밋 \([0-9]*\).*/\1/p')"
+graph_rows="$(LC_ALL=C grep -m 1 -F '"kind":"graph"' "$log" | sed -n 's/.*"detail":"커밋 \([0-9]*\).*/\1/p')"
 
 warm_blame="$(LC_ALL=C grep -F '"kind":"blame"' "$log" | LC_ALL=C grep -vF '(콜드 스타트)' || true)"
 git_blame="$(printf '%s\n' "$warm_blame" | LC_ALL=C grep -vF '(캐시)' || true)"
