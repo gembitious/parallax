@@ -134,14 +134,31 @@ wait_count() { # wait_count <기대 개수> — 프로세스 수가 그 값이 �
   done
 }
 
+# 기록 줄(JSON) → "종류 · 이름 · ok · 자세히". 화면이 그린 것, 백엔드 요청(ipc, 실패하면 까닭), 잡지 못한 오류(error)다.
+records() {
+  perl -ne 'my ($k, $l) = /"kind":"([^"]*)","label":"((?:[^"\\]|\\.)*)"/ or next;
+    my ($d) = /"detail":"((?:[^"\\]|\\.)*)"/;
+    print "$k · $l · ok=", (/"ok":true/ ? "true" : "false"), (defined $d ? " · $d" : ""), "\n"'
+}
+
 passed=0
 failed=0
 report=""
+explained=0
 result() { # result <PASS|FAIL> <설명>
   echo "$1  $2"
   report="$report- $1 $2
 "
   if [ "$1" = PASS ]; then passed=$((passed + 1)); else failed=$((failed + 1)); fi
+  # 처음 실패하면 그때까지 화면이 남긴 기록의 끝과 상주 인스턴스의 출력을 보인다(CI처럼 화면을 볼 수 없는 곳).
+  if [ "$1" = FAIL ] && [ "$explained" -eq 0 ]; then
+    explained=1
+    echo "--- 기록 끝 40줄 (종류 · 이름 · ok · 자세히)"
+    tail -n 40 "$log" 2>/dev/null | records || true
+    echo "--- 상주 인스턴스의 출력 (끝 20줄)"
+    tail -n 20 "$work/primary.log" 2>/dev/null || true
+    echo "---"
+  fi
 }
 check() { # check <설명> <명령...>
   local what="$1"
@@ -354,6 +371,12 @@ check "연 저장소가 최근 저장소에 최근 순으로 남음 (한글 저�
 check "상주 인스턴스는 하나" test "$(plx_count)" -eq 1
 
 # 3. 동시 실행 ------------------------------------------------------------
+# 앞에서 실패했으면 그 뒤 같은 인스턴스가 남긴 기록을 보인다(화면이 아직 요청을 받는지).
+if [ "$failed" -gt 0 ]; then
+  echo "--- 상주 인스턴스를 끝내기 전의 기록 끝 15줄"
+  tail -n 15 "$log" 2>/dev/null | records || true
+  echo "---"
+fi
 stop_all
 pids=""
 for i in 1 2 3 4 5; do
@@ -429,6 +452,10 @@ esac
 
 if LC_ALL=C grep -qF '"ok":false' "$log"; then
   echo "주의: 페인트를 측정하지 못한 기록이 있다(창이 화면에 그려지지 않는 환경일 수 있다)."
+fi
+if LC_ALL=C grep -qF '"kind":"error"' "$log"; then
+  echo "주의: 화면에서 잡지 못한 오류가 있었다."
+  LC_ALL=C grep -F '"kind":"error"' "$log" | records || true
 fi
 
 # 6. 지연 ------------------------------------------------------------------

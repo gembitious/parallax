@@ -10,9 +10,9 @@ export type Entry = {
    * cold: 콜드 스타트, plx: 상주 인스턴스로 온 호출, blame: blame 요청(첫 줄 표시까지),
    * commit: 커밋 상세(첫 diff 표시까지), history: 파일 히스토리(첫 50개 표시까지), graph: 커밋 그래프(첫 화면 표시까지),
    * files: Quick Open(글자마다 결과 표시까지), scroll: 스크롤 한 번의 프레임(간격 p95), ipc: 백엔드 요청, probe: 측정 버튼,
-   * menu: macOS 메뉴 막대 만들기
+   * menu: macOS 메뉴 막대 만들기, error: 화면에서 잡지 못한 오류(예외, 처리하지 않은 거부)
    */
-  kind: "cold" | "plx" | "blame" | "commit" | "history" | "graph" | "files" | "scroll" | "ipc" | "probe" | "menu";
+  kind: "cold" | "plx" | "blame" | "commit" | "history" | "graph" | "files" | "scroll" | "ipc" | "probe" | "menu" | "error";
   label: string;
   totalMs: number;
   phases: Phase[];
@@ -47,7 +47,10 @@ export const bootMarks = { modulesMs: 0 };
 
 export async function initPerf(): Promise<PerfInfo> {
   info = await invoke<PerfInfo>("perf_info");
-  if (info.enabled) watchLongFrames();
+  if (info.enabled) {
+    watchLongFrames();
+    watchErrors();
+  }
   notify();
   return info;
 }
@@ -72,6 +75,29 @@ export function record(entry: Omit<Entry, "id">): void {
 export function clearEntries(): void {
   entries = [];
   notify();
+}
+
+/** 기록에 남길 오류 문장(길면 자른다). */
+export function errorText(error: unknown, limit = 600): string {
+  const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  return text.length > limit ? `${text.slice(0, limit)}…` : text;
+}
+
+let watchingErrors = false;
+
+/**
+ * 화면에서 잡지 못한 오류(예외, 처리하지 않은 Promise 거부)를 기록한다. 릴리스 빌드에는 개발자 도구가 없어 PLX_PERF로
+ * 켠 HUD와 기록(PLX_PERF_LOG, 앱 자동 확인)에서 본다. React가 렌더 중 오류로 화면을 내리면 그 오류도 여기로 온다.
+ */
+function watchErrors(): void {
+  if (watchingErrors) return;
+  watchingErrors = true;
+  const report = (label: string, error: unknown) => {
+    const stack = error instanceof Error && error.stack ? error.stack.split("\n").slice(1, 6).join(" | ") : "";
+    record({ kind: "error", label, totalMs: 0, phases: [], detail: stack ? errorText(stack) : undefined, ok: false });
+  };
+  window.addEventListener("error", (e) => report(errorText(e.error ?? e.message), e.error));
+  window.addEventListener("unhandledrejection", (e) => report(`처리하지 않은 거부: ${errorText(e.reason)}`, e.reason));
 }
 
 /** 이어진 시각들 → 구간 길이. [["a", t0], ["b", t1], ["c", t2]] → [{a: t1-t0}, {b: t2-t1}] */
