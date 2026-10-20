@@ -32,7 +32,13 @@ pub fn create(app: &App) -> tauri::Result<()> {
                 window::show_main(tray.app_handle());
             }
         });
-    if let Some(icon) = app.default_window_icon() {
+    // macOS 메뉴 막대는 단색 템플릿 이미지가 관례다(시스템이 밝기·강조에 맞춰 칠한다).
+    // 나머지는 앱 아이콘(Windows는 실행 파일의 아이콘 리소스, Linux는 icons/32x32.png)을 쓴다.
+    if cfg!(target_os = "macos") {
+        tray = tray
+            .icon(tauri::include_image!("icons/tray-template.png"))
+            .icon_as_template(true);
+    } else if let Some(icon) = app.default_window_icon() {
         tray = tray.icon(icon.clone());
     }
     tray.build(app)?;

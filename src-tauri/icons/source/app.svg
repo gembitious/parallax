@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!--
+    parallax 앱 아이콘 (Windows·Linux). macOS는 app-macos.svg(여백과 그림자가 있는 판)를 쓴다.
+    겹친 층 셋은 시점에 따라 어긋나 보이는 이력(위가 최근, 색은 blame 거터처럼 오래될수록 차갑다),
+    그것을 꿰는 선과 점은 커밋이다. 그림(층·선·점)은 824 상자 좌표로, app-macos.svg와 같다.
+    파일을 고치면 scripts/make-icons.sh로 src-tauri/icons의 아이콘을 다시 만든다.
+  -->
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1c2638"/>
+      <stop offset="1" stop-color="#0b0f17"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="230" fill="url(#plate)"/>
+  <g transform="scale(1.2427)">
+    <!-- 아래 층(오래됨): 파랑 -->
+    <path d="M106,572 L368,703 L368,733 L106,602 Z" fill="#2f6fc4"/>
+    <path d="M368,703 L630,572 L630,602 L368,733 Z" fill="#21539a"/>
+    <path d="M368,441 L630,572 L368,703 L106,572 Z" fill="#4493f8"/>
+    <path d="M106,572 L368,441 L630,572" fill="none" stroke="#cfe3ff" stroke-opacity="0.55" stroke-width="6" stroke-linejoin="round"/>
+    <!-- 가운데 층: 보라 -->
+    <path d="M150,397 L412,528 L412,558 L150,427 Z" fill="#7c4fd0"/>
+    <path d="M412,528 L674,397 L674,427 L412,558 Z" fill="#5f37a8"/>
+    <path d="M412,266 L674,397 L412,528 L150,397 Z" fill="#a371f7"/>
+    <path d="M150,397 L412,266 L674,397" fill="none" stroke="#e2d1ff" stroke-opacity="0.55" stroke-width="6" stroke-linejoin="round"/>
+    <!-- 위 층(최근): 주황 -->
+    <path d="M194,222 L456,353 L456,383 L194,252 Z" fill="#c4621d"/>
+    <path d="M456,353 L718,222 L718,252 L456,383 Z" fill="#9c4a12"/>
+    <path d="M456,91 L718,222 L456,353 L194,222 Z" fill="#f0883e"/>
+    <path d="M194,222 L456,91 L718,222" fill="none" stroke="#ffd2a8" stroke-opacity="0.55" stroke-width="6" stroke-linejoin="round"/>
+    <!-- 층을 꿰는 커밋 선과 점 -->
+    <polyline points="456,222 412,397 368,572" fill="none" stroke="#0b0f17" stroke-opacity="0.45" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="456,222 412,397 368,572" fill="none" stroke="#f0f6fc" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="456" cy="222" r="50" fill="#0b0f17" fill-opacity="0.45"/>
+    <circle cx="456" cy="222" r="40" fill="#f0f6fc"/>
+    <circle cx="456" cy="222" r="19" fill="#f0883e"/>
+    <circle cx="412" cy="397" r="50" fill="#0b0f17" fill-opacity="0.45"/>
+    <circle cx="412" cy="397" r="40" fill="#f0f6fc"/>
+    <circle cx="412" cy="397" r="19" fill="#a371f7"/>
+    <circle cx="368" cy="572" r="50" fill="#0b0f17" fill-opacity="0.45"/>
+    <circle cx="368" cy="572" r="40" fill="#f0f6fc"/>
+    <circle cx="368" cy="572" r="19" fill="#4493f8"/>
+  </g>
+</svg>

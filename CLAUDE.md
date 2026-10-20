@@ -54,9 +54,12 @@ GitLens의 핵심 흐름(줄 → 커밋 → 부모 리비전 blame → 파일·�
 ```
 crates/plx-core/   gix·git CLI 래퍼, 출력 파서, 캐시, 그래프 레인 레이아웃, plx 인자 파서, 인스턴스 간 전달(로컬 소켓)
                    (UI 무관, 단위 테스트 필수)
-src-tauri/         Tauri 명령·채널, 단일 인스턴스·CLI 호출을 창·트레이에 연결
-scripts/           설치·확인 스크립트 (macOS shim, 앱 자동 확인 check-app.sh), 오픈 소스 라이선스 고지 생성
-.github/workflows/ CI: Windows·macOS·Linux에서 검사(포맷·clippy·테스트)와 앱 확인(릴리스 빌드 + check-app.sh)
+src-tauri/         Tauri 명령·채널, 단일 인스턴스·CLI 호출을 창·트레이에 연결. 아이콘(icons/, 원본 SVG는 icons/source/)
+scripts/           설치·확인 스크립트 (macOS shim, 앱 자동 확인 check-app.sh), 오픈 소스 라이선스 고지 생성,
+                   아이콘 생성(make-icons.sh), 배포(collect-dist.sh, draft-release.sh, check-version.mjs)
+.github/workflows/ CI: Windows·macOS·Linux에서 검사(포맷·clippy·테스트)와 앱 확인(릴리스 빌드 + check-app.sh),
+                   확인을 통과한 설치 파일을 실행 결과(Artifacts)에 올리고 `v<버전>` 태그면 릴리스 초안을 만든다
+                   (릴리스 설명의 설치 안내: .github/release-notes.md)
 src/               React UI
 bench/             참조 저장소 준비 스크립트, git 측정 하네스(plx-bench), 앱 지연 측정, 측정 결과(results.md)
 fixtures/          테스트 저장소 생성 스크립트 (rename, 이동, merge, CRLF, 한글 경로·내용),
@@ -93,6 +96,14 @@ docs/              MILESTONES.md
   blame이 끝까지 와서 거터를 그리는지(한글 경로 저장소 포함) 확인과 지연 측정.
   `PLX_CHECK_RECORD=<이름>`이면 지연 표를 `bench/results.md`에 넣는다. CI도 이 스크립트를 돌린다.
 - 앱 지연만 측정: `bench/app-latency.sh [실행 파일] [반복 횟수]` → 콜드 스타트, plx 호출 → 첫 페인트, blame 첫 줄 표시
+- 설치 파일: `npm run tauri build -- --bundles nsis`(Windows) · `app,dmg`(macOS) · `deb`(Linux) →
+  `scripts/collect-dist.sh <디렉터리>`가 배포 이름으로 모은다. CI는 PR·main 커밋마다 앱 확인을 통과한 것을 실행 결과에
+  올린다(14일, 사람이 내려받아 화면을 확인한다: `docs/MANUAL_CHECKS.md` 0)
+- 릴리스: 버전을 올린다(`Cargo.toml`의 `[workspace.package]`, `npm version <버전> --no-git-tag-version`,
+  `src-tauri/tauri.conf.json`. `Cargo.lock`은 cargo가 고친다. `node scripts/check-version.mjs`가 모두 같은지 본다) →
+  main에 머지 → 그 커밋에 `v<버전>` 태그를 밀면(`git tag v<버전> && git push origin v<버전>`) CI가 검사·앱 확인을 거쳐
+  릴리스 초안을 만든다 → GitHub의 Releases에서 초안을 보고 게시한다
+- 앱 아이콘 다시 만들기(원본 `src-tauri/icons/source/*.svg`를 고친 뒤): `scripts/make-icons.sh`
 - git baseline: `bench/setup.sh`(참조 저장소 준비, 한 번) → `bench/run.sh [이름]`(측정 → `bench/results.md`)
 - gix-blame 다시 재기(gix를 올릴 때): `cargo run -p plx-bench --release --features gix-blame -- --repos bench/repos
   --cases bench/cases-gix-blame.txt` → 결과는 `bench/results.md`의 "gix-blame 전환 검토"에 옮긴다
@@ -365,3 +376,24 @@ macOS는 PATH에 셸 shim(`plx` → 앱 번들 실행 파일)을 둔다: `script
   파일을 읽는 둘(Quick Open 파일 목록, AI 노트)은 패닉이 지나간 잠금을 비우고 다시 쓴다(`requests::lock_or_reset`). 전에는
   앱을 다시 띄울 때까지 그 저장소의 검색·AI 표시가 모두 실패했다. 외부 입력을 읽는 파서 여덟은 고정 시드 변이 퍼징으로 본다
   (`tests/fuzz.rs`, CI는 대상마다 3,000번. 대상마다 30만~100만 번 돌려 본 것도 패닉이 없었다).
+- 2026-10-19: 배포. CI의 앱 확인이 실행 파일과 함께 설치 파일(Windows NSIS, macOS 앱 번들·DMG, Linux deb)을 만들고,
+  앱 자동 확인을 통과하면 실행 결과(Artifacts)에 파일마다 압축하지 않고 올린다(upload-artifact v7 `archive: false`,
+  14일. 받으면 그 파일이 그대로 온다). Windows는 설치 없이 쓰는 zip(`plx.exe`와 라이선스)도 올린다. `v<버전>` 태그를
+  밀면 같은 실행의 이 파일들로 릴리스 초안을 만든다(release 작업, `scripts/draft-release.sh`). 릴리스 워크플로를 따로
+  두지 않은 이유: 내는 파일이 세 플랫폼의 검사·앱 확인을 통과한 바로 그 빌드여야 하고, 설치 파일을 만드는 길이 PR마다
+  확인된다. 초안으로만 만들어 사람이 보고 게시하며, 이미 게시한 릴리스는 다시 돌려도 바꾸지 않는다. 태그는 앱 버전과
+  같아야 한다(`scripts/check-version.mjs`, 버전이 적힌 네 곳이 모두 같은지도 본다). 인증서가 없어 코드 서명·공증은
+  하지 않는다. macOS 번들은 ad-hoc 서명을 한다(`bundle.macOS.signingIdentity: "-"`, Tauri 기본값대로 hardened runtime):
+  서명이 없는 번들(링커 서명만)은 내려받으면 "손상됨"으로 열 수 없고, ad-hoc 서명은 격리 속성을 지우거나(`xattr`)
+  시스템 설정의 "그래도 열기"로 연다. macOS는 CI 러너와 같은 Apple Silicon용만 낸다(Intel까지 담는 universal 빌드는
+  앱 확인의 Rust 빌드가 두 배라 미룬다). Windows 설치 프로그램은 Tauri 기본값대로 사용자 범위(`%LOCALAPPDATA%\parallax`,
+  관리자 권한 없음)이고, 화면은 한국어(영어 Windows는 영어)다. PATH는 고치지 않는다(NSIS로 PATH를 다시 쓰면 문자열
+  한도에 걸려 사용자의 PATH를 자를 수 있다): `plx`는 그 폴더를 PATH에 넣거나 zip의 `plx.exe`로 쓴다. Linux deb는
+  `/usr/bin/plx`에 둔다.
+- 2026-10-19: 앱 아이콘. Tauri 기본 아이콘을 바꿨다: 어긋나게 겹친 층 셋(위가 최근이고 blame 거터처럼 오래될수록 차갑다:
+  주황·보라·파랑)을 커밋 선이 꿴다. 시점에 따라 어긋나 보이는 층(parallax)과 그것을 꿰는 이력이다. 원본은 SVG
+  (`src-tauri/icons/source`)이고 `scripts/make-icons.sh`가 `tauri icon`으로 만든 파일을 커밋한다. macOS icns는 Apple 아이콘
+  격자(1024 캔버스 가운데 824 판과 그림자)대로 그린 `app-macos.svg`로 따로 만든다. Windows·Linux는 판이 캔버스를 채워야
+  16·32px에서 덜 작다. macOS 메뉴 막대는 단색 템플릿 이미지(`icons/tray-template.png`, 18pt의 2배인 36px)를 쓴다:
+  Tauri가 Unix에서 창·트레이 기본 아이콘으로 쓰는 것은 `bundle.icon`의 첫 png(32x32 컬러)라 메뉴 막대의 다른 아이콘과
+  어울리지 않는다. Windows·Linux 트레이는 앱 아이콘 그대로다.

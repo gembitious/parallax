@@ -1,6 +1,7 @@
 # parallax 마일스톤
 
-**M0~M5 구현 완료** (모두 Windows·macOS 화면 확인 대기. 그래프 스크롤 60fps는 GPU가 있는 Windows·macOS에서 잰다)
+**M0~M5 구현 완료** (모두 Windows·macOS 화면 확인 대기. 그래프 스크롤 60fps는 GPU가 있는 Windows·macOS에서 잰다).
+화면 확인은 CI가 올리는 설치 파일로 할 수 있다(아래 "배포", `docs/MANUAL_CHECKS.md` 0)
 — 마일스톤을 끝낼 때마다 이 줄과 체크박스를 갱신한다.
 
 ## 성능 예산
@@ -115,6 +116,15 @@ Windows·macOS의 성능 HUD(`그래프 … 스크롤`)로 확인한다(bench/re
 (`crates/plx-core/tests/git_ai_golden.rs`, `fixtures/git-ai`, CI 세 플랫폼). 실제 에이전트(Claude Code 등)가 쓴 노트의
 화면 표시는 `docs/MANUAL_CHECKS.md` 13번으로 본다.
 
+## 배포
+- [x] CI가 PR·main 커밋마다 앱 확인을 통과한 설치 파일을 실행 결과(Artifacts)에 올린다: Windows NSIS 설치 프로그램과
+      설치 없이 쓰는 zip, macOS(Apple Silicon) DMG, Linux deb (CLAUDE.md 결정 기록)
+- [x] 앱 아이콘(Tauri 기본 아이콘 교체)과 macOS 메뉴 막대 단색 아이콘 — Windows·macOS 실기 확인 필요
+- [x] `v<버전>` 태그 → 같은 CI 실행의 설치 파일로 GitHub 릴리스 초안(사람이 보고 게시한다) — 첫 릴리스에서 확인
+- [ ] 코드 서명·공증: Apple Developer ID와 Windows 코드 서명 인증서가 있어야 한다. 지금은 macOS ad-hoc 서명, Windows 서명 없음
+      (처음 실행할 때 OS가 막거나 경고한다: 릴리스 설명의 설치 안내)
+- [ ] Intel 맥(universal 빌드), 이름 확정(지금은 parallax, 가칭)
+
 ## 하지 않는 것
 편집 · LSP · 내장 터미널 · 스테이징/커밋/푸시 · PR 등 원격 호스팅 연동.
 다시 꺼내려면 CLAUDE.md 결정 기록에 이유부터 남긴다.
@@ -128,4 +138,4 @@ Windows·macOS의 성능 HUD(`그래프 … 스크롤`)로 확인한다(bench/re
 | 한글 경로·내용 | `core.quotepath=false`, `-z`, 바이트 파싱, fixtures 회귀 테스트 |
 | 대형 파일 blame 지연 | incremental 스트리밍 + 커밋 고정 캐시 |
 | 다른 프로젝트 코드의 라이선스(공개 저장소, MIT OR Apache-2.0) | GPL 코드(git 등)는 옮기지 않고 출력과의 골든 테스트로 동작만 맞춘다. 허용 라이선스 코드를 옮기면 그 파일 맨 위에 고지 |
-| 바이너리 배포 | 의존성의 저작권 고지는 릴리스 빌드가 모아 앱에 넣는다(`npm run notices`, 앱의 "오픈 소스 라이선스"). 배포 전에 Tauri 기본 아이콘을 우리 것으로 바꾼다 |
+| 바이너리 배포 | 의존성의 저작권 고지는 릴리스 빌드가 모아 앱에 넣는다(`npm run notices`, 앱의 "오픈 소스 라이선스"). 앱 아이콘은 우리 것으로 바꿨다(2026-10-19). 서명하지 않은 빌드라 첫 실행 경고를 넘는 법을 릴리스 설명에 둔다(`.github/release-notes.md`) |
