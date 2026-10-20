@@ -53,7 +53,7 @@ const SCOPES: { scope: GraphScope; name: string; title: string }[] = [
     name: "브랜치",
     title: "HEAD, 로컬 브랜치, 로컬 브랜치의 upstream",
   },
-  { scope: "all", name: "원격 포함", title: "원격 브랜치까지 모두 (R)" },
+  { scope: "all", name: "원격 포함", title: "원격 브랜치까지 모두" },
 ];
 const SCOPE_KEY = "plx.graph.scope";
 
@@ -925,7 +925,7 @@ function GraphPane({
               type="button"
               className={s.scope === scope ? "toggle primary" : "toggle"}
               aria-pressed={s.scope === scope}
-              title={s.title}
+              title={s.scope === "all" ? `${s.title} (R)` : s.title}
               onClick={() => changeScope(s.scope)}
             >
               {s.name}
