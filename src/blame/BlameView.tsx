@@ -5,7 +5,7 @@ import { Help } from "../Help";
 import { copyText } from "../clipboard";
 import { call } from "../ipc";
 import { afterPaint, getPerfInfo, nowMs, record } from "../perf";
-import { CommitCard, type InfoState } from "./CommitCard";
+import { CommitCard, type CardAction, type InfoState } from "./CommitCard";
 import { createEditor, restoreSearch, searchStateOf, type Editor, type SearchState } from "./editor";
 import { formatCount, isUncommitted, shortSha } from "./format";
 import { blameChanged } from "./gutter";
@@ -20,9 +20,11 @@ import { commonCommands, usePalette, type Command } from "../palette/Palette";
 import { routeKey } from "../keys";
 import { openInEditor } from "../editor";
 import { toggleHud } from "../Hud";
+import { pointCursor, selectedLines } from "../code";
+import { absolutePath, copyPath } from "../workspace/paths";
 import { gotoLine, openSearchPanel } from "@codemirror/search";
-import { runScopeHandlers, type EditorView } from "@codemirror/view";
-import { copyItem, openContextMenu, type MenuEntry } from "../menu/Menu";
+import { runScopeHandlers } from "@codemirror/view";
+import { copyItem, openContextMenu, selectedText, type MenuEntry } from "../menu/Menu";
 import { usePublish } from "../menu/registry";
 import { blameSwitch } from "../worktree/switch";
 import { openBlame, type BlameTarget } from "./session";
@@ -318,6 +320,22 @@ export function BlameView({
   };
 
   /**
+   * 카드의 단추: 카드의 줄로 커서를 옮기고(고른 글이 그 줄을 덮으면 둔다: 라인 히스토리가 고른 줄을 쓴다) 카드를 닫은 뒤
+   * 그 줄의 일을 한다. 키로 하는 것과 같다.
+   */
+  const cardAction = (action: CardAction) => {
+    const n = latest.current.hover?.line;
+    const view = editor.current?.view;
+    if (n !== undefined && view) {
+      const line = view.state.doc.line(Math.max(1, Math.min(n, view.state.doc.lines)));
+      const { from, to } = view.state.selection.main;
+      if (!(from < to && from <= line.to && to >= line.from)) view.dispatch({ selection: { anchor: line.from } });
+    }
+    closeCard();
+    actions.current[action === "commit" ? "enter" : action]();
+  };
+
+  /**
    * 이동할 곳을 받아 App에 넘긴다. 없으면(null) 알린다. 답을 기다리는 동안(큰 저장소의 `<`는 몇 초 걸린다) 이 화면을
    * 닫았거나(`q`, 새 `plx` 호출) 다른 화면을 위에 열었거나, Quick Open·팔레트 같은 창을 열었으면(그 창에 치던 글자가
    * 새 화면의 키가 된다) 이동하지 않는다.
@@ -445,13 +463,8 @@ export function BlameView({
         else notOpened();
         return true;
       }
-      // 선택한 줄들(끝이 줄 맨 앞이면 그 줄은 뺀다), 선택이 없으면 커서 줄
-      const { from, to } = view.state.selection.main;
-      const doc = view.state.doc;
-      const start = doc.lineAt(from).number;
-      const last = doc.lineAt(to);
-      const end = to > from && to === last.from ? Math.max(start, last.number - 1) : last.number;
-      onNavigate({ kind: "history", target: { repo: m.repo, path: m.path, rev: m.rev }, lines: { start, end } });
+      // 선택한 줄들, 선택이 없으면 커서 줄
+      onNavigate({ kind: "history", target: { repo: m.repo, path: m.path, rev: m.rev }, lines: selectedLines(view.state) });
       return true;
     },
     graph() {
@@ -800,12 +813,7 @@ export function BlameView({
       openContextMenu(e, [...fileItems, "separator", { label: "에디터로 열기", keys: "o", run: act("openEditor") }], "파일");
       return;
     }
-    const pos = pointerPos(view, e.nativeEvent);
-    const chosen = view.state.selection.main;
-    if (pos !== null && !(chosen.from < chosen.to && pos >= chosen.from && pos <= chosen.to)) {
-      view.dispatch({ selection: { anchor: pos } });
-    }
-    view.focus();
+    pointCursor(view, e.nativeEvent);
     const { from, to } = view.state.selection.main;
     const block = model.current?.block(cursorLine());
     const committed = block !== undefined && !isUncommitted(block.sha);
@@ -828,6 +836,27 @@ export function BlameView({
     );
   };
 
+  /** 머리줄 우클릭: 이 파일의 일 */
+  const headerMenu = (e: ReactMouseEvent) => {
+    const m = latest.current.meta;
+    const act = (name: keyof Actions) => () => void (actions.current[name] as () => boolean)();
+    openContextMenu(
+      e,
+      [
+        copyItem(selectedText(e.target)),
+        { label: "경로 복사", detail: "저장소 기준", disabled: !m, run: () => m && copyPath(m.path) },
+        { label: "전체 경로 복사", disabled: !m, run: () => m && copyPath(absolutePath(m.repo, m.path)) },
+        "separator",
+        { label: "파일 히스토리", keys: "H", run: act("history") },
+        { label: "커밋 그래프", keys: "G", run: act("graph") },
+        { label: blameGutterShown() ? "blame 거터 숨기기" : "blame 거터 보이기", keys: "b", run: act("toggleGutter") },
+        "separator",
+        { label: "에디터로 열기", keys: "o", run: act("openEditor") },
+      ],
+      "파일",
+    );
+  };
+
   const blame = model.current;
   const lineCount = meta?.content?.lineCount ?? 0;
   // AI가 쓴 줄 수(git-ai 노트). 응답이 오거나 blame이 끝나면 다시 센다.
@@ -844,7 +873,7 @@ export function BlameView({
 
   return (
     <section className="blame">
-      <header className="blame-header">
+      <header className="blame-header" onContextMenu={headerMenu}>
         <FilePath path={meta?.path ?? path} />
         <span className="badge" title={meta?.rev ?? "작업트리 파일"}>
           {meta?.rev ? shortSha(meta.rev) : rev ? shortSha(rev) : "작업트리"}
@@ -919,7 +948,7 @@ export function BlameView({
               (e: unknown) => showToast(String(e)),
             )
           }
-          onOpen={() => onNavigate({ kind: "commit", repo: meta.repo, rev: cardBlock.sha, path: cardBlock.path })}
+          onAction={cardAction}
           onClose={closeCard}
           onPointerInside={(inside) => {
             pointerInCard.current = inside;
@@ -962,16 +991,6 @@ export function BlameView({
       )}
     </section>
   );
-}
-
-/** 우클릭한 자리의 글자 위치. 거터(줄 밖)면 그 높이 줄의 맨 앞. */
-function pointerPos(view: EditorView, e: MouseEvent): number | null {
-  if ((e.target as Element | null)?.closest?.(".cm-content")) {
-    const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
-    if (pos !== null) return pos;
-  }
-  if (!(e.target as Element | null)?.closest?.(".cm-editor")) return null;
-  return view.lineBlockAtHeight(e.clientY - view.documentTop).from;
 }
 
 function FilePath({ path }: { path: string }) {

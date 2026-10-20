@@ -121,7 +121,8 @@ export function Help({ view, onClose }: { view: HelpView; onClose(): void }) {
         </table>
         <p className="muted help-footer">
           마우스로도 모두 한다: 맨 위 도구 막대, {IS_MAC ? "화면 위 메뉴 막대" : "왼쪽 위 메뉴(파일 · 보기 · 화면 이름 · 도움말)"},
-          줄·행·파일·탭의 우클릭 메뉴. 메뉴에 단축키가 함께 보인다.
+          줄·행·파일·탭·머리줄 어디서든 오른쪽 단추로 여는 그 자리의 메뉴(diff의 줄은 누른 버전의 그 줄), blame 카드의 단추.
+          메뉴에 단축키가 함께 보인다.
         </p>
         <p className="muted help-footer">
           <button

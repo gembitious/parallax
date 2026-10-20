@@ -2,17 +2,18 @@
 // 라인 히스토리(`lines`)면 그 줄 범위를 바꾼 커밋 목록과, 고른 커밋이 그 범위를 어떻게 바꿨는지(hunk)를 아래에 보인다.
 // 키: j/k 이동, Enter 커밋 상세(이 파일 diff만), b 그 리비전 blame, , 바꾸기 전 리비전 blame, y sha 복사,
 //     / 검색, n/N 다음·이전 결과, G 그래프, q 뒤로, ? 도움말.
-import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { Help } from "../Help";
 import { WorktreePicker } from "../worktree/WorktreePicker";
 import { call } from "../ipc";
 import { useQuickOpen } from "../quickopen/QuickOpen";
 import { commonCommands, usePalette, type Command } from "../palette/Palette";
 import { isComposing, routeKey } from "../keys";
-import { openContextMenu, type MenuEntry } from "../menu/Menu";
+import { copyItem, openContextMenu, selectedText, type MenuEntry } from "../menu/Menu";
 import { usePublish } from "../menu/registry";
 import { openInEditor } from "../editor";
 import { toggleHud } from "../Hud";
+import { absolutePath, copyPath } from "../workspace/paths";
 import { historySwitch } from "../worktree/switch";
 import { copyText } from "../clipboard";
 import { formatCount, formatDate, parseTz, relativeTime, shortSha } from "../blame/format";
@@ -450,6 +451,78 @@ export function HistoryView({
     ];
   };
 
+  /**
+   * 라인 히스토리 hunk의 줄 우클릭: 그 줄이 든 버전(이 커밋, 지운 줄이면 바꾸기 전 리비전의 옛 이름)의 그 줄에서 할 일과
+   * 고른 커밋의 일. 바뀌지 않은 줄은 두 버전에 다 있다.
+   */
+  const hunkMenu = (line: HunkLine): MenuEntry[] => {
+    const at = current();
+    if (!at) return [];
+    const { m, e } = at;
+    const first = e.parents[0];
+    const now = line.after !== null ? { target: { repo: m.repo, path: e.path, rev: e.sha }, line: line.after } : null;
+    const old =
+      line.before !== null && first !== undefined
+        ? { target: { repo: m.repo, path: e.oldPath ?? e.path, rev: first }, line: line.before }
+        : null;
+    const open = now ?? old;
+    return [
+      ...(now
+        ? [
+            {
+              label: "이 리비전의 파일 blame",
+              detail: `${now.line}번째 줄`,
+              run: () => onNavigate({ kind: "file", ...now }),
+            },
+          ]
+        : []),
+      ...(old
+        ? [
+            {
+              label: "바꾸기 전 리비전의 파일 blame",
+              detail: `${old.line}번째 줄`,
+              run: () => onNavigate({ kind: "file", ...old }),
+            },
+          ]
+        : []),
+      { label: "커밋 상세", keys: "Enter", detail: "이 파일 diff", run: () => openCommit() },
+      "separator",
+      copyItem(window.getSelection()?.toString() ?? ""),
+      { label: "커밋 sha 복사", keys: "y", run: copySha },
+      "separator",
+      {
+        label: "에디터로 열기",
+        detail: "이 줄(작업트리)",
+        disabled: !open,
+        run: () => open && void openInEditor({ ...open.target, line: open.line }).then(showToast),
+      },
+    ];
+  };
+
+  /** 머리줄 우클릭: 이 히스토리(경로)의 일 */
+  const headerMenu = (e: ReactMouseEvent) => {
+    const m = latest.current.meta;
+    const where = m?.path ?? target.path;
+    const whole = where === ".";
+    openContextMenu(
+      e,
+      [
+        copyItem(selectedText(e.target)),
+        { label: "경로 복사", detail: "저장소 기준", disabled: !m || whole, run: () => copyPath(where) },
+        {
+          label: "전체 경로 복사",
+          disabled: !m,
+          run: () => m && copyPath(whole ? m.repo : absolutePath(m.repo, where)),
+        },
+        "separator",
+        { label: "검색 (요약·작성자·sha·경로)", keys: "/", run: openSearch },
+        { label: "에디터로 열기", keys: "o", detail: "작업트리 파일", run: openEditor },
+        { label: "가속 설정 (commit-graph·Bloom 필터)", detail: "히스토리를 빠르게", run: () => setAccelRequest((n) => n + 1) },
+      ],
+      "히스토리",
+    );
+  };
+
   /** 검색 칸을 연다. 이미 열려 있으면(목록을 눌러 포커스가 떠났다) 그리로 포커스를 옮긴다. */
   const openSearch = () => {
     setSearch((s) => ({ ...s, open: true }));
@@ -557,7 +630,7 @@ export function HistoryView({
 
   return (
     <section className={lines ? "history line-history" : "history"}>
-      <header className="blame-header">
+      <header className="blame-header" onContextMenu={headerMenu}>
         <span className="badge">{lines ? "라인 히스토리" : "히스토리"}</span>
         <FilePath path={path} />
         {range && (
@@ -687,9 +760,11 @@ export function HistoryView({
           </div>
         )}
       </div>
-      {lines && chosen && <Hunks key={chosen.sha} entry={chosen} />}
+      {lines && chosen && (
+        <Hunks key={chosen.sha} entry={chosen} onLineMenu={(e, line) => openContextMenu(e, hunkMenu(line), "바뀐 줄")} />
+      )}
       {chosen && (
-        <footer className="history-detail">
+        <footer className="history-detail" onContextMenu={(e) => openContextMenu(e, rowMenu(selected), "커밋")}>
           <span className="mono" title="y로 복사">
             {chosen.sha}
           </span>
@@ -772,21 +847,26 @@ const Row = memo(function Row({ entry, path, nowMs }: { entry: LogEntry; path: s
   );
 });
 
+/** hunk의 한 줄: 바꾸기 전 버전의 줄, 이 커밋 버전의 줄(1부터, 그 버전에 없으면 null) */
+type HunkLine = { before: number | null; after: number | null };
+
+type LineMenu = (e: ReactMouseEvent, line: HunkLine) => void;
+
 /** 라인 히스토리: 고른 커밋이 그 줄 범위를 어떻게 바꿨는지(옛·새 줄 번호와 함께) */
-function Hunks({ entry }: { entry: LogEntry }) {
+function Hunks({ entry, onLineMenu }: { entry: LogEntry; onLineMenu: LineMenu }) {
   const hunks = entry.hunks ?? [];
   return (
     <div className="history-hunks" aria-label="바뀐 줄">
       {hunks.length === 0 ? (
         <p className="muted">이 커밋(merge)은 이 줄들을 직접 바꾸지 않았다. Enter로 커밋 상세를 본다.</p>
       ) : (
-        hunks.map((hunk, i) => <HunkTable key={i} hunk={hunk} />)
+        hunks.map((hunk, i) => <HunkTable key={i} hunk={hunk} onLineMenu={onLineMenu} />)
       )}
     </div>
   );
 }
 
-function HunkTable({ hunk }: { hunk: Hunk }) {
+function HunkTable({ hunk, onLineMenu }: { hunk: Hunk; onLineMenu: LineMenu }) {
   let oldLine = hunk.oldStart;
   let newLine = hunk.newStart;
   return (
@@ -801,21 +881,24 @@ function HunkTable({ hunk }: { hunk: Hunk }) {
       <tbody>
         {hunk.lines.map((line, i) => {
           const kind = line[0];
-          let before = "";
-          let after = "";
+          const at: HunkLine = { before: null, after: null };
           if (kind === " ") {
-            before = String(oldLine++);
-            after = String(newLine++);
+            at.before = oldLine++;
+            at.after = newLine++;
           } else if (kind === "-") {
-            before = String(oldLine++);
+            at.before = oldLine++;
           } else if (kind === "+") {
-            after = String(newLine++);
+            at.after = newLine++;
           }
           const className = kind === "+" ? "add" : kind === "-" ? "del" : kind === "\\" ? "note" : "ctx";
           return (
-            <tr key={i} className={className}>
-              <td className="ln">{before}</td>
-              <td className="ln">{after}</td>
+            <tr
+              key={i}
+              className={className}
+              onContextMenu={at.before !== null || at.after !== null ? (e) => onLineMenu(e, at) : undefined}
+            >
+              <td className="ln">{at.before}</td>
+              <td className="ln">{at.after}</td>
               <td className="code">{kind === "\\" ? line.slice(1).trim() : line.slice(1)}</td>
             </tr>
           );
