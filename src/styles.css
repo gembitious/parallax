@@ -1651,6 +1651,45 @@ button.toggle.on {
   word-break: break-all;
 }
 
+/* 이 줄로 바로 하는 일(커밋 상세, 부모 blame, 히스토리, 그래프). 키는 단추 안에 흐리게 */
+.card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.card-actions button {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.card-actions button:hover:not(.off) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.card-actions button.off {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.card-actions kbd {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .card-close {
   position: absolute;
   top: 4px;

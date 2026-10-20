@@ -2,7 +2,7 @@
 // 행은 화면이 보는 범위만 묶음으로 백엔드에서 읽고(가상 스크롤), 레인은 캔버스 하나에 그린다.
 // 키: j/k 이동, Enter 커밋 상세, y sha 복사, R 원격 브랜치 모두 ↔ 브랜치만, / 검색(메시지·작성자·sha, path:경로),
 //     n/N 다음·이전 결과, q 뒤로, ? 도움말.
-import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { Help } from "../Help";
 import { copyText } from "../clipboard";
 import { formatCount, formatDate, relativeTime, shortSha } from "../blame/format";
@@ -20,7 +20,7 @@ import { WorktreePicker } from "../worktree/WorktreePicker";
 import { useQuickOpen } from "../quickopen/QuickOpen";
 import { commonCommands, usePalette, type Command } from "../palette/Palette";
 import { isComposing, routeKey } from "../keys";
-import { openContextMenu } from "../menu/Menu";
+import { copyItem, openContextMenu, selectedText, type MenuEntry } from "../menu/Menu";
 import { usePublish } from "../menu/registry";
 import { openInEditor } from "../editor";
 import { toggleHud } from "../Hud";
@@ -53,7 +53,7 @@ const SCOPES: { scope: GraphScope; name: string; title: string }[] = [
     name: "브랜치",
     title: "HEAD, 로컬 브랜치, 로컬 브랜치의 upstream",
   },
-  { scope: "all", name: "원격 포함", title: "원격 브랜치까지 모두 (R)" },
+  { scope: "all", name: "원격 포함", title: "원격 브랜치까지 모두" },
 ];
 const SCOPE_KEY = "plx.graph.scope";
 
@@ -695,6 +695,49 @@ function GraphPane({
     else if (latest.current.active) listRef.current?.focus({ preventScroll: true });
   }, [search.open]);
 
+  /** 행 우클릭: 그 커밋을 고르고 그 커밋의 일을 보인다. 이름표(브랜치·태그)는 이름을 복사한다. */
+  const rowMenu = (index: number, row: GraphRow | undefined): MenuEntry[] => {
+    const copy = (text: string, what: string) => () =>
+      copyText(text).then(
+        () => showToast(`복사했다: ${what}`),
+        (e: unknown) => showToast(String(e)),
+      );
+    const names = (row?.labels ?? []).filter((label) => label.kind !== "head");
+    return [
+      { label: "커밋 상세", keys: "Enter", disabled: !row, run: () => openCommit(index) },
+      "separator",
+      { label: "커밋 sha 복사", keys: "y", disabled: !row, run: copySha },
+      { label: "요약 복사", disabled: !row, run: () => row && copy(row.summary, row.summary)() },
+      ...names.slice(0, 4).map((label) => ({ label: "이름 복사", detail: label.name, run: copy(label.name, label.name) })),
+      "separator",
+      { label: "에디터로 열기", keys: "o", detail: "작업트리 폴더", run: () => void openEditor() },
+    ];
+  };
+
+  /** 머리줄 우클릭: 그래프의 일(보일 브랜치, 검색, 가속 설정) */
+  const headerMenu = (e: ReactMouseEvent) => {
+    openContextMenu(
+      e,
+      [
+        copyItem(selectedText(e.target)),
+        "separator",
+        ...SCOPES.map(
+          (s): MenuEntry => ({
+            label: `범위: ${s.name}${s.scope === scope ? " (지금)" : ""}`,
+            keys: s.scope === "all" ? "R" : undefined,
+            detail: s.title,
+            run: () => changeScope(s.scope),
+          }),
+        ),
+        "separator",
+        { label: "검색 (메시지·작성자·sha, path:경로)", keys: "/", run: openSearch },
+        { label: "가속 설정 (commit-graph·Bloom 필터)", detail: "그래프·히스토리를 빠르게", run: () => setAccelRequest((n) => n + 1) },
+        { label: "에디터로 열기", keys: "o", detail: "작업트리 폴더", run: () => void openEditor() },
+      ],
+      "그래프",
+    );
+  };
+
   /** 검색 칸을 연다. 이미 열려 있으면(목록을 눌러 포커스가 떠났다) 그리로 포커스를 옮긴다. */
   const openSearch = () => {
     setSearch((s) => ({ ...s, open: true }));
@@ -859,7 +902,7 @@ function GraphPane({
 
   return (
     <section className="graph">
-      <header className="blame-header">
+      <header className="blame-header" onContextMenu={headerMenu}>
         <span className="badge">그래프</span>
         <span className="file-path mono" title={meta?.repo ?? repo}>
           <span className="file-name">{lastName(meta?.repo ?? repo)}</span>
@@ -882,7 +925,7 @@ function GraphPane({
               type="button"
               className={s.scope === scope ? "toggle primary" : "toggle"}
               aria-pressed={s.scope === scope}
-              title={s.title}
+              title={s.scope === "all" ? `${s.title} (R)` : s.title}
               onClick={() => changeScope(s.scope)}
             >
               {s.name}
@@ -981,14 +1024,7 @@ function GraphPane({
                   }}
                   onContextMenu={(e) => {
                     select(i);
-                    openContextMenu(
-                      e,
-                      [
-                        { label: "커밋 상세", keys: "Enter", disabled: !row, run: () => openCommit(i) },
-                        { label: "커밋 sha 복사", keys: "y", disabled: !row, run: copySha },
-                      ],
-                      "커밋",
-                    );
+                    openContextMenu(e, rowMenu(i, row), "커밋");
                   }}
                 >
                   {row ? <Row row={row} nowMs={nowAtOpen.current} /> : <span className="muted">…</span>}

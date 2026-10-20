@@ -3,13 +3,13 @@
 // 큰 커밋은 목록을 먼저 보이고 시간 안에 세지 못한 줄 수는 나눠 받는다(file_stats). 목록은 보이는 행만 그린다.
 // 키: j/k 파일 이동, n/N 다음·이전 바뀐 부분, u 분할↔통합, Enter 그 리비전의 파일 blame, a 이 파일만↔모든 파일,
 //     y sha 복사, G 그래프, q 뒤로, ? 도움말.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { Help } from "../Help";
 import { WorktreePicker } from "../worktree/WorktreePicker";
 import { useQuickOpen } from "../quickopen/QuickOpen";
 import { commonCommands, usePalette, type Command } from "../palette/Palette";
 import { routeKey } from "../keys";
-import { openContextMenu, type MenuEntry } from "../menu/Menu";
+import { copyItem, openContextMenu, selectedText, type MenuEntry } from "../menu/Menu";
 import { usePublish } from "../menu/registry";
 import { openInEditor } from "../editor";
 import { absolutePath, copyPath } from "../workspace/paths";
@@ -34,7 +34,7 @@ import {
   versionsSize,
   withStats,
 } from "./detail";
-import { createDiffView, type DiffMode, type DiffView } from "./diff";
+import { createDiffView, type DiffMode, type DiffPoint, type DiffView } from "./diff";
 import {
   STATUS_LETTER,
   STATUS_NAME,
@@ -482,6 +482,85 @@ export function CommitView({ repo, rev, path, only = false, visible, active, dep
     ];
   };
 
+  /**
+   * diff 줄 우클릭: 그 줄이 든 버전(이 커밋, 바꾸기 전이면 첫 부모의 옛 이름)의 그 줄에서 할 일. merge는 첫 부모와
+   * 비교한다.
+   */
+  const lineMenu = (d: CommitDetail, f: FileChange, at: DiffPoint): MenuEntry[] => {
+    const before = at.side === "old";
+    const rev: string | undefined = before ? d.info.parents[0] : d.info.sha;
+    if (rev === undefined) return fileMenu(f);
+    const target = { repo, path: before ? (f.oldPath ?? f.path) : f.path, rev };
+    const lossy = f.pathLossy;
+    const from = before ? "바꾸기 전 리비전부터" : "이 리비전부터";
+    return [
+      { header: `${before ? "바꾸기 전" : "이 커밋"} ${shortSha(rev)} · ${at.line}번째 줄` },
+      {
+        label: before ? "바꾸기 전 리비전의 파일 blame" : "이 리비전의 파일 blame",
+        detail: "이 줄",
+        disabled: lossy,
+        run: () => onNavigate({ kind: "file", target, line: at.line }),
+      },
+      {
+        label: "라인 히스토리",
+        detail: `${from} · ${at.lines.start < at.lines.end ? "고른 줄" : "이 줄"}`,
+        disabled: lossy,
+        run: () => onNavigate({ kind: "history", target, lines: at.lines }),
+      },
+      { label: "파일 히스토리", detail: from, disabled: lossy, run: () => onNavigate({ kind: "history", target }) },
+      "separator",
+      copyItem(at.text),
+      { label: "커밋 sha 복사", keys: "y", run: copySha },
+      { label: "경로 복사", detail: "저장소 기준", disabled: lossy, run: () => copyPath(target.path) },
+      "separator",
+      {
+        label: "에디터로 열기",
+        detail: "이 줄(작업트리)",
+        disabled: lossy,
+        run: () => void openInEditor({ ...target, line: at.line }).then(showToast),
+      },
+    ];
+  };
+
+  /** diff 우클릭: 줄이면 그 줄의 일, 줄이 아닌 자리(접은 줄, 알림)면 파일의 일. 검색 칸은 기본 메뉴(붙여넣기 등)를 쓴다. */
+  const diffMenu = (e: ReactMouseEvent) => {
+    if ((e.target as Element).closest("input, textarea")) return;
+    const { detail: d, file: f } = latest.current;
+    if (!d || !f) return;
+    const at = diff.current?.pointAt(e.nativeEvent) ?? null;
+    if (at) openContextMenu(e, lineMenu(d, f, at), "diff 줄");
+    else openContextMenu(e, fileMenu(f), "파일");
+  };
+
+  /** 커밋 머리·메타 우클릭: 커밋의 일 */
+  const commitMenu = (e: ReactMouseEvent) => {
+    const info = latest.current.full?.info;
+    openContextMenu(
+      e,
+      [
+        copyItem(selectedText(e.target)),
+        { label: "커밋 sha 복사", keys: "y", run: copySha },
+        {
+          label: "커밋 메시지 복사",
+          disabled: !info,
+          run: () =>
+            info &&
+            copyText(info.message).then(
+              () => showToast("커밋 메시지를 복사했다"),
+              (err: unknown) => showToast(String(err)),
+            ),
+        },
+        "separator",
+        { label: "커밋 그래프", keys: "G", detail: "이 커밋", run: openGraph },
+        "separator",
+        { label: latest.current.mode === "split" ? "통합 보기" : "분할 보기", keys: "u", run: toggleMode },
+        { label: "다음 바뀐 부분", keys: "n", run: () => diff.current?.next() },
+        { label: "이전 바뀐 부분", keys: "N", run: () => diff.current?.previous() },
+      ],
+      "커밋",
+    );
+  };
+
   const copySha = () => {
     const sha = latest.current.detail?.info.sha ?? rev;
     copyText(sha).then(
@@ -637,7 +716,7 @@ export function CommitView({ repo, rev, path, only = false, visible, active, dep
 
   return (
     <section className="commit">
-      <header className="blame-header">
+      <header className="blame-header" onContextMenu={commitMenu}>
         <span className="badge mono" title={info?.sha ?? rev}>
           {shortSha(info?.sha ?? rev)}
         </span>
@@ -664,6 +743,26 @@ export function CommitView({ repo, rev, path, only = false, visible, active, dep
             {narrow ? "이 파일만" : "모든 파일"}
           </button>
         )}
+        <button
+          type="button"
+          className="toggle"
+          onMouseDown={keepFocus}
+          onClick={() => diff.current?.previous()}
+          aria-label="이전 바뀐 부분 (N)"
+          title="이전 바뀐 부분 (N)"
+        >
+          ↑
+        </button>
+        <button
+          type="button"
+          className="toggle"
+          onMouseDown={keepFocus}
+          onClick={() => diff.current?.next()}
+          aria-label="다음 바뀐 부분 (n)"
+          title="다음 바뀐 부분 (n)"
+        >
+          ↓
+        </button>
         <button type="button" className="toggle" onClick={toggleMode} title="분할·통합 보기 (u)">
           {mode === "split" ? "분할" : "통합"}
         </button>
@@ -672,7 +771,7 @@ export function CommitView({ repo, rev, path, only = false, visible, active, dep
         </button>
       </header>
       {info && (
-        <div className="commit-meta">
+        <div className="commit-meta" onContextMenu={commitMenu}>
           <span>
             {info.author.name} <span className="muted">&lt;{info.author.email}&gt;</span>
           </span>
@@ -759,7 +858,7 @@ export function CommitView({ repo, rev, path, only = false, visible, active, dep
               ))}
             </div>
           )}
-          <div className="diff-body">
+          <div className="diff-body" onContextMenu={diffMenu}>
             {/* CodeMirror가 직접 다루는 자리. React 자식과 섞지 않는다. */}
             <div className="diff-editor" ref={diffParent} />
             {message && (
@@ -774,6 +873,9 @@ export function CommitView({ repo, rev, path, only = false, visible, active, dep
     </section>
   );
 }
+
+/** 누르는 동안 포커스를 가져가지 않는다: diff가 그대로 키를 받는다. */
+const keepFocus = (e: ReactMouseEvent) => e.preventDefault();
 
 function isError(state: VersionsState | undefined): state is { error: string } {
   return typeof state === "object" && "error" in state;

@@ -1,8 +1,12 @@
 // 첫 화면: 띄울 화면 없이 앱을 열었을 때(Finder·Dock·시작 메뉴). 저장소 폴더를 고르거나 최근 저장소를 연다.
 // 폴더·파일을 창에 끌어 놓아도 열린다(App이 받는다). 터미널 명령 plx는 여기서 설치한다(쓰지 않아도 된다).
 import { useEffect, useRef, useState } from "react";
+import { openInEditor } from "../editor";
 import { isComposing } from "../keys";
+import { openContextMenu } from "../menu/Menu";
 import { openNotices } from "../notices/Notices";
+import { toast } from "../Toasts";
+import { copyPath } from "../workspace/paths";
 import { OPEN_REPO_KEYS, startKey } from "./keys";
 import {
   cliStatus,
@@ -98,6 +102,26 @@ export function Start({ version }: { version: string | null }) {
                   title={repo.missing ? `${repo.path} (폴더가 없다)` : repo.path}
                   onMouseMove={() => i !== selected && setSelected(i)}
                   onClick={() => open(i)}
+                  onContextMenu={(e) => {
+                    setSelected(i);
+                    openContextMenu(
+                      e,
+                      [
+                        { label: "열기", keys: "Enter", disabled: repo.missing, run: () => open(i) },
+                        {
+                          label: "에디터로 열기",
+                          detail: "작업트리 폴더",
+                          disabled: repo.missing,
+                          run: () =>
+                            void openInEditor({ repo: repo.path, path: null, rev: null, line: null }).then((message) => toast(message)),
+                        },
+                        "separator",
+                        { label: "전체 경로 복사", run: () => copyPath(repo.path) },
+                        { label: "목록에서 빼기", keys: "Delete", run: () => forgetRecent(repo.path) },
+                      ],
+                      repo.name,
+                    );
+                  }}
                 >
                   <span className="start-recent-name">{repo.name}</span>
                   <span className="start-recent-path">{repo.display}</span>

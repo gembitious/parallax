@@ -181,16 +181,32 @@ class CursorStore {
   };
 }
 
-function StatusBar({ cursors, activeKey, repoState }: { cursors: CursorStore; activeKey: number | null; repoState: RepoState | null }) {
+function StatusBar({
+  cursors,
+  activeKey,
+  repoState,
+  onGraph,
+}: {
+  cursors: CursorStore;
+  activeKey: number | null;
+  repoState: RepoState | null;
+  /** 브랜치를 눌렀다: 저장소 그래프 */
+  onGraph(): void;
+}) {
   const cursor = useSyncExternalStore(cursors.subscribe, cursors.get);
   const showGutter = useBlameGutter();
   const status = cursor && cursor.key === activeKey ? cursor.status : null;
   return (
     <footer className="status-bar">
       {repoState && (
-        <span className="status-item" title={`${repoState.repo}\n${repoState.head ?? "커밋 없음"}`}>
+        <button
+          type="button"
+          className="status-item"
+          onClick={onGraph}
+          title={`${repoState.repo}\n${repoState.head ?? "커밋 없음"}\n누르면 커밋 그래프`}
+        >
           {repoState.branch ? `⎇ ${repoState.branch}` : repoState.head ? `HEAD ${shortSha(repoState.head)} (detached)` : "커밋 없음"}
-        </span>
+        </button>
       )}
       <span className="status-spacer" />
       {status && (
@@ -638,6 +654,47 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
     openContextMenu(e, entries, `${lastName(path)} 탭`);
   };
 
+  /** 파일 트리 머리·빈 자리 우클릭: 저장소의 일. 행은 행의 메뉴를 연다(이미 열었으면 넘긴다). */
+  const repoMenu = (e: ReactMouseEvent) => {
+    const { repo } = latest.current.state;
+    if (e.nativeEvent.defaultPrevented || !repo) return;
+    const from: Place = { pane: "editor", tab: latest.current.state.active ?? -1 };
+    openContextMenu(
+      e,
+      [
+        { label: "파일 찾기", keys: `f · ${MOD}P`, run: quickOpen.open },
+        { label: "커밋 그래프", keys: "G", run: openGraph },
+        { label: "폴더 히스토리", detail: "저장소 전체", run: () => openHistory(repo, ".", null, from) },
+        "separator",
+        {
+          label: "에디터로 열기",
+          detail: "작업트리 폴더",
+          run: () => void openInEditor({ repo, path: null, rev: null, line: null }).then((message) => toast(message)),
+        },
+        { label: "전체 경로 복사", run: () => copyPath(repo) },
+        "separator",
+        { label: "파일 트리 숨기기", keys: `${MOD}B`, run: toggleTree },
+        { label: "다른 저장소 열기…", keys: OPEN_REPO_KEYS, run: openRepoDialog },
+      ],
+      repoName,
+    );
+  };
+
+  /** 패널 머리 우클릭: 패널의 일 */
+  const panelMenu = (e: ReactMouseEvent) => {
+    const s = latest.current.state;
+    openContextMenu(
+      e,
+      [
+        { label: "뒤로", keys: "q", disabled: !canGoBack(s, { pane: "panel" }), run: () => back({ pane: "panel" }) },
+        "separator",
+        { label: s.panelMax ? "패널 되돌리기" : "패널 최대화", run: () => dispatch({ type: "maximizePanel" }) },
+        { label: "패널 닫기", keys: `${MOD}J`, run: () => dispatch({ type: "togglePanel" }) },
+      ],
+      "패널",
+    );
+  };
+
   return (
     <div className="workspace">
       <Toolbar canBack={targetPlace !== null && canGoBack(state, targetPlace)} onBack={() => targetPlace && back(targetPlace)} />
@@ -650,6 +707,7 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
               aria-label="파일 트리"
               onMouseDownCapture={() => focusPane("tree")}
               onFocusCapture={() => focusPane("tree")}
+              onContextMenu={repoMenu}
             >
               <div className="sidebar-header" title={state.repo}>
                 {repoName}
@@ -759,7 +817,7 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
               onMouseDownCapture={() => focusPane("panel")}
               onFocusCapture={() => focusPane("panel")}
             >
-              <div className="panel-header">
+              <div className="panel-header" onContextMenu={panelMenu}>
                 <nav className="panel-crumbs" aria-label="패널 화면">
                   {state.panel.map((entry, i) => (
                     <span key={entry.key} className="panel-crumb">
@@ -799,7 +857,7 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
           )}
         </div>
       </div>
-      <StatusBar cursors={cursors} activeKey={activeEntry?.key ?? null} repoState={repoState} />
+      <StatusBar cursors={cursors} activeKey={activeEntry?.key ?? null} repoState={repoState} onGraph={openGraph} />
       {help && <Help view="workspace" onClose={closeHelp} />}
       {quickOpen.overlay}
       {palette.overlay}

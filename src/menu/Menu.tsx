@@ -1,13 +1,13 @@
 // 우클릭 메뉴와 메뉴 막대(Windows·Linux)의 드롭다운. 한 번에 하나만 뜨고 App이 `<MenuHost/>`로 그린다.
-// 메뉴가 키를 모두 받는다(↑↓ Home End 고르기, Enter·Space 실행, Esc 닫기, 메뉴 막대는 ←→로 옆 메뉴): 화면들은 window에서
-// 키를 받으므로 여기서 전파를 막는다. 닫으면 연 때 포커스가 있던 곳(코드 뷰·목록)으로 돌려주고, 고른 것은 그다음 실행한다.
+// 메뉴가 키를 모두 받는다(↑↓ Home End 고르기, Enter·Space 실행, Esc 닫기, 메뉴 막대는 ←→로 옆 메뉴): 화면들과 작업 공간은
+// window에서 키를 받으므로 그보다 먼저(창의 캡처 단계) 받아 전파를 막는다. 닫으면 연 때 포커스가 있던 곳(코드 뷰·목록)으로
+// 돌려주고, 고른 것은 그다음 실행한다.
 import {
   useEffect,
   useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
-  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { EditorView } from "@codemirror/view";
@@ -47,6 +47,13 @@ type OpenMenu = {
 let current: OpenMenu | null = null;
 let serial = 0;
 const listeners = new Set<() => void>();
+/** 떠 있는 메뉴의 키 처리(MenuPopup이 넣는다) */
+let keyHandler: ((e: KeyboardEvent) => void) | null = null;
+
+// 메뉴가 떠 있는 동안 키는 포커스가 어디 있든 메뉴의 것이다. 이 모듈을 불러올 때 등록해 화면·작업 공간의 리스너보다 먼저,
+// 창의 캡처 단계에서 맨 먼저 받는다. 메뉴의 포커스에 기대면 포커스가 메뉴에 가지 않았을 때 Esc가 메뉴를 닫지 않고 j가
+// 아래 코드 뷰의 커서를 옮긴다(메뉴가 숨은 채 포커스를 청하던 때 그랬다).
+window.addEventListener("keydown", (e) => keyHandler?.(e), true);
 
 function set(next: OpenMenu | null) {
   current = next;
@@ -154,14 +161,20 @@ function MenuPopup({ open }: { open: OpenMenu }) {
   const latest = useRef({ selected, selectable });
   latest.current = { selected, selectable };
 
-  // 크기를 재서 창 안에 놓고 포커스를 가져온다.
+  // 크기를 재서 창 안에 놓는다.
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
     const size = { width: el.offsetWidth, height: el.offsetHeight };
     setPlace(placeMenu(open.at, size, { width: window.innerWidth, height: window.innerHeight }));
-    el.focus({ preventScroll: true });
   }, [open]);
+
+  // 보이면 포커스를 가져온다(화면 읽기 프로그램, 코드 뷰에 글자가 가지 않게). 크기를 재는 동안 숨긴 요소는 포커스를
+  // 받지 않는다(Chromium·WebKit 모두 focus()가 아무 일도 하지 않는다).
+  const shown = place !== null;
+  useLayoutEffect(() => {
+    if (shown) ref.current?.focus({ preventScroll: true });
+  }, [shown]);
 
   // 메뉴 밖을 누르거나, 창이 포커스를 잃거나 크기가 바뀌거나, 메뉴 밖을 굴리면 닫는다. 메뉴 막대의 제목은 메뉴 막대가
   // 받는다(같은 제목은 닫고 다른 제목은 바꿔 연다).
@@ -197,10 +210,10 @@ function MenuPopup({ open }: { open: OpenMenu }) {
     entry.run();
   };
 
-  const onKeyDown = (e: ReactKeyboardEvent) => {
-    // 메뉴가 떠 있는 동안 키는 모두 메뉴의 것이다(아래 화면으로 가지 않는다).
-    e.stopPropagation();
-    if (isComposing(e.nativeEvent)) return;
+  const onKeyDown = (e: KeyboardEvent) => {
+    // 메뉴가 떠 있는 동안 키는 모두 메뉴의 것이다(아래 화면·작업 공간으로 가지 않는다).
+    e.stopImmediatePropagation();
+    if (isComposing(e)) return;
     const { selected: at, selectable: can } = latest.current;
     let handled = true;
     if (e.key === "ArrowDown") setSelected(stepIndex(can, at, 1));
@@ -216,6 +229,16 @@ function MenuPopup({ open }: { open: OpenMenu }) {
     if (handled || e.ctrlKey || e.metaKey) e.preventDefault();
   };
 
+  const keys = useRef(onKeyDown);
+  keys.current = onKeyDown;
+  useLayoutEffect(() => {
+    const handler = (e: KeyboardEvent) => keys.current(e);
+    keyHandler = handler;
+    return () => {
+      if (keyHandler === handler) keyHandler = null;
+    };
+  }, []);
+
   const maxHeight = window.innerHeight - 2 * MENU_MARGIN;
   return (
     <div
@@ -225,7 +248,6 @@ function MenuPopup({ open }: { open: OpenMenu }) {
       aria-label={open.label}
       tabIndex={-1}
       style={place ? { left: place.left, top: place.top, maxHeight } : { left: 0, top: 0, maxHeight, visibility: "hidden" }}
-      onKeyDown={onKeyDown}
       onContextMenu={(e: ReactMouseEvent) => e.preventDefault()}
       onMouseLeave={() => setSelected(-1)}
     >
