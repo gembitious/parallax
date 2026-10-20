@@ -25,7 +25,7 @@ import { absolutePath, copyPath } from "../workspace/paths";
 import { gotoLine, openSearchPanel } from "@codemirror/search";
 import { runScopeHandlers } from "@codemirror/view";
 import { copyItem, openContextMenu, selectedText, type MenuEntry } from "../menu/Menu";
-import { usePublish } from "../menu/registry";
+import { usePublish, type ViewSlot } from "../menu/registry";
 import { blameSwitch } from "../worktree/switch";
 import { openBlame, type BlameTarget } from "./session";
 import type { BlameBlock, BlameMeta, BlameStats, CommitInfo, Neighbor, Version } from "./types";
@@ -37,10 +37,15 @@ type Props = {
   target: BlameTarget;
   /** 처음 선택할 줄 */
   line: number | null;
-  /** 보이는 화면인가(보이는 탭의 스택 맨 위). 아래 화면·다른 탭의 화면은 숨긴 채 살려 둔다. */
+  /** 보이는 화면인가(그룹에 보이는 탭이나 열린 패널의 스택 맨 위). 아래 화면·다른 탭의 화면은 숨긴 채 살려 둔다. */
   visible: boolean;
-  /** 키를 받는 화면인가(보이고, 에디터 칸에 포커스가 있다) */
+  /** 키를 받는 화면인가(보이고, 그 칸에 포커스가 있다) */
   active: boolean;
+  /**
+   * 명령을 내는 칸(도구 막대·메뉴 막대): 키를 받는 그룹의 보이는 탭이면 editor, 열린 패널의 맨 위면 panel, 아니면 null
+   * (키를 받지 않는 그룹에 보이는 화면, 숨은 화면)
+   */
+  slot: ViewSlot | null;
   /** 탐색 스택 깊이. 1이면 맨 아래다. */
   depth: number;
   /** 이 방향으로 가면 바로 아래 화면이다(`<`로 왔으면 `>`). 새로 쌓지 않고 뒤로 간다. */
@@ -62,7 +67,7 @@ type Props = {
   onStatus?(status: EditorStatus): void;
 };
 
-/** 상태 막대의 줄·열을 누르면 보이는 코드 뷰가 줄 이동 칸을 연다. */
+/** 상태 막대의 줄·열을 누르면 키를 받는 코드 뷰가 줄 이동 칸을 연다(작업 공간이 그 화면의 칸에 포커스를 먼저 준다). */
 const GOTO_LINE_EVENT = "plx-goto-line";
 export const requestGotoLine = () => window.dispatchEvent(new Event(GOTO_LINE_EVENT));
 
@@ -142,6 +147,7 @@ export function BlameView({
   line,
   visible,
   active,
+  slot,
   depth,
   backDirection,
   cold = false,
@@ -218,7 +224,7 @@ export function BlameView({
   ];
   const palette = usePalette(commands, () => editor.current?.view.focus());
   // 도구 막대·메뉴 막대(보이는 동안)
-  usePublish("editor", visible, "blame", commands, {
+  usePublish(slot, visible, "blame", commands, {
     palette: palette.open,
     help: () => setHelp(true),
     files: quickOpen.open,
@@ -754,11 +760,11 @@ export function BlameView({
     setHover(null);
   }, [showGutter]);
 
-  // 상태 막대의 줄·열을 눌렀다: 보이는 코드 뷰가 줄 이동 칸을 연다.
+  // 상태 막대의 줄·열을 눌렀다: 키를 받는 코드 뷰가 줄 이동 칸을 연다(나눈 그룹마다 보이는 코드 뷰가 있다).
   useEffect(() => {
     const onGoto = () => {
       const view = editor.current?.view;
-      if (!latest.current.visible || !view) return;
+      if (!latest.current.active || !view) return;
       view.focus();
       gotoLine(view);
     };

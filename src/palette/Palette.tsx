@@ -48,7 +48,17 @@ export type CommandId =
   | "panelMax"
   | "closeTab"
   | "nextTab"
-  | "previousTab";
+  | "previousTab"
+  // 에디터 그룹(나눠 보기)과 탭 ↔ 패널
+  | "split"
+  | "tabLeft"
+  | "tabRight"
+  | "tabToPanel"
+  | "panelToEditor"
+  | "group1"
+  | "group2"
+  | "group3"
+  | "group4";
 
 /**
  * 화면에 팔레트를 붙인다. `open()`으로 열고 `overlay`를 화면 끝에 그린다. 고르면 닫은 뒤 그 명령을 실행하고,

@@ -84,6 +84,24 @@ describe("buildMenus", () => {
     ]);
   });
 
+  it("보기: 에디터 나누기·탭 옮기기·그룹으로는 에디터 레이아웃 하위 메뉴에", () => {
+    const layout = [
+      { id: "split", label: "에디터 나누기", keys: "Ctrl+\\", accelerator: "CmdOrCtrl+\\", app: true, run: noop },
+      { id: "tabToPanel", label: "탭을 아래 패널로", app: true, run: noop },
+      { id: "group1", label: "에디터 그룹 1로", keys: "Ctrl+1", accelerator: "CmdOrCtrl+1", app: true, run: noop },
+      { id: "group2", label: "에디터 그룹 2로", keys: "Ctrl+2", accelerator: "CmdOrCtrl+2", app: true, run: noop },
+    ] satisfies Command[];
+    const menus = buildMenus(sources({ workspace: [...sources().workspace, ...layout] }));
+    const view = menu(menus, "보기").items;
+    expect(labels(view).slice(0, 3)).toEqual(["파일 트리 숨기기", "아래 패널 열기", "에디터 레이아웃 ▸"]);
+    const submenu = view[2] as Extract<BarItem, { kind: "submenu" }>;
+    expect(labels(submenu.items)).toEqual(["에디터 나누기", "탭을 아래 패널로", "-", "에디터 그룹 1로", "에디터 그룹 2로"]);
+    expect(submenu.items[0]).toMatchObject({ keys: "Ctrl+\\", accelerator: "CmdOrCtrl+\\" });
+    expect(shortcut("CmdOrCtrl+\\", true)).toBe("⌘\\");
+    // 나눌 탭이 없으면(첫 화면·빈 에디터) 하위 메뉴가 없다
+    expect(labels(menu(buildMenus(sources()), "보기").items)).not.toContain("에디터 레이아웃 ▸");
+  });
+
   it("macOS: 앱 메뉴·편집·윈도우가 붙고 종료·설치는 앱 메뉴에", () => {
     const menus = buildMenus(sources({ mac: true, view: blameView() }));
     expect(menus.map((m) => m.title)).toEqual(["parallax", "파일", "편집", "보기", "blame", "윈도우", "도움말"]);

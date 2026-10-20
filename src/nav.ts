@@ -13,9 +13,9 @@ export type Navigation = (
   | { kind: "commit"; repo: string; rev: string; path: string | null; only?: boolean }
   /**
    * 커밋 상세·히스토리 → 그 리비전의 파일 blame, Quick Open → 작업트리 파일 blame. 패널에서 연 파일은 미리보기 탭이고
-   * `pinned`(Quick Open)면 보통 탭이다.
+   * `pinned`(Quick Open)면 보통 탭이다. `side`면 옆(오른쪽) 에디터 그룹에 연다(Quick Open의 Ctrl+Enter).
    */
-  | { kind: "file"; target: BlameTarget; line: number | null; pinned?: boolean }
+  | { kind: "file"; target: BlameTarget; line: number | null; pinned?: boolean; side?: boolean }
   /** blame → 파일 히스토리(`H`), `lines`가 있으면 라인 히스토리(`L`) */
   | { kind: "history"; target: HistoryTarget; lines?: LineRange }
   /** 어느 화면에서든 → 커밋 그래프(`G`). `rev`가 있으면 그 커밋을 골라 둔다. */

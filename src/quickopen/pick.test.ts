@@ -23,6 +23,16 @@ describe("quickOpenNavigation", () => {
     });
   });
 
+  it("Ctrl·⌘+Enter는 옆 에디터 그룹에", () => {
+    expect(quickOpenNavigation({ ...pick, side: true })).toEqual({
+      kind: "file",
+      target: { repo: "/r", path: "src/a.rs", rev: null },
+      line: 12,
+      pinned: true,
+      side: true,
+    });
+  });
+
   it("Shift+Enter는 파일 히스토리", () => {
     expect(quickOpenNavigation({ ...pick, line: null, history: true })).toEqual({
       kind: "history",

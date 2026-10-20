@@ -1,5 +1,6 @@
 // 파일 트리(왼쪽): 저장소의 추적 파일을 폴더별로 보인다(인덱스, 백엔드 files_dir. Quick Open과 같은 목록). 파일을
-// 누르면 미리보기 탭, 두 번 누르거나 Enter면 보통 탭으로 연다. 우클릭은 열기·히스토리·에디터로 열기·경로 복사.
+// 누르면 미리보기 탭, 두 번 누르거나 Enter면 보통 탭, Mod+Enter면 옆(오른쪽) 에디터 그룹에 연다. 우클릭은 열기·옆에
+// 열기·히스토리·에디터로 열기·경로 복사.
 // 보이는 탭의 파일은 펼쳐서 고른다. 저장소가 바뀌거나(HEAD·참조) 창으로 돌아오면 펼친 폴더를 다시 읽는다(git add로
 // 늘어난 파일).
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -10,6 +11,7 @@ import { openContextMenu, type MenuEntry } from "../menu/Menu";
 import { drawWindow, insideDrawn, type DrawnRange } from "../scrollWindow";
 import { toast } from "../Toasts";
 import { watchRepo } from "../watch";
+import { MOD } from "./keys";
 import { absolutePath, copyPath } from "./paths";
 import { ancestorsOf, sortListing, treeKey, treeRows, type DirListing, type TreeMove, type TreeRow } from "./tree";
 
@@ -27,13 +29,15 @@ type Props = {
   /** 보이는 탭의 작업트리 파일(저장소 기준). 펼쳐서 고른다. */
   activeFile: string | null;
   onOpen(path: string, missing: boolean, preview: boolean): void;
+  /** Mod+Enter·우클릭 메뉴: 옆(오른쪽) 에디터 그룹에 연다 */
+  onOpenSide(path: string, missing: boolean): void;
   /** 우클릭 메뉴: 파일(폴더면 그 아래) 히스토리 */
   onHistory(path: string): void;
   /** Esc·q: 에디터(또는 패널)로 돌아간다 */
   onLeave(): void;
 };
 
-export function FileTree({ repo, focused, focusTick, activeFile, onOpen, onHistory, onLeave }: Props) {
+export function FileTree({ repo, focused, focusTick, activeFile, onOpen, onOpenSide, onHistory, onLeave }: Props) {
   const [listings, setListings] = useState<ReadonlyMap<string, DirListing>>(() => new Map());
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const [selected, setSelected] = useState<string | null>(null);
@@ -160,6 +164,7 @@ export function FileTree({ repo, focused, focusTick, activeFile, onOpen, onHisto
     return [
       { label: "열기", keys: "Enter", run: () => apply({ kind: "open", path: row.path, missing: row.missing, preview: false }) },
       { label: "미리보기로 열기", run: () => apply({ kind: "open", path: row.path, missing: row.missing, preview: true }) },
+      { label: "옆에 열기", keys: `${MOD}Enter`, detail: "오른쪽 에디터 그룹", run: () => onOpenSide(row.path, row.missing) },
       "separator",
       { label: "파일 히스토리", run: () => onHistory(row.path) },
       {
@@ -191,7 +196,15 @@ export function FileTree({ repo, focused, focusTick, activeFile, onOpen, onHisto
         setViewport({ top: list.scrollTop, height: list.clientHeight });
       }}
       onKeyDown={(e) => {
-        if (isComposing(e.nativeEvent) || e.ctrlKey || e.metaKey || e.altKey) return;
+        if (isComposing(e.nativeEvent) || e.altKey) return;
+        if (e.ctrlKey || e.metaKey) {
+          // Mod+Enter: 고른 파일을 옆 그룹에
+          const row = latest.current.rows.find((r) => r.path === latest.current.selected);
+          if (e.key !== "Enter" || e.shiftKey || !row || row.dir) return;
+          e.preventDefault();
+          onOpenSide(row.path, row.missing);
+          return;
+        }
         if (e.key === "Escape" || e.key === "q") {
           e.preventDefault();
           onLeave();
