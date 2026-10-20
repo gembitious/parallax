@@ -232,7 +232,11 @@ function TabBar({
   onMenu(tab: Tab, e: ReactMouseEvent): void;
 }) {
   const activeRef = useRef<HTMLDivElement>(null);
-  useEffect(() => activeRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" }), [active]);
+  // 아무것도 돌려주지 않는다: 새 Chromium(Windows CI의 WebView2)은 scrollIntoView가 Promise를 돌려줘, 그것을 정리
+  // 함수로 받은 React가 탭이 바뀔 때 부르다 실패하고 화면을 모두 내렸다.
+  useEffect(() => {
+    activeRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [active]);
   return (
     <div className="tab-bar" role="tablist" aria-label="열린 파일">
       {tabs.map((tab) => {
