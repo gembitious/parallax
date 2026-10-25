@@ -1,5 +1,5 @@
-// 읽기 전용 코드 뷰의 공통 부분: 테마(styles.css 변수), 구문 강조, 검색 문구, 다크 모드, 언어 모듈 지연 로딩.
-// blame 뷰(blame/editor.ts)와 diff 뷰(commit/diff.ts)가 함께 쓴다.
+// 읽기 전용 코드 뷰의 공통 부분: 테마(styles.css 변수), 구문 강조, 검색 문구, 다크 모드, 언어 모듈 지연 로딩,
+// 우클릭한 줄과 고른 줄. blame 뷰(blame/editor.ts)와 diff 뷰(commit/diff.ts)가 함께 쓴다.
 import { HighlightStyle, LanguageDescription, syntaxHighlighting } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
@@ -58,6 +58,38 @@ export const searchPhrases = EditorState.phrases.of({
   "on line": "줄",
   "Selection deleted": "",
 });
+
+/** 우클릭한 자리의 글자 위치. 거터(줄 밖)면 그 높이 줄의 맨 앞. 코드 뷰 밖이면 null */
+export function pointerPos(view: EditorView, e: MouseEvent): number | null {
+  if ((e.target as Element | null)?.closest?.(".cm-content")) {
+    const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+    if (pos !== null) return pos;
+  }
+  if (!(e.target as Element | null)?.closest?.(".cm-editor")) return null;
+  return view.lineBlockAtHeight(e.clientY - view.documentTop).from;
+}
+
+/**
+ * 우클릭: 그 자리로 커서를 옮기고(고른 글 안을 눌렀으면 고른 것을 둔다) 포커스를 준다. CodeMirror는 오른쪽 단추로
+ * 커서를 옮기지 않는다. 우클릭 메뉴는 그 줄(고른 줄)의 일을 보인다.
+ */
+export function pointCursor(view: EditorView, e: MouseEvent) {
+  const pos = pointerPos(view, e);
+  const chosen = view.state.selection.main;
+  if (pos !== null && !(chosen.from < chosen.to && pos >= chosen.from && pos <= chosen.to)) {
+    view.dispatch({ selection: { anchor: pos } });
+  }
+  view.focus();
+}
+
+/** 고른 줄들(1부터, 끝이 줄 맨 앞이면 그 줄은 뺀다). 고른 것이 없으면 커서 줄. */
+export function selectedLines(state: EditorState): { start: number; end: number } {
+  const { from, to } = state.selection.main;
+  const doc = state.doc;
+  const start = doc.lineAt(from).number;
+  const last = doc.lineAt(to);
+  return { start, end: to > from && to === last.from ? Math.max(start, last.number - 1) : last.number };
+}
 
 const darkQuery = window.matchMedia?.("(prefers-color-scheme: dark)");
 

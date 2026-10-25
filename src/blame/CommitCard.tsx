@@ -1,4 +1,5 @@
-// 거터 hover 카드: 요약, 전체 메시지, 작성자·날짜, 변경 파일 수, sha 복사.
+// 거터 hover 카드: 요약, 전체 메시지, 작성자·날짜, 변경 파일 수, sha 복사, 이 줄로 바로 하는 일(커밋 상세, 부모 blame,
+// 라인·파일 히스토리, 그래프).
 // blame 결과에 든 정보는 바로 보여 주고, 전체 메시지·변경 파일 수는 commit_info로 받아 채운다.
 import { useLayoutEffect, useRef, useState } from "react";
 import { formatDate, isUncommitted, parseTz, relativeTime, shortSha } from "./format";
@@ -6,6 +7,17 @@ import type { AiAuthor } from "./ai";
 import type { BlameBlock, BlameCommit, CommitInfo } from "./types";
 
 export type InfoState = CommitInfo | "loading" | { error: string } | undefined;
+
+/** 카드의 단추가 하는 일. 그 줄의 일이다(blame 화면의 키와 같다). */
+export type CardAction = "commit" | "parent" | "lineHistory" | "history" | "graph";
+
+const ACTIONS: { action: CardAction; label: string; keys: string; title: string }[] = [
+  { action: "commit", label: "커밋 상세", keys: "Enter", title: "이 커밋의 상세(바뀐 파일과 diff)" },
+  { action: "parent", label: "부모 blame", keys: ",", title: "이 줄을 바꾸기 전 리비전의 blame" },
+  { action: "lineHistory", label: "라인 히스토리", keys: "L", title: "이 줄(고른 줄)을 바꾼 커밋" },
+  { action: "history", label: "파일 히스토리", keys: "H", title: "이 파일을 바꾼 커밋" },
+  { action: "graph", label: "그래프", keys: "G", title: "이 커밋을 고른 커밋 그래프" },
+];
 
 type Props = {
   commit: BlameCommit | undefined;
@@ -19,8 +31,8 @@ type Props = {
   /** 이 줄을 쓴 AI 에이전트·사람(git-ai 노트). 노트가 없으면 null */
   ai?: AiAuthor | null;
   onCopy(sha: string): void;
-  /** 커밋 상세로 */
-  onOpen(): void;
+  /** 단추: 이 줄에서 할 일 */
+  onAction(action: CardAction): void;
   onClose(): void;
   onPointerInside(inside: boolean): void;
 };
@@ -38,7 +50,7 @@ export function CommitCard({
   nowMs,
   ai = null,
   onCopy,
-  onOpen,
+  onAction,
   onClose,
   onPointerInside,
 }: Props) {
@@ -65,6 +77,11 @@ export function CommitCard({
       <div ref={ref} className="card" style={style} role="dialog" aria-label="커밋 안 됨" {...events}>
         <div className="card-summary uncommitted">커밋 안 됨</div>
         <p className="card-note">작업트리에서 바뀌었고 아직 커밋하지 않은 줄이다.</p>
+        <CardActions
+          actions={["parent", "lineHistory", "history"]}
+          off={block.previous ? [] : ["parent"]}
+          onAction={onAction}
+        />
       </div>
     );
   }
@@ -112,9 +129,6 @@ export function CommitCard({
           <code>{shortSha(block.sha)}</code>{" "}
           <button type="button" className="link" onClick={() => onCopy(block.sha)}>
             복사 (y)
-          </button>{" "}
-          <button type="button" className="link" onClick={onOpen}>
-            상세 (Enter)
           </button>
         </dd>
         <dt>파일</dt>
@@ -140,11 +154,43 @@ export function CommitCard({
           </>
         )}
       </dl>
+      <CardActions
+        actions={ACTIONS.map((a) => a.action)}
+        off={block.previous ? [] : ["parent"]}
+        onAction={onAction}
+      />
       {pinned && (
         <button type="button" className="card-close" onClick={onClose} aria-label="닫기">
           ×
         </button>
       )}
+    </div>
+  );
+}
+
+/**
+ * 이 줄로 바로 하는 일. 키는 단추 안에 흐리게 보인다. 할 수 없는 일(부모가 없는 줄의 부모 blame)은 자리를 지킨 채
+ * 흐리고 풍선 도움말에 까닭을 쓴다(꺼진 단추도 풍선 도움말이 뜨게 aria-disabled로 끈다).
+ */
+function CardActions({ actions, off, onAction }: { actions: CardAction[]; off: CardAction[]; onAction(action: CardAction): void }) {
+  return (
+    <div className="card-actions" role="group" aria-label="이 줄로 하는 일">
+      {ACTIONS.filter((a) => actions.includes(a.action)).map(({ action, label, keys, title }) => {
+        const disabled = off.includes(action);
+        return (
+          <button
+            key={action}
+            type="button"
+            className={disabled ? "off" : undefined}
+            aria-disabled={disabled || undefined}
+            title={disabled ? "이 줄은 이 파일이 처음 생긴 커밋에서 왔다(부모에 이 파일이 없다)" : `${title} (${keys})`}
+            onClick={() => !disabled && onAction(action)}
+          >
+            {label}
+            <kbd>{keys}</kbd>
+          </button>
+        );
+      })}
     </div>
   );
 }
