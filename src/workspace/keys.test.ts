@@ -39,4 +39,15 @@ describe("workspaceKey", () => {
     expect(workspaceKey(key("b"), false)).toBeNull();
     expect(workspaceKey(key("b", { ctrlKey: true, altKey: true }), false)).toBeNull();
   });
+
+  it("Mod+\\ 에디터 나누기(한국어 자판의 ₩), Mod+1~4 그룹으로", () => {
+    expect(workspaceKey(key("\\", { ctrlKey: true }, "Backslash"), false)).toBe("splitEditor");
+    expect(workspaceKey(key("₩", { metaKey: true }, "Backslash"), true)).toBe("splitEditor");
+    expect(workspaceKey(key("₩", { ctrlKey: true }), false)).toBe("splitEditor");
+    expect(workspaceKey(key("1", { ctrlKey: true }, "Digit1"), false)).toBe("group1");
+    expect(workspaceKey(key("4", { metaKey: true }, "Digit4"), true)).toBe("group4");
+    expect(workspaceKey(key("!", { ctrlKey: true, shiftKey: true }, "Digit1"), false)).toBeNull();
+    expect(workspaceKey(key("5", { ctrlKey: true }, "Digit5"), false)).toBeNull();
+    expect(workspaceKey(key("1"), false)).toBeNull();
+  });
 });

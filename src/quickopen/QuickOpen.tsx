@@ -1,11 +1,13 @@
 // Quick Open(`f`, Ctrl·⌘+P): 저장소의 추적 파일을 퍼지 검색해 고르면 그 파일의 blame으로(Shift+Enter면 파일
-// 히스토리로) 간다. `파일:줄`이면 그 줄로. 글자마다 백엔드가 찾는다(plx-core/src/files.rs, 점수는 fuzzy.rs).
+// 히스토리로, Mod+Enter면 옆 에디터 그룹에) 간다. `파일:줄`이면 그 줄로. 글자마다 백엔드가 찾는다(plx-core/src/files.rs,
+// 점수는 fuzzy.rs).
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { formatCount } from "../blame/format";
 import { CANCELLED } from "../graph/session";
 import type { Navigation } from "../nav";
 import { afterPaint, nowMs, phasesBetween, record } from "../perf";
+import { MOD } from "../workspace/keys";
 import { splitPath, type Run } from "./highlight";
 import { quickOpenNavigation, type QuickOpenPick } from "./pick";
 import type { FileMatch, FileSearch } from "./types";
@@ -77,7 +79,7 @@ export function QuickOpen({
   const seq = useRef(0);
   const measure = useRef<Measure | null>(null);
   /** 결과가 오기 전에 Enter를 누르면 그 결과가 오면 고른다(`파일:줄`의 줄이 앞 결과의 것이 되지 않게). */
-  const pendingPick = useRef<boolean | null>(null);
+  const pendingPick = useRef<How | null>(null);
   const latest = useRef({ current, onPick });
   latest.current = { current, onPick };
 
@@ -103,10 +105,10 @@ export function QuickOpen({
         setSelected(first);
         setError(null);
         if (pendingPick.current !== null) {
-          const history = pendingPick.current;
+          const how = pendingPick.current;
           pendingPick.current = null;
           const item = search.items[first];
-          if (item) latest.current.onPick(pickOf(search, item, history));
+          if (item) latest.current.onPick(pickOf(search, item, how));
         }
       },
       (e: unknown) => {
@@ -151,14 +153,14 @@ export function QuickOpen({
   }, [selected, shown]);
 
   const items = shown?.search.items ?? [];
-  const pick = (index: number, history: boolean) => {
+  const pick = (index: number, how: How) => {
     if (!shown || shown.seq !== seq.current) {
       // 친 글자의 결과가 아직 없다.
-      pendingPick.current = history;
+      pendingPick.current = how;
       return;
     }
     const item = shown.search.items[index];
-    if (item) onPick(pickOf(shown.search, item, history));
+    if (item) onPick(pickOf(shown.search, item, how));
   };
   const move = (delta: number) => setSelected((i) => Math.max(0, Math.min(items.length - 1, i + delta)));
 
@@ -188,7 +190,7 @@ export function QuickOpen({
               else if (e.key === "ArrowUp" || (e.ctrlKey && e.key === "k")) move(-1);
               else if (e.key === "PageDown") move(PAGE);
               else if (e.key === "PageUp") move(-PAGE);
-              else if (e.key === "Enter") pick(selected, e.shiftKey);
+              else if (e.key === "Enter") pick(selected, howOf(e));
               else if (e.key === "Escape") onClose();
               else if (e.key !== "Tab") handled = false;
               if (handled) e.preventDefault();
@@ -213,7 +215,7 @@ export function QuickOpen({
                 aria-selected={i === selected}
                 className={`quick-open-item${i === selected ? " selected" : ""}${item.missing ? " missing" : ""}`}
                 onMouseMove={() => i !== selected && setSelected(i)}
-                onClick={(e) => pick(i, e.shiftKey)}
+                onClick={(e) => pick(i, howOf(e))}
                 title={item.missing ? `${item.path} (작업트리에 없다: Enter는 HEAD 버전 blame)` : item.path}
               >
                 <span className="quick-open-name">
@@ -230,14 +232,24 @@ export function QuickOpen({
         {shown && items.length === 0 && (
           <p className="muted">{shown.search.files === 0 ? "추적하는 파일이 없다." : "맞는 파일이 없다."}</p>
         )}
-        <p className="muted">↑↓ 고르기 · Enter blame · Shift+Enter 파일 히스토리 · 파일:줄 · Esc 닫기</p>
+        <p className="muted">
+          ↑↓ 고르기 · Enter blame · {MOD}Enter 옆에 열기 · Shift+Enter 파일 히스토리 · 파일:줄 · Esc 닫기
+        </p>
       </div>
     </div>
   );
 }
 
-function pickOf(search: FileSearch, item: FileMatch, history: boolean): QuickOpenPick {
-  return { repo: search.repo, path: item.path, line: history ? null : search.line, history, missing: item.missing };
+/** 고르는 법: Shift는 파일 히스토리, Ctrl·⌘은 옆 에디터 그룹에 */
+type How = { history: boolean; side: boolean };
+
+const howOf = (e: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }): How => ({
+  history: e.shiftKey,
+  side: e.ctrlKey || e.metaKey,
+});
+
+function pickOf(search: FileSearch, item: FileMatch, { history, side }: How): QuickOpenPick {
+  return { repo: search.repo, path: item.path, line: history ? null : search.line, history, side, missing: item.missing };
 }
 
 /** 맞은 글자를 칠한 덩어리들(명령 팔레트도 쓴다) */

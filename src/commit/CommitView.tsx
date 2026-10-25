@@ -10,7 +10,7 @@ import { useQuickOpen } from "../quickopen/QuickOpen";
 import { commonCommands, usePalette, type Command } from "../palette/Palette";
 import { routeKey } from "../keys";
 import { copyItem, openContextMenu, selectedText, type MenuEntry } from "../menu/Menu";
-import { usePublish } from "../menu/registry";
+import { usePublish, type ViewSlot } from "../menu/registry";
 import { openInEditor } from "../editor";
 import { absolutePath, copyPath } from "../workspace/paths";
 import { toggleHud } from "../Hud";
@@ -52,10 +52,15 @@ type Props = {
   path: string | null;
   /** `path` 파일만 보인다(파일 히스토리에서 열었다). */
   only?: boolean;
-  /** 보이는 화면인가(열린 패널의 스택 맨 위) */
+  /** 보이는 화면인가(열린 패널이나 그룹에 보이는 탭의 스택 맨 위) */
   visible: boolean;
-  /** 키를 받는 화면인가(보이고, 패널에 포커스가 있다) */
+  /** 키를 받는 화면인가(보이고, 그 칸에 포커스가 있다) */
   active: boolean;
+  /**
+   * 명령을 내는 칸(도구 막대·메뉴 막대): 키를 받는 그룹의 보이는 탭이면 editor, 열린 패널의 맨 위면 panel, 아니면 null
+   * (키를 받지 않는 그룹에 보이는 화면, 숨은 화면)
+   */
+  slot: ViewSlot | null;
   depth: number;
   onShown?(committedMs: number): void;
   onBack(): void;
@@ -101,7 +106,7 @@ function diffable(state: VersionsState | undefined): FileVersions | null {
 /** 파일 하나의 두 버전을 기억하는 열쇠. `diff` 속성이 경로를 보므로 경로도 넣는다. */
 const versionsKey = (f: FileChange) => `${f.oldId ?? ""}:${f.newId ?? ""}:${f.path}`;
 
-export function CommitView({ repo, rev, path, only = false, visible, active, depth, onShown, onBack, onNavigate }: Props) {
+export function CommitView({ repo, rev, path, only = false, visible, active, slot, depth, onShown, onBack, onNavigate }: Props) {
   const [full, setFull] = useState<CommitDetail | null>(null);
   /** 이 파일만 보는 중(히스토리에서 열었고 그 파일이 이 커밋에 있다) */
   const [narrow, setNarrow] = useState(only);
@@ -175,7 +180,7 @@ export function CommitView({ repo, rev, path, only = false, visible, active, dep
   ];
   const palette = usePalette(commands, focusDiff);
   // 도구 막대·메뉴 막대(보이는 동안)
-  usePublish("panel", visible, "커밋", commands, { palette: palette.open, help: () => setHelp(true), files: quickOpen.open });
+  usePublish(slot, visible, "커밋", commands, { palette: palette.open, help: () => setHelp(true), files: quickOpen.open });
   const snapshot = () => ({
     visible,
     active,

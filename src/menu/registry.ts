@@ -5,7 +5,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type { Command } from "../palette/Palette";
 
-/** 명령을 내는 칸: 작업 공간, 보이는 탭의 화면(에디터), 열린 패널의 화면 */
+/** 명령을 내는 칸: 작업 공간, 키를 받는 에디터 그룹에 보이는 탭의 화면(에디터), 열린 패널의 화면 */
 export type Slot = "workspace" | ViewSlot;
 export type ViewSlot = "editor" | "panel";
 
@@ -118,14 +118,23 @@ export function useRegistryVersion(): number {
   return useSyncExternalStore(subscribe, () => version);
 }
 
-/** 화면: 보이는 동안 자기 칸에 명령을 낸다. 렌더마다 부른다(실행할 함수가 새 상태를 본다). */
-export function usePublish(slot: Slot, visible: boolean, title: string, commands: Command[], handles: Handles): void {
+/**
+ * 화면: 보이는 동안 자기 칸에 명령을 낸다. 렌더마다 부른다(실행할 함수가 새 상태를 본다). 칸이 null이면(키를 받지 않는
+ * 그룹에 보이는 화면) 내지 않는다. 칸이 바뀌면(탭 ↔ 패널, 그룹) 앞 칸에서 거둔다.
+ */
+export function usePublish(slot: Slot | null, visible: boolean, title: string, commands: Command[], handles: Handles): void {
   const [owner] = useState(() => ({}));
   useEffect(() => {
+    if (slot === null) return;
     if (visible) publish(slot, { owner, title, commands, handles });
     else retract(slot, owner);
   });
-  useEffect(() => () => retract(slot, owner), [slot, owner]);
+  useEffect(
+    () => () => {
+      if (slot !== null) retract(slot, owner);
+    },
+    [slot, owner],
+  );
 }
 
 /** 테스트: 처음 상태로 */

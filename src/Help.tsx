@@ -6,7 +6,11 @@ type Key = { keys: string; what: string; note?: string; planned?: boolean };
 
 const COMMON: Key[] = [
   { keys: ": / Ctrl+Shift+P", what: "명령 팔레트", note: "macOS ⌘⇧P · 할 일을 이름·초성으로 찾는다" },
-  { keys: "f / Ctrl+P", what: "파일 찾기 (Quick Open)", note: "macOS ⌘P · 초성 ㅍㅇ · 파일:줄 · Shift+Enter 히스토리" },
+  {
+    keys: "f / Ctrl+P",
+    what: "파일 찾기 (Quick Open)",
+    note: `macOS ⌘P · 초성 ㅍㅇ · 파일:줄 · Shift+Enter 히스토리 · ${MOD}Enter 옆에 열기`,
+  },
   { keys: "Ctrl+O", what: "저장소 열기", note: "macOS ⌘O · 폴더나 파일을 창에 끌어 놓아도 연다" },
   { keys: "o", what: "에디터로 열기", note: "VS Code·Zed 등 작업트리 파일의 그 줄, PLX_EDITOR로 고른다" },
   { keys: "W", what: "워크트리 고르기", note: "그 워크트리의 같은 화면으로" },
@@ -23,6 +27,8 @@ const WORKSPACE: Key[] = [
   { keys: `${MOD}J`, what: "아래 패널 열기·닫기", note: "히스토리·그래프·커밋 상세" },
   { keys: "Ctrl+Tab / Ctrl+Shift+Tab", what: "다음·이전 탭", note: "Ctrl+PageDown·PageUp" },
   { keys: `${MOD}W`, what: "탭 닫기", note: "탭이 없으면 창 숨기기 · 가운데 단추로 탭을 눌러도 닫는다" },
+  { keys: `${MOD}\\`, what: "에디터 나누기", note: "보이는 탭을 오른쪽에 하나 더 · 탭을 끌어 그룹의 옆에 놓아도 된다" },
+  { keys: `${MOD}1~4`, what: "에디터 그룹으로", note: "왼쪽부터" },
 ];
 
 /** 파일 트리에는 없는 화면 키(에디터로 열기, 워크트리, 뒤로) */
@@ -43,6 +49,7 @@ const KEYS: Record<HelpView, Key[]> = {
     { keys: "j / k", what: "아래·위 파일" },
     { keys: "→ / ←", what: "폴더 펼치기·접기", note: "l·h, 접힌 다음 ←는 부모 폴더로" },
     { keys: "Enter", what: "탭으로 열기 (작업트리 blame)", note: "폴더면 펼치기·접기 · 마우스로 두 번 누르기와 같다" },
+    { keys: `${MOD}Enter`, what: "옆에 열기", note: "오른쪽 에디터 그룹" },
     { keys: "Space", what: "미리보기로 열기", note: "마우스로 한 번 누르기와 같다 · 다음 미리보기가 그 탭 자리에 열린다" },
     { keys: "Esc / q", what: "에디터로 돌아가기" },
     { keys: "G", what: "커밋 그래프 (아래 패널)" },
@@ -122,7 +129,8 @@ export function Help({ view, onClose }: { view: HelpView; onClose(): void }) {
         <p className="muted help-footer">
           마우스로도 모두 한다: 맨 위 도구 막대, {IS_MAC ? "화면 위 메뉴 막대" : "왼쪽 위 메뉴(파일 · 보기 · 화면 이름 · 도움말)"},
           줄·행·파일·탭·머리줄 어디서든 오른쪽 단추로 여는 그 자리의 메뉴(diff의 줄은 누른 버전의 그 줄), blame 카드의 단추.
-          메뉴에 단축키가 함께 보인다.
+          메뉴에 단축키가 함께 보인다. 탭은 끌어서 옮긴다: 다른 그룹, 그룹의 왼쪽·오른쪽 끝(나눠 보기), 아래 패널. 패널은
+          머리줄을 끌어 에디터에 놓으면 탭이 된다.
         </p>
         <p className="muted help-footer">
           <button

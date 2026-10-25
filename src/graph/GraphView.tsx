@@ -21,7 +21,7 @@ import { useQuickOpen } from "../quickopen/QuickOpen";
 import { commonCommands, usePalette, type Command } from "../palette/Palette";
 import { isComposing, routeKey } from "../keys";
 import { copyItem, openContextMenu, selectedText, type MenuEntry } from "../menu/Menu";
-import { usePublish } from "../menu/registry";
+import { usePublish, type ViewSlot } from "../menu/registry";
 import { openInEditor } from "../editor";
 import { toggleHud } from "../Hud";
 import { ScrollMeter } from "../scrollMeter";
@@ -33,10 +33,15 @@ type Props = {
   repo: string;
   /** 처음 고를 커밋(리비전). 없으면 첫 행. */
   focus?: string | null;
-  /** 보이는 화면인가(열린 패널의 스택 맨 위) */
+  /** 보이는 화면인가(열린 패널이나 그룹에 보이는 탭의 스택 맨 위) */
   visible: boolean;
-  /** 키를 받는 화면인가(보이고, 패널에 포커스가 있다) */
+  /** 키를 받는 화면인가(보이고, 그 칸에 포커스가 있다) */
   active: boolean;
+  /**
+   * 명령을 내는 칸(도구 막대·메뉴 막대): 키를 받는 그룹의 보이는 탭이면 editor, 열린 패널의 맨 위면 panel, 아니면 null
+   * (키를 받지 않는 그룹에 보이는 화면, 숨은 화면)
+   */
+  slot: ViewSlot | null;
   depth: number;
   /** 콜드 스타트의 첫 요청. 창이 보일 때까지 페인트가 없어 예산과 비교하지 않는다. */
   cold?: boolean;
@@ -137,6 +142,7 @@ function GraphPane({
   onScope,
   visible,
   active,
+  slot,
   depth,
   cold = false,
   onShown,
@@ -240,7 +246,7 @@ function GraphPane({
   ];
   const commandPalette = usePalette(commands, () => listRef.current?.focus({ preventScroll: true }));
   // 도구 막대·메뉴 막대(보이는 동안)
-  usePublish("panel", visible, "그래프", commands, {
+  usePublish(slot, visible, "그래프", commands, {
     palette: commandPalette.open,
     help: () => setHelp(true),
     files: quickOpen.open,

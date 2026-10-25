@@ -184,11 +184,25 @@ export function buildMenus(src: MenuSources): BarMenu[] {
     });
   }
 
+  // 에디터 나누기·탭 옮기기(탭 ↔ 패널)·그룹으로
+  const layout = tidy([
+    ...fromCommand(ws("split")),
+    ...fromCommand(ws("tabLeft")),
+    ...fromCommand(ws("tabRight")),
+    ...fromCommand(ws("tabToPanel")),
+    ...fromCommand(ws("panelToEditor")),
+    SEPARATOR,
+    ...fromCommand(ws("group1")),
+    ...fromCommand(ws("group2")),
+    ...fromCommand(ws("group3")),
+    ...fromCommand(ws("group4")),
+  ]);
   const view = tidy([
     ...fromCommand(ws("tree")),
     ...fromCommand(ws("treeFocus")),
     ...fromCommand(ws("panel")),
     ...fromCommand(ws("panelMax")),
+    ...(layout.length > 0 ? [{ kind: "submenu" as const, label: "에디터 레이아웃", items: layout }] : []),
     SEPARATOR,
     ...(handles
       ? [
