@@ -15,6 +15,7 @@ const file = (path: string, s: FileStat | null): FileChange => ({
   newMode: "100644",
   submodule: false,
   stat: s,
+  worktree: false,
 });
 
 const detail = (files: FileChange[]): CommitDetail => ({

@@ -251,3 +251,37 @@ fn file_edits_are_reported() {
             .is_err()
     );
 }
+
+#[test]
+fn worktree_files_are_reported_but_not_git_internals() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("작업트리");
+    std::fs::create_dir(&repo).unwrap();
+    git(&repo, &["init", "--quiet", "--initial-branch=main"]);
+    commit(&repo, "첫 커밋");
+
+    let (tx, rx) = mpsc::channel();
+    let watchers = Watchers::new(move |change| {
+        if let Change::Tree(change) = change {
+            let _ = tx.send(change);
+        }
+    });
+    let repos = RepoCache::new();
+    let (id, workdir) = watchers.watch_tree(&repos, &repo).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+
+    std::fs::create_dir(repo.join("새 폴더")).unwrap();
+    std::fs::write(repo.join("새 폴더/파일.txt"), "내용\n").unwrap();
+    let change = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("파일을 알린다");
+    assert_eq!(Path::new(&change.repo), Path::new(&workdir));
+    while rx.recv_timeout(Duration::from_millis(600)).is_ok() {}
+
+    // .git 안만 바뀌는 명령(빈 커밋)은 알리지 않는다.
+    commit(&repo, "둘째 커밋");
+    assert!(rx.recv_timeout(Duration::from_millis(800)).is_err());
+
+    assert!(watchers.unwatch(id));
+    assert_eq!(watchers.watching(), 0);
+}

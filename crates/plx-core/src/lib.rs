@@ -7,6 +7,7 @@ pub mod ai_notes;
 pub mod blame;
 pub mod blame_session;
 pub mod cache;
+pub mod changes;
 pub mod cli;
 pub mod cli_install;
 pub mod commit;

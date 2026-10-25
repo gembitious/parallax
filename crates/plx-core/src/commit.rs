@@ -62,6 +62,8 @@ pub struct FileChange {
     pub submodule: bool,
     /// 줄 수. `None`이면 아직 세지 않았다(큰 커밋은 목록을 먼저 보이고 [`file_stats`]로 나머지를 센다).
     pub stat: Option<FileStat>,
+    /// 바뀐 뒤가 작업트리 파일이다([`crate::changes`]). `new_id`는 그 내용을 git처럼 해시한 값이라 저장소에 없다.
+    pub worktree: bool,
 }
 
 /// 파일 하나의 줄 수
@@ -111,7 +113,7 @@ pub fn commit_detail(repo: &Repo, id: ObjectId, focus: Option<&str>) -> Result<C
     let mut files: Vec<FileChange> = list.into_iter().map(describe).collect();
     files.sort_by(|a, b| a.path.cmp(&b.path));
     let local = repo.local();
-    let mut stats = Stats::new(&local);
+    let mut stats = Stats::new(repo, &local);
     for file in &mut files {
         if started.elapsed() >= STATS_BUDGET {
             break;
@@ -147,16 +149,20 @@ pub struct StatRequest {
     pub old_id: Option<String>,
     pub new_id: Option<String>,
     pub submodule: bool,
+    /// 바뀐 뒤를 작업트리의 `path`에서 읽는다.
+    #[serde(default)]
+    pub worktree: bool,
 }
 
 impl StatRequest {
-    fn of(file: &FileChange) -> StatRequest {
+    pub(crate) fn of(file: &FileChange) -> StatRequest {
         StatRequest {
             path: file.path.clone(),
             old_path: file.old_path.clone(),
             old_id: file.old_id.clone(),
             new_id: file.new_id.clone(),
             submodule: file.submodule,
+            worktree: file.worktree,
         }
     }
 }
@@ -164,25 +170,27 @@ impl StatRequest {
 /// [`commit_detail`]이 시간 안에 세지 못한 파일들의 줄 수(요청 순서대로).
 pub fn file_stats(repo: &Repo, files: &[StatRequest]) -> Result<Vec<FileStat>> {
     let local = repo.local();
-    let mut stats = Stats::new(&local);
+    let mut stats = Stats::new(repo, &local);
     files.iter().map(|file| stats.of(file)).collect()
 }
 
 /// 줄 수 세기. `.gitattributes`(작업트리, 없으면 인덱스)의 `diff` 속성을 git처럼 본다.
-struct Stats<'r> {
+pub(crate) struct Stats<'r> {
+    owner: &'r Repo,
     repo: &'r gix::Repository,
     attributes: Option<Attributes<'r>>,
 }
 
 impl<'r> Stats<'r> {
-    fn new(repo: &'r gix::Repository) -> Stats<'r> {
+    pub(crate) fn new(owner: &'r Repo, repo: &'r gix::Repository) -> Stats<'r> {
         Stats {
+            owner,
             repo,
             attributes: Attributes::new(repo),
         }
     }
 
-    fn of(&mut self, file: &StatRequest) -> Result<FileStat> {
+    pub(crate) fn of(&mut self, file: &StatRequest) -> Result<FileStat> {
         let side = |id: &Option<String>| id.as_deref().map(parse_id).transpose();
         let (old, new) = (side(&file.old_id)?, side(&file.new_id)?);
         if file.submodule {
@@ -197,7 +205,18 @@ impl<'r> Stats<'r> {
         let no_diff = self.attributes.as_mut().is_some_and(|a| {
             a.no_diff(&file.path) || file.old_path.as_deref().is_some_and(|p| a.no_diff(p))
         });
-        let (before, after) = match (read_blob(self.repo, old)?, read_blob(self.repo, new)?) {
+        let after = if file.worktree {
+            // 지운 파일은 빈 내용이다(삭제는 `new_id`가 없다).
+            match new {
+                Some(_) => Some(
+                    crate::changes::worktree_content(self.owner, &file.path)?.unwrap_or_default(),
+                ),
+                None => Some(Vec::new()),
+            }
+        } else {
+            read_blob(self.repo, new)?
+        };
+        let (before, after) = match (read_blob(self.repo, old)?, after) {
             (Some(before), Some(after)) => (before, after),
             _ => {
                 return Ok(FileStat {
@@ -311,7 +330,7 @@ fn pair_rename(
 }
 
 /// 트리 비교 결과 하나를 화면의 파일 하나로(blob은 읽지 않는다).
-fn describe(change: TreeChange) -> FileChange {
+pub(crate) fn describe(change: TreeChange) -> FileChange {
     let mut lossy = false;
     let mut path = |location: &gix::bstr::BStr| match location.to_str() {
         Ok(path) => path.to_owned(),
@@ -404,6 +423,7 @@ fn describe(change: TreeChange) -> FileChange {
         new_mode: new.map(|(m, _)| mode(m)),
         submodule,
         stat: None,
+        worktree: false,
     }
 }
 
@@ -460,18 +480,25 @@ pub struct FileVersions {
 
 /// blob 두 개(없으면 빈 파일)를 화면에 보일 문자열로 읽는다. `path`가 있으면 그 경로의 `diff` 속성을 본다.
 /// `full`이 아니면 [`MAX_VERSIONS_BYTES`]보다 큰 파일은 내용 없이 크기만 알린다.
+/// `worktree`면 바뀐 뒤(`new_id`가 있을 때)를 작업트리의 `path`에서 읽는다([`crate::changes`]).
 pub fn file_versions(
     repo: &Repo,
     old_id: Option<&str>,
     new_id: Option<&str>,
     path: Option<&str>,
     full: bool,
+    worktree: bool,
 ) -> Result<FileVersions> {
     let local = repo.local();
     let (old_id, new_id) = (
         old_id.map(parse_id).transpose()?,
         new_id.map(parse_id).transpose()?,
     );
+    let worktree_path = match (worktree, path, new_id) {
+        (true, Some(path), Some(_)) => Some(path),
+        (true, None, Some(_)) => return Err(Error("작업트리 파일의 경로가 없다".into())),
+        _ => None,
+    };
     let empty = |missing: bool, binary: bool, too_large: Option<u64>| FileVersions {
         old: None,
         new: None,
@@ -484,7 +511,11 @@ pub fn file_versions(
         let size = |id: Option<ObjectId>| {
             id.map_or(Some(0), |id| local.find_header(id).ok().map(|h| h.size()))
         };
-        if let (Some(old), Some(new)) = (size(old_id), size(new_id))
+        let new_size = match worktree_path {
+            Some(path) => crate::changes::worktree_size(repo, path),
+            None => size(new_id),
+        };
+        if let (Some(old), Some(new)) = (size(old_id), new_size)
             && old + new > MAX_VERSIONS_BYTES
         {
             return Ok(empty(false, false, Some(old + new)));
@@ -492,7 +523,11 @@ pub fn file_versions(
     }
     let no_diff =
         path.is_some_and(|path| Attributes::new(&local).is_some_and(|mut a| a.no_diff(path)));
-    let (old, new) = (read_blob(&local, old_id)?, read_blob(&local, new_id)?);
+    let new = match worktree_path {
+        Some(path) => Some(crate::changes::worktree_content(repo, path)?.unwrap_or_default()),
+        None => read_blob(&local, new_id)?,
+    };
+    let old = read_blob(&local, old_id)?;
     let (Some(old_bytes), Some(new_bytes)) = (old, new) else {
         return Ok(empty(true, no_diff, None));
     };

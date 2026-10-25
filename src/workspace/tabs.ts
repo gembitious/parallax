@@ -1,6 +1,6 @@
 // 탭에 보이는 이름. 탭 막대·탭 메뉴·끌 때 따라오는 이름표가 쓴다. 순수 함수라 단위 테스트한다(tabs.test.ts).
 import { shortSha } from "../blame/format";
-import { lastName, titleOf, type StackEntry } from "../nav";
+import { compareTitle, lastName, titleOf, type StackEntry } from "../nav";
 
 export type TabLabel = {
   /** 탭 이름 */
@@ -33,7 +33,7 @@ export function tabLabel(entry: StackEntry): TabLabel {
         : { name: `${nameOf(path)} 히스토리`, detail: rev ? shortSha(rev) : null, title };
     }
     case "commit":
-      return { name: `커밋 ${shortSha(entry.rev)}`, detail: null, title };
+      return { name: entry.compare ? compareTitle(entry.compare) : `커밋 ${shortSha(entry.rev)}`, detail: null, title };
     case "graph":
       return { name: "그래프", detail: null, title };
   }

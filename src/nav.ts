@@ -9,8 +9,11 @@ import type { HistoryTarget, LineRange } from "./history/types";
 export type Navigation = (
   /** blame → blame: `,` 부모 리비전, `<`·`>` 이전·다음 리비전 */
   | { kind: "parent" | "older" | "newer"; target: BlameTarget; line: number }
-  /** blame·히스토리 → 커밋 상세(`Enter`). `path`는 처음 고를 파일, `only`면 그 파일만 보인다(히스토리에서 열 때) */
-  | { kind: "commit"; repo: string; rev: string; path: string | null; only?: boolean }
+  /**
+   * blame·히스토리 → 커밋 상세(`Enter`). `path`는 처음 고를 파일, `only`면 그 파일만 보인다(히스토리에서 열 때).
+   * `compare`면 커밋 상세 대신 두 지점의 비교다(작업트리 변경 `D`, 두 리비전 비교). 그때 `rev`는 `compare.base`다.
+   */
+  | { kind: "commit"; repo: string; rev: string; path: string | null; only?: boolean; compare?: Compare }
   /**
    * 커밋 상세·히스토리 → 그 리비전의 파일 blame, Quick Open → 작업트리 파일 blame. 패널에서 연 파일은 미리보기 탭이고
    * `pinned`(Quick Open)면 보통 탭이다. `side`면 옆(오른쪽) 에디터 그룹에 연다(Quick Open의 Ctrl+Enter).
@@ -24,6 +27,26 @@ export type Navigation = (
   /** 다른 워크트리로 옮긴다(`W`): 작업 공간을 그 워크트리의 것으로 새로 연다 */
   worktree?: boolean;
 };
+
+/** 두 지점의 비교(plx-core/src/changes.rs): `base` 리비전 ↔ `target` 리비전(null이면 작업트리) */
+export type Compare = {
+  base: string;
+  target: string | null;
+  /** `base` 대신 두 쪽이 갈라진 지점(merge-base)과 견준다 */
+  mergeBase: boolean;
+};
+
+/** 작업트리 변경: HEAD ↔ 작업트리 */
+export const WORKTREE_CHANGES: Compare = { base: "HEAD", target: null, mergeBase: false };
+
+/** 비교의 이름(탭·창 제목) */
+export function compareTitle(compare: Compare): string {
+  if (compare.target === null) return compare.base === "HEAD" ? "작업트리 변경" : `${revName(compare.base)} ↔ 작업트리`;
+  return `${revName(compare.base)}${compare.mergeBase ? "..." : " ↔ "}${revName(compare.target)}`;
+}
+
+/** sha면 짧게, 이름(브랜치 등)이면 그대로 */
+const revName = (rev: string) => (/^[0-9a-f]{40,64}$/.test(rev) ? shortSha(rev) : rev);
 
 /** 열 뷰. plx-core/src/cli.rs의 Request와 같은 모양. */
 export type ViewRequest =
@@ -80,6 +103,8 @@ export type CommitEntry = {
   path: string | null;
   /** `path` 파일의 diff만 보인다(파일 히스토리에서 연 커밋). 화면에서 전체로 넓힐 수 있다. */
   only: boolean;
+  /** 커밋 상세 대신 두 지점의 비교(`rev`는 `compare.base`) */
+  compare?: Compare;
   via: "request" | "commit";
   request?: number;
 };
@@ -123,7 +148,7 @@ export const backDirectionAt = (stack: readonly StackEntry[], index: number) =>
 
 /** 탐색으로 연 화면의 창 제목. 경로는 저장소 기준이다. */
 export function titleOf(entry: StackEntry): string {
-  if (entry.view === "commit") return `커밋 ${shortSha(entry.rev)}`;
+  if (entry.view === "commit") return entry.compare ? compareTitle(entry.compare) : `커밋 ${shortSha(entry.rev)}`;
   if (entry.view === "graph") return `그래프 ${lastName(entry.repo)}`;
   const { target } = entry;
   const at = target.rev ? ` @${shortSha(target.rev)}` : "";

@@ -28,7 +28,7 @@ import { call } from "../ipc";
 import { isComposing } from "../keys";
 import { openContextMenu, type MenuEntry } from "../menu/Menu";
 import { setTarget, usePublish, type ViewSlot } from "../menu/registry";
-import { backDirectionAt, lastName, type Navigation, type StackEntry } from "../nav";
+import { WORKTREE_CHANGES, backDirectionAt, lastName, type Navigation, type StackEntry } from "../nav";
 import { commonCommands, usePalette, type Command, type CommandId } from "../palette/Palette";
 import { isPaletteKey } from "../palette/keys";
 import { getPerfInfo } from "../perf";
@@ -439,6 +439,16 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
     const { repo } = latest.current.state;
     if (repo) dispatch({ type: "navigate", navigation: { kind: "graph", repo, rev: null }, from: { pane: "editor", tab: -1 } });
   };
+  /** 작업트리 변경(HEAD ↔ 작업트리, 아래 패널). `path`면 그 파일을 골라 둔다. */
+  const openChanges = (path: string | null = null) => {
+    const { repo } = latest.current.state;
+    if (!repo) return;
+    dispatch({
+      type: "navigate",
+      navigation: { kind: "commit", repo, rev: WORKTREE_CHANGES.base, path, compare: WORKTREE_CHANGES },
+      from: { pane: "editor", tab: -1 },
+    });
+  };
   /** Mod+W·메뉴 막대: 키를 받는 그룹의 보이는 탭을 닫는다. 탭이 없으면 창을 숨긴다(패널이 에디터를 가렸으면 아무것도 하지 않는다). */
   const closeTabOrHide = () => {
     const s = latest.current.state;
@@ -494,6 +504,14 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
   const leftTo = activeTab ? besideTarget(state, activeTab.key, "left") : null;
   const rightTo = activeTab ? besideTarget(state, activeTab.key, "right") : null;
   const workspaceCommands: Command[] = [
+    {
+      id: "changes",
+      label: "작업트리 변경",
+      keys: "D",
+      detail: "커밋하지 않은 것 (아래 패널)",
+      app: true,
+      run: () => openChanges(),
+    },
     {
       id: "tree",
       label: treeOpen ? "파일 트리 숨기기" : "파일 트리 보이기",
@@ -642,6 +660,20 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
     };
     const onCapture = (e: KeyboardEvent) => {
       if (e.defaultPrevented || isComposing(e) || (e.target as Element | null)?.closest?.(".overlay, .menu")) return;
+      // D(작업트리 변경)는 어느 화면에서든 받는다. 입력란 안과 떠 있는 창(도움말, 팔레트 등)에서는 아니다.
+      if (
+        e.key === "D" &&
+        !(e.ctrlKey || e.metaKey || e.altKey) &&
+        !latest.current.help &&
+        !latest.current.overlay &&
+        !document.querySelector(".overlay") &&
+        !(e.target as Element | null)?.closest?.("input, textarea")
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        openChanges();
+        return;
+      }
       const key = workspaceKey(e);
       if (!key) return;
       e.preventDefault();
@@ -791,7 +823,14 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
         ) : entry.view === "graph" ? (
           <GraphView {...common} repo={entry.repo} focus={entry.focus} cold={cold} />
         ) : (
-          <CommitView {...common} repo={entry.repo} rev={entry.rev} path={entry.path} only={entry.only} />
+          <CommitView
+            {...common}
+            repo={entry.repo}
+            rev={entry.rev}
+            path={entry.path}
+            only={entry.only}
+            compare={entry.compare}
+          />
         );
       return createPortal(view, hosts.get(entry.key), String(entry.key));
     });
@@ -980,6 +1019,9 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
                 disabled: repo === null,
                 run: () => repo !== null && openHistory(repo, path, rev, place),
               },
+              ...(rev === null
+                ? [{ label: "작업트리 변경", detail: "이 파일을 골라서", disabled: repo === null, run: () => openChanges(path) }]
+                : []),
             ]
           : []),
         {
@@ -1005,6 +1047,7 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
       [
         { label: "파일 찾기", keys: `f · ${MOD}P`, run: quickOpen.open },
         { label: "커밋 그래프", keys: "G", run: openGraph },
+        { label: "작업트리 변경", keys: "D", detail: "커밋하지 않은 것", run: () => openChanges() },
         { label: "폴더 히스토리", detail: "저장소 전체", run: () => openHistory(repo, ".", null, fromActive()) },
         "separator",
         {

@@ -492,45 +492,66 @@ impl Repo {
     ) -> Result<(CommitInfo, Changes)> {
         let repo = self.local();
         let commit = repo.find_commit(id).map_err(|e| err("커밋 읽기", e))?;
-        let decoded = commit.decode().map_err(|e| err("커밋 해석", e))?;
-        let encoding = decoded.encoding;
-        let message = decode_text(decoded.message, encoding);
-        let author = person(commit.author().map_err(|e| err("작성자", e))?, encoding);
-        let committer = person(commit.committer().map_err(|e| err("커미터", e))?, encoding);
-        let parents: Vec<ObjectId> = commit.parent_ids().map(|id| id.detach()).collect();
-
+        let mut info = commit_header(&commit)?;
         let tree = commit.tree().map_err(|e| err("커밋 트리", e))?;
         // 얕은 클론의 경계 커밋은 부모 객체가 없다. git처럼 루트 커밋으로 보고 빈 트리와 비교한다.
-        let parent_tree = match parents.first() {
-            Some(parent) => match repo.try_find_object(*parent) {
+        let parent_tree = match commit.parent_ids().next() {
+            Some(parent) => match repo.try_find_object(parent) {
                 Ok(Some(object)) => Some(object.peel_to_tree().map_err(|e| err("부모 트리", e))?),
                 Ok(None) => None,
                 Err(e) => return Err(err("부모 커밋", e)),
             },
             None => None,
         };
-        // rename은 아래에서 따로 찾는다(gix는 짝 한도가 git과 다르고 blob이 없으면 비교 전체가 실패한다).
-        let options = gix::diff::Options::default().with_rewrites(None);
-        // 트리 비교는 바뀐 파일을 담은 디렉터리(트리) 항목도 변경으로 돌려준다. 파일만 남긴다.
-        let raw: Vec<TreeChange> = repo
-            .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), options)
-            .map_err(|e| err("트리 비교", e))?
-            .into_iter()
-            .filter(|change| !change.entry_mode().is_tree())
-            .collect();
-        let changes = pair_renames(&repo, raw, rename_limit);
-
-        let info = CommitInfo {
-            sha: id.to_string(),
-            parents: parents.iter().map(ToString::to_string).collect(),
-            summary: message.lines().next().unwrap_or("").trim().to_owned(),
-            message: message.trim_end().to_owned(),
-            author,
-            committer,
-            changed_files: changes.list.len(),
-        };
+        let changes = tree_changes(&repo, parent_tree.as_ref(), &tree, rename_limit)?;
+        info.changed_files = changes.list.len();
         Ok((info, changes))
     }
+
+    /// 커밋 정보만(바뀐 파일 수는 세지 않아 0이다).
+    pub fn commit_header(&self, id: ObjectId) -> Result<CommitInfo> {
+        let repo = self.local();
+        let commit = repo.find_commit(id).map_err(|e| err("커밋 읽기", e))?;
+        commit_header(&commit)
+    }
+}
+
+/// 커밋 정보(`changed_files`는 0). 메시지·이름은 커밋의 encoding 헤더로 읽는다.
+fn commit_header(commit: &gix::Commit<'_>) -> Result<CommitInfo> {
+    let decoded = commit.decode().map_err(|e| err("커밋 해석", e))?;
+    let encoding = decoded.encoding;
+    let message = decode_text(decoded.message, encoding);
+    let author = person(commit.author().map_err(|e| err("작성자", e))?, encoding);
+    let committer = person(commit.committer().map_err(|e| err("커미터", e))?, encoding);
+    Ok(CommitInfo {
+        sha: commit.id.to_string(),
+        parents: commit.parent_ids().map(|id| id.to_string()).collect(),
+        summary: message.lines().next().unwrap_or("").trim().to_owned(),
+        message: message.trim_end().to_owned(),
+        author,
+        committer,
+        changed_files: 0,
+    })
+}
+
+/// 두 트리(`old`가 없으면 빈 트리)의 파일 변경. 디렉터리(트리) 항목은 뺀다.
+/// rename은 사용자 설정과 관계없이 git 기본값(유사도 50%)으로, git과 같은 단계로 찾는다([`crate::renames`]).
+pub(crate) fn tree_changes(
+    repo: &gix::Repository,
+    old: Option<&gix::Tree<'_>>,
+    new: &gix::Tree<'_>,
+    rename_limit: usize,
+) -> Result<Changes> {
+    // rename은 아래에서 따로 찾는다(gix는 짝 한도가 git과 다르고 blob이 없으면 비교 전체가 실패한다).
+    let options = gix::diff::Options::default().with_rewrites(None);
+    // 트리 비교는 바뀐 파일을 담은 디렉터리(트리) 항목도 변경으로 돌려준다. 파일만 남긴다.
+    let raw: Vec<TreeChange> = repo
+        .diff_tree_to_tree(old, Some(new), options)
+        .map_err(|e| err("트리 비교", e))?
+        .into_iter()
+        .filter(|change| !change.entry_mode().is_tree())
+        .collect();
+    Ok(pair_renames(repo, raw, rename_limit, &HashMap::new()))
 }
 
 /// hover 카드의 rename 짝 한도(그 제곱). 커밋 상세는 git과 같은 [`crate::renames::RENAME_LIMIT`]다.
@@ -546,7 +567,14 @@ pub(crate) struct Changes {
 }
 
 /// 지운 항목과 새 항목을 git처럼 rename으로 짝짓는다([`crate::renames`]).
-fn pair_renames(repo: &gix::Repository, raw: Vec<TreeChange>, limit: usize) -> Changes {
+///
+/// `extra`는 저장소에 없는 blob(작업트리 파일을 git처럼 해시한 것)의 내용이다.
+pub(crate) fn pair_renames(
+    repo: &gix::Repository,
+    raw: Vec<TreeChange>,
+    limit: usize,
+    extra: &HashMap<ObjectId, Vec<u8>>,
+) -> Changes {
     let (mut deletions, mut additions) = (Vec::new(), Vec::new());
     for (i, change) in raw.iter().enumerate() {
         match change {
@@ -576,7 +604,7 @@ fn pair_renames(repo: &gix::Repository, raw: Vec<TreeChange>, limit: usize) -> C
     };
     let sources: Vec<_> = deletions.iter().map(|&i| candidate(i)).collect();
     let dests: Vec<_> = additions.iter().map(|&i| candidate(i)).collect();
-    let found = crate::renames::find(repo, &sources, &dests, limit);
+    let found = crate::renames::find(repo, &sources, &dests, limit, extra);
     drop((sources, dests));
     let mut slots: Vec<Option<TreeChange>> = raw.into_iter().map(Some).collect();
     for &(s, d, _) in &found.pairs {

@@ -10,7 +10,7 @@ GitLens의 핵심 흐름(줄 → 커밋 → 부모 리비전 blame → 파일·�
 한다(M6, 결정 기록 2026-10-19).
 
 ## 범위
-- 한다: blame, 파일·라인 히스토리, 커밋 상세와 diff, 커밋 그래프, 저장소 변경 실시간 반영,
+- 한다: blame, 파일·라인 히스토리, 커밋 상세와 diff, 커밋 그래프, 저장소 변경 실시간 반영, 작업트리 변경 보기(M7),
   앱 안에서 저장소 열기(첫 화면·최근 저장소·끌어 놓기)와 코드 읽기(M6의 파일 트리·탭, 고치기·저장은 없다)
 - 안 한다: 편집, LSP, 내장 터미널, 스테이징·커밋·푸시 등 저장소를 바꾸는 작업 (Claude Code와 lazygit의 몫)
 - 범위를 넓히려면 아래 "결정 기록"에 이유를 먼저 남긴다.
@@ -44,7 +44,8 @@ GitLens의 핵심 흐름(줄 → 커밋 → 부모 리비전 blame → 파일·�
   - 프런트: React 19.3.1, Vite 8.3.4, `@vitejs/plugin-react` 6.1.2, TypeScript 6.0.3 (7.0은 Go 포트라 도구 호환성 확인 전까지 보류)
   - Rust 공통: `serde` 1.0.229, `serde_json` 1.0.154, `libc` 0.2.190(Unix), `windows-sys` 0.61.2(Windows, Tauri와 같은 버전),
     `tempfile` 3.27.0(테스트)
-  - git·텍스트(M1): `gix` 0.89.0 (`default-features = false`, `basic`·`sha1`·`max-performance-safe`. diff는 gix에 든 imara-diff),
+  - git·텍스트(M1): `gix` 0.89.0 (`default-features = false`, `basic`·`sha1`·`max-performance-safe`. diff는 gix에 든 imara-diff.
+    M7-1에서 `status`를 더했다: `gix-status` 0.36.0·`gix-dir` 0.31.0, MIT OR Apache-2.0, 2026-10-25 확인),
     `encoding_rs` 0.8.42 (EUC-KR 커밋 메시지·파일 내용), `dunce` 1.0.5 (Windows `\\?\` 경로 정리, Tauri가 이미 쓰는 버전)
   - 코드 뷰(M1): `@codemirror/state` 6.7.6, `@codemirror/view` 6.43.14, `@codemirror/language` 6.13.1,
     `@codemirror/language-data` 6.5.2(언어 모듈은 필요할 때 불러온다), `@codemirror/search` 6.7.2, `@codemirror/commands` 6.11.1,
@@ -171,6 +172,8 @@ blame은 작업트리에 있는 파일만 받고(컴파일러·grep 형식 `<fil
 
 ## 키맵
 - 탐색은 tig와 같게: `j`/`k` 이동, `Enter` 커밋 상세, `,` 부모 리비전 blame, `/` 검색, `q` 뒤로
+- 작업트리 변경(M7-1): 어느 화면에서든 `D`(입력란 밖)는 커밋하지 않은 변경(HEAD ↔ 작업트리)을 아래 패널에 연다. 화면과
+  키는 커밋 상세와 같고(`Enter`는 작업트리 blame), 파일을 고치면 다시 견준다.
 - 저장소 열기: 어느 화면에서든 Ctrl+O(macOS ⌘O, 입력란 안에서도)는 OS 폴더 창이다. 폴더나 파일을 창에 끌어 놓아도
   연다(폴더는 그 저장소의 그래프, 파일은 작업트리 blame). 첫 화면의 최근 저장소는 `↑`/`↓`·`j`/`k`로 고르고 `Enter`로
   열며 `Delete`·`Backspace`로 목록에서 뺀다. 명령 팔레트에도 "저장소 열기…"와 최근 저장소가 있다.
@@ -539,3 +542,18 @@ blame은 작업트리에 있는 파일만 받고(컴파일러·grep 형식 `<fil
   돌아간다). 그 화면에서 연 탭의 `q`도 화면을 따라간다(보기 탭이 패널로 가면 패널로, 패널의 마지막 화면이 탭이 되면 그 탭으로).
   그룹 너비는 몫(합 1)이고 빠진 그룹의 몫은 왼쪽(없으면 오른쪽) 그룹이 받는다. 배치는 앱이 떠 있는 동안만 남는다(저장소를
   바꾸면 작업 공간을 새로 연다).
+- 2026-10-25: 작업트리 변경 보기(M7-1). M7(코드 읽기 넓히기: 작업트리 변경, 두 리비전 비교, 저장소 검색, 리비전 둘러보기,
+  작업 공간 복원)은 사용자와 정한 범위이고 모두 읽기 전용이다. 비교는 `plx_core::changes::compare`(기준 리비전 ↔ 리비전 또는
+  작업트리) 하나이고 화면은 커밋 상세를 그대로 쓴다(`CommitEntry.compare`, 아래 패널). 작업트리 쪽은 git CLI(`git status`·
+  `git diff`)를 띄우지 않고 gix status(`status` 기능을 더했다)로 바뀌었을 수 있는 경로(기준 트리 ↔ 인덱스 ↔ 작업트리,
+  추적하지 않는 파일)만 모은 뒤, 그 경로마다 기준 트리의 항목과 작업트리 파일을 git처럼 견준다(clean 변환 뒤 blob 해시,
+  `core.fileMode`일 때만 실행 비트, 심볼릭 링크는 가리키는 경로). 이유: `git status`는 인덱스 stat을 고쳐 쓰고(읽기 전용
+  원칙, `GIT_OPTIONAL_LOCKS=0`이어야 한다) 스폰이 Windows에서 비싸다. gix status도 고친 stat을 돌려주지만 쓰지 않는다
+  (테스트가 인덱스가 그대로인지 본다). 인덱스에 올린 것과 아닌 것을 나누지 않는다(`git diff HEAD`에 추적하지 않는 파일을
+  더한 것: 에이전트가 무엇을 바꿨는지가 궁금하고 스테이징은 lazygit의 몫이다). rename은 커밋 상세와 같은 단계로 찾되
+  작업트리 파일은 읽은 내용으로 견주므로(`renames::find`의 `extra`) 올리지 않은 `mv`도 R로 보인다. 추적하지 않는 파일은 경로
+  순으로 2,000개까지, 64MB가 넘는 작업트리 파일은 읽지 않고 크기·수정 시각으로 id를 만든다. 하위 모듈·UTF-8이 아닌 경로는
+  보지 않는다. 화면의 파일은 `worktree`가 켜지고 `newId`는 그 해시라 저장소에 없으므로 두 버전·줄 수는 작업트리에서 다시
+  읽는다(`file_versions`·`file_stats`의 `worktree`). 다시 견주기는 작업트리 감시(`Watchers::watch_tree`, `.git` 밖을 재귀로,
+  300ms 조용해지면 `tree-changed`)와 HEAD 변화로 한다. 파일마다 지문을 재지 않고 화면이 다시 견준 결과가 같으면 그대로 둔다.
+  Linux inotify는 무시한 디렉터리까지 감시를 건다(한도에 걸리면 감시만 실패하고 화면은 연다).

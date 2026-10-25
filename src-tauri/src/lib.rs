@@ -55,6 +55,7 @@ pub fn run() {
             git::graph_close,
             git::watch_repo,
             git::watch_file,
+            git::watch_tree,
             git::worktrees,
             git::files_search,
             git::files_touch,
@@ -67,6 +68,7 @@ pub fn run() {
             git::accelerate,
             git::commit_info,
             git::commit_detail,
+            git::compare,
             git::file_versions,
             git::file_stats,
             instance::current_request,
@@ -105,6 +107,7 @@ pub fn run() {
                 let _ = match change {
                     plx_core::watch::Change::Repo(change) => handle.emit("repo-changed", change),
                     plx_core::watch::Change::File(change) => handle.emit("file-changed", change),
+                    plx_core::watch::Change::Tree(change) => handle.emit("tree-changed", change),
                 };
             }));
             app.manage(git.clone());
