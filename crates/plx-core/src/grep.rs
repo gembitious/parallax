@@ -528,8 +528,11 @@ impl GrepSessions {
             match stream.finish() {
                 Ok(()) => {}
                 Err(StreamError::Cancelled) => return GrepEvent::Cancelled,
-                // 하나도 맞지 않으면 git grep은 1로 끝난다(표준 오류는 비어 있다).
-                Err(StreamError::Git(message)) if message.ends_with("실패(exit status: 1)") => {}
+                // 하나도 맞지 않으면 git grep은 1로 끝난다(표준 오류는 비어 있다). 끝난 상태는 Unix에서
+                // `exit status: 1`, Windows에서 `exit code: 1`로 적힌다.
+                Err(StreamError::Git(message))
+                    if message.ends_with("실패(exit status: 1)")
+                        || message.ends_with("실패(exit code: 1)") => {}
                 Err(e) => {
                     return GrepEvent::Error {
                         message: e.to_string(),
