@@ -5,7 +5,7 @@
 import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { closeMenu, isBarMenuOpen, openMenu, useOpenMenu, type MenuEntry } from "../menu/Menu";
 import type { BarItem, BarMenu } from "../menu/model";
-import { runIn, targetHandles, targetView, useRegistryVersion } from "../menu/registry";
+import { runIn, targetHandles, targetView, useRegistryVersion, workspaceCommands } from "../menu/registry";
 import { currentMenus } from "../menu/sources";
 import type { Command, CommandId } from "../palette/Palette";
 import { IS_MAC, MOD } from "./keys";
@@ -73,6 +73,8 @@ export function Toolbar({ canBack, onBack }: { canBack: boolean; onBack(): void 
   // 그래프: 화면의 그래프(그 커밋을 골라서)가 있으면 그것, 화면이 없으면 저장소 그래프. 그래프 화면에는 없다.
   const graph = find("graph");
   const repoGraph = target ? undefined : handles?.graph;
+  // 작업트리 변경: 어느 화면에서든(작업 공간 명령)
+  const changes = workspaceCommands().find((command) => command.id === "changes");
 
   return (
     <div className="toolbar" role="toolbar" aria-label="도구 막대">
@@ -97,6 +99,12 @@ export function Toolbar({ canBack, onBack }: { canBack: boolean; onBack(): void 
           title={graph ? titleOf(graph) : repoGraph ? "커밋 그래프 (G)" : "커밋 그래프: 그래프가 아닌 화면에서"}
           disabled={!graph && !repoGraph}
           onClick={() => (graph ? run(graph) : repoGraph?.())}
+        />
+        <Tool
+          label="변경"
+          title={changes ? `${titleOf(changes)}: 커밋하지 않은 것` : "작업트리 변경: 저장소를 연 뒤에"}
+          disabled={!changes}
+          onClick={() => changes?.run()}
         />
       </div>
       <span className="toolbar-spacer" />

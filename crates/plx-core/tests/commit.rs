@@ -114,6 +114,7 @@ fn request(file: &commit::FileChange) -> commit::StatRequest {
         old_id: file.old_id.clone(),
         new_id: file.new_id.clone(),
         submodule: file.submodule,
+        worktree: false,
     }
 }
 
@@ -123,6 +124,7 @@ fn versions(repo: &Repo, file: &commit::FileChange) -> commit::FileVersions {
         file.old_id.as_deref(),
         file.new_id.as_deref(),
         Some(&file.path),
+        false,
         false,
     )
     .unwrap()
@@ -199,6 +201,7 @@ fn rename_and_binary_details() {
         file.old_id.as_deref(),
         file.new_id.as_deref(),
         Some(&file.path),
+        false,
         false,
     )
     .unwrap();
@@ -626,6 +629,7 @@ fn large_files_are_sent_on_request() {
         file.new_id.as_deref(),
         Some(&file.path),
         true,
+        false,
     )
     .unwrap();
     assert_eq!(full.new.unwrap().text, big);

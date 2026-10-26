@@ -6,6 +6,7 @@ use std::sync::Arc;
 use plx_core::ai_notes::{AiAttribution, AiItem, AiNotes};
 use plx_core::blame_session::{SessionEvent, Sessions};
 use plx_core::cache::DiskCache;
+use plx_core::changes::{self, Comparison, Side};
 use plx_core::cli::Request;
 use plx_core::commit::{self, CommitDetail, FileStat, FileVersions, StatRequest};
 use plx_core::commit_graph::{self, GraphStatus, Progress};
@@ -317,6 +318,20 @@ pub async fn watch_file(git: State<'_, Arc<GitState>>, path: String) -> Result<W
     .map_err(|e| e.to_string())?
 }
 
+/// 작업트리 전체(`.git` 밖)를 지켜본다. 파일이 바뀌면 `tree-changed` 이벤트가 온다(작업트리 변경 화면).
+/// `unwatch_repo`로 끝낸다.
+#[tauri::command]
+pub async fn watch_tree(git: State<'_, Arc<GitState>>, repo: String) -> Result<Watching, String> {
+    let git = git.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        git.watchers
+            .watch_tree(&git.repos, Path::new(&repo))
+            .map(|(id, target)| Watching { id, target })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// 저장소의 워크트리들(주 작업트리 먼저, 링크된 워크트리는 이름 순).
 #[tauri::command]
 pub async fn worktrees(
@@ -529,6 +544,32 @@ pub async fn commit_detail(
     .await
 }
 
+/// 두 지점의 비교(M7): `base`(리비전) ↔ `target`(리비전, 없으면 작업트리). `base`가 `HEAD`인데 커밋이 없는
+/// 저장소면 빈 트리와 견준다. `merge_base`면 `base` 대신 두 쪽이 갈라진 지점과 견준다.
+#[tauri::command]
+pub async fn compare(
+    git: State<'_, Arc<GitState>>,
+    repo: String,
+    base: String,
+    target: Option<String>,
+    merge_base: Option<bool>,
+) -> Result<Comparison, String> {
+    blocking(git, move |git| {
+        let repo = git.repos.for_path(Path::new(&repo))?;
+        let base = match repo.resolve_commit(&base) {
+            Ok(id) => Some(id),
+            Err(_) if base == "HEAD" && repo.head()?.is_none() => None,
+            Err(e) => return Err(e),
+        };
+        let target = match target {
+            Some(rev) => Side::Commit(repo.resolve_commit(&rev)?),
+            None => Side::Worktree,
+        };
+        changes::compare(&repo, base, target, merge_base.unwrap_or(false))
+    })
+    .await
+}
+
 /// `commit_detail`이 시간 안에 세지 못한 파일들의 줄 수(요청 순서대로). 큰 커밋은 목록을 먼저 보이고 이것을 받는다.
 #[tauri::command]
 pub async fn file_stats(
@@ -544,7 +585,7 @@ pub async fn file_stats(
 }
 
 /// 파일 하나의 두 버전(diff 화면). blob id가 없으면 빈 쪽이다(추가·삭제). `path`는 `diff` 속성을 볼 경로,
-/// `full`이면 큰 파일도 내용을 보낸다.
+/// `full`이면 큰 파일도 내용을 보낸다. `worktree`면 바뀐 뒤를 작업트리의 `path`에서 읽는다(작업트리 변경).
 #[tauri::command]
 pub async fn file_versions(
     git: State<'_, Arc<GitState>>,
@@ -553,6 +594,7 @@ pub async fn file_versions(
     new_id: Option<String>,
     path: Option<String>,
     full: Option<bool>,
+    worktree: Option<bool>,
 ) -> Result<FileVersions, String> {
     blocking(git, move |git| {
         let repo = git.repos.for_path(Path::new(&repo))?;
@@ -562,6 +604,7 @@ pub async fn file_versions(
             new_id.as_deref(),
             path.as_deref(),
             full.unwrap_or(false),
+            worktree.unwrap_or(false),
         )
     })
     .await

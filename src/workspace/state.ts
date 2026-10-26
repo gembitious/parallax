@@ -193,6 +193,7 @@ function panelEntry(navigation: Extract<Navigation, { kind: "commit" | "history"
         rev: navigation.rev,
         path: navigation.path,
         only: navigation.only ?? false,
+        ...(navigation.compare ? { compare: navigation.compare } : {}),
         via: "commit",
         from,
       };
@@ -212,7 +213,16 @@ function copyEntry(entry: StackEntry, line: number | null | undefined): StackEnt
     case "history":
       return { key, view: "history", target: entry.target, lines: entry.lines, via: "history" };
     case "commit":
-      return { key, view: "commit", repo: entry.repo, rev: entry.rev, path: entry.path, only: entry.only, via: "commit" };
+      return {
+        key,
+        view: "commit",
+        repo: entry.repo,
+        rev: entry.rev,
+        path: entry.path,
+        only: entry.only,
+        ...(entry.compare ? { compare: entry.compare } : {}),
+        via: "commit",
+      };
     case "graph":
       return { key, view: "graph", repo: entry.repo, focus: entry.focus, via: "graph" };
   }

@@ -19,11 +19,22 @@ export function statBatches(files: readonly FileChange[]): number[][] {
 }
 
 export function statRequest(f: FileChange): StatRequest {
-  return { path: f.path, oldPath: f.oldPath, oldId: f.oldId, newId: f.newId, submodule: f.submodule };
+  return {
+    path: f.path,
+    oldPath: f.oldPath,
+    oldId: f.oldId,
+    newId: f.newId,
+    submodule: f.submodule,
+    worktree: f.worktree,
+  };
 }
 
 /** `indices` 파일에 받은 줄 수(같은 순서)를 넣고 합계를 다시 낸 상세. 다른 파일은 그대로(같은 객체)다. */
-export function withStats(detail: CommitDetail, indices: readonly number[], stats: readonly FileStat[]): CommitDetail {
+export function withStats<T extends Pick<CommitDetail, "files" | "additions" | "deletions" | "counted">>(
+  detail: T,
+  indices: readonly number[],
+  stats: readonly FileStat[],
+): T {
   const files = detail.files.slice();
   indices.forEach((index, k) => {
     const stat = stats[k];

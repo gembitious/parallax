@@ -29,6 +29,8 @@ export type FileChange = {
   submodule: boolean;
   /** 줄 수. null이면 아직 세지 않았다(큰 커밋은 목록을 먼저 보이고 `file_stats`로 나머지를 받는다). */
   stat: FileStat | null;
+  /** 바뀐 뒤가 작업트리 파일이다(작업트리 변경). `newId`는 그 내용의 해시라 저장소에 없다. */
+  worktree: boolean;
 };
 
 export type CommitDetail = {
@@ -46,8 +48,20 @@ export type CommitDetail = {
   renamesLimited: boolean;
 };
 
+/** 두 지점의 비교(`compare`). plx-core/src/changes.rs의 Comparison과 같은 모양. */
+export type Comparison = Omit<CommitDetail, "info"> & {
+  /** 바뀌기 전 커밋. 커밋이 없는 저장소의 작업트리 비교면 없다(빈 트리). */
+  base: CommitInfo | null;
+  /** 바뀐 뒤 커밋. 작업트리면 없다. */
+  target: CommitInfo | null;
+  /** `base`는 두 리비전이 갈라진 지점이다. */
+  mergeBase: boolean;
+  /** 보이지 않은 추적하지 않는 파일 수(한도를 넘은 것) */
+  untrackedOmitted: number;
+};
+
 /** `file_stats`에 보내는 파일 하나 */
-export type StatRequest = Pick<FileChange, "path" | "oldPath" | "oldId" | "newId" | "submodule">;
+export type StatRequest = Pick<FileChange, "path" | "oldPath" | "oldId" | "newId" | "submodule" | "worktree">;
 
 export type FileVersions = {
   /** 바뀌기 전 내용. 추가된 파일이거나 바이너리·큰 파일·받지 않은 blob이면 없다. */

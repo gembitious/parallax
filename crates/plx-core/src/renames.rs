@@ -47,9 +47,10 @@ fn basename(path: &[u8]) -> &[u8] {
     path.rsplit(|&b| b == b'/').next().unwrap_or(path)
 }
 
-/// blob 크기와 조각 해시를 한 번씩만 읽는다.
+/// blob 크기와 조각 해시를 한 번씩만 읽는다. `extra`(저장소에 없는 작업트리 파일)를 먼저 본다.
 struct Blobs<'r> {
     repo: &'r gix::Repository,
+    extra: &'r HashMap<ObjectId, Vec<u8>>,
     sizes: HashMap<ObjectId, Option<u64>>,
     spans: HashMap<ObjectId, Option<Spans>>,
     incomplete: bool,
@@ -57,11 +58,14 @@ struct Blobs<'r> {
 
 impl Blobs<'_> {
     fn size(&mut self, id: ObjectId) -> Option<u64> {
-        let repo = self.repo;
+        let (repo, extra) = (self.repo, self.extra);
         let size = *self
             .sizes
             .entry(id)
-            .or_insert_with(|| repo.find_header(id).ok().map(|header| header.size()));
+            .or_insert_with(|| match extra.get(&id) {
+                Some(data) => Some(data.len() as u64),
+                None => repo.find_header(id).ok().map(|header| header.size()),
+            });
         if size.is_none() {
             self.incomplete = true;
         }
@@ -69,10 +73,13 @@ impl Blobs<'_> {
     }
 
     fn spans(&mut self, id: ObjectId) -> bool {
-        let repo = self.repo;
+        let (repo, extra) = (self.repo, self.extra);
         let spans = self.spans.entry(id).or_insert_with(|| {
-            let data = repo.find_blob(id).ok()?.detach().data;
-            Some(Spans::new(&data, !crate::text::is_binary(&data)))
+            let spans = |data: &[u8]| Spans::new(data, !crate::text::is_binary(data));
+            match extra.get(&id) {
+                Some(data) => Some(spans(data)),
+                None => Some(spans(&repo.find_blob(id).ok()?.detach().data)),
+            }
         });
         if spans.is_none() {
             self.incomplete = true;
@@ -235,11 +242,13 @@ fn keep_if_better(best: &mut Vec<Scored>, candidate: Scored) {
 }
 
 /// `sources`(지운 항목)와 `dests`(새 항목)의 rename 짝. `limit`은 [`RENAME_LIMIT`]처럼 쓴다.
+/// `extra`는 저장소에 없는 blob의 내용이다(작업트리 파일을 git처럼 해시한 id).
 pub(crate) fn find(
     repo: &gix::Repository,
     sources: &[Candidate],
     dests: &[Candidate],
     limit: usize,
+    extra: &HashMap<ObjectId, Vec<u8>>,
 ) -> Found {
     let mut found = Found::default();
     if sources.is_empty() || dests.is_empty() {
@@ -282,6 +291,7 @@ pub(crate) fn find(
 
     let mut blobs = Blobs {
         repo,
+        extra,
         sizes: HashMap::new(),
         spans: HashMap::new(),
         incomplete: false,

@@ -5,6 +5,9 @@
 //! 파일 이름으로 먼저 거른다(objects/, index, *.lock 같은 것은 무시). git은 참조를 lock 파일에 쓰고 rename하므로
 //! 이벤트가 몰려 오니 [`DEBOUNCE`]만큼 조용해질 때까지 모은 뒤, HEAD와 참조의 지문이 실제로 달라졌을 때만 알린다.
 //!
+//! 작업트리 변경 화면([`crate::changes`])은 작업트리 전체를 재귀로 본다([`Watchers::watch_tree`]). `.git` 안은 빼고,
+//! 파일 하나하나의 지문을 재지 않고 [`TREE_DEBOUNCE`]만큼 조용하면 알린다(화면이 다시 견준다).
+//!
 //! 링크된 워크트리는 HEAD가 `<공통>/worktrees/<이름>/HEAD`에 있고 참조는 공통 디렉터리에 있다. 둘 다 본다.
 //! 그래프 이름표는 다른 워크트리가 체크아웃한 것에 달라지므로 다른 워크트리의 HEAD와 워크트리가 생기고 없어지는 것도
 //! 본다(`<공통>/worktrees`를 재귀로, 아직 없으면 생길 때부터). 이것은 참조 변화로 알린다.
@@ -24,6 +27,17 @@ use crate::repo::{Repo, RepoCache};
 
 /// 마지막 이벤트 뒤 이만큼 조용하면 알린다.
 pub const DEBOUNCE: Duration = Duration::from_millis(120);
+
+/// 작업트리 감시: 마지막 이벤트 뒤 이만큼 조용하면 알린다(에이전트가 파일 여럿을 잇달아 쓴다).
+pub const TREE_DEBOUNCE: Duration = Duration::from_millis(300);
+
+/// 작업트리 안의 파일이 바뀌었다(`.git` 밖)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TreeChange {
+    /// [`Watchers::watch_tree`]가 돌려준 작업트리 경로
+    pub repo: String,
+}
 
 /// 화면으로 보내는 변화
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -51,6 +65,7 @@ pub struct FileChange {
 pub enum Change {
     Repo(RepoChange),
     File(FileChange),
+    Tree(TreeChange),
 }
 
 /// 감시 대상: 저장소(작업트리 경로) 또는 파일(canonical 경로)
@@ -58,6 +73,8 @@ pub enum Change {
 enum Key {
     Repo(PathBuf),
     File(PathBuf),
+    /// 작업트리 전체(canonical 작업트리 경로)
+    Tree(PathBuf),
 }
 
 /// HEAD와 참조의 지문
@@ -138,6 +155,16 @@ struct WatchedFile {
     _watcher: notify::RecommendedWatcher,
 }
 
+/// 재귀로 보는 작업트리 하나
+struct WatchedTree {
+    count: usize,
+    /// 작업트리 경로(알릴 때 쓴다: 화면이 받은 값)
+    workdir: PathBuf,
+    /// 이 아래의 이벤트는 뺀다(`.git` 디렉터리, 링크된 워크트리면 그 git 디렉터리)
+    git_dirs: Vec<PathBuf>,
+    _watcher: notify::RecommendedWatcher,
+}
+
 /// 감시하는 저장소 하나
 struct Watched {
     repo: Arc<Repo>,
@@ -196,6 +223,8 @@ struct Inner {
     repos: HashMap<PathBuf, Watched>,
     /// 파일 → 감시
     files: HashMap<PathBuf, WatchedFile>,
+    /// canonical 작업트리 → 감시
+    trees: HashMap<PathBuf, WatchedTree>,
 }
 
 impl Inner {
@@ -203,6 +232,9 @@ impl Inner {
         match key {
             Key::Repo(workdir) => self.repos.get(workdir).is_some_and(|w| w.relevant(path)),
             Key::File(file) => self.files.contains_key(file) && path == file,
+            Key::Tree(root) => self.trees.get(root).is_some_and(|tree| {
+                path.starts_with(root) && !tree.git_dirs.iter().any(|dir| path.starts_with(dir))
+            }),
         }
     }
 }
@@ -289,11 +321,71 @@ impl Watchers {
         Ok((id, file.to_string_lossy().into_owned()))
     }
 
+    /// 작업트리 전체를 재귀로 본다(`.git` 밖의 파일이 생기고 바뀌고 없어지면 알린다). (구독 id, 작업트리 경로)를
+    /// 돌려준다. 작업트리 경로는 [`Watchers::watch`]와 같다.
+    pub fn watch_tree(&self, repos: &RepoCache, path: &Path) -> Result<(u64, String), String> {
+        let repo = repos.for_path(path).map_err(|e| e.to_string())?;
+        let workdir = repo.workdir().to_path_buf();
+        let root = dunce::canonicalize(&workdir).map_err(|e| format!("경로: {e}"))?;
+        let fresh = if self.inner.lock().unwrap().trees.contains_key(&root) {
+            None
+        } else {
+            Some(self.start_tree(&repo, &root)?)
+        };
+        let mut inner = self.inner.lock().unwrap();
+        match (inner.trees.get_mut(&root), fresh) {
+            (Some(watched), _) => watched.count += 1,
+            (None, Some(watched)) => {
+                inner.trees.insert(root.clone(), watched);
+            }
+            (None, None) => {
+                let watched = self.start_tree(&repo, &root)?;
+                inner.trees.insert(root.clone(), watched);
+            }
+        }
+        inner.next_id += 1;
+        let id = inner.next_id;
+        inner.subscriptions.insert(id, Key::Tree(root));
+        Ok((id, workdir.to_string_lossy().into_owned()))
+    }
+
+    fn start_tree(&self, repo: &Repo, root: &Path) -> Result<WatchedTree, String> {
+        let local = repo.local();
+        let canonical = |p: &Path| dunce::canonicalize(p).unwrap_or_else(|_| p.to_owned());
+        let events = self.events.clone();
+        let key = Key::Tree(root.to_path_buf());
+        let mut watcher =
+            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                let Ok(event) = event else { return };
+                if matches!(event.kind, EventKind::Access(_)) {
+                    return;
+                }
+                for path in event.paths {
+                    let _ = events.send((key.clone(), path));
+                }
+            })
+            .map_err(|e| format!("작업트리 감시 실패: {e}"))?;
+        watcher
+            .watch(root, RecursiveMode::Recursive)
+            .map_err(|e| format!("작업트리 감시 실패({}): {e}", root.display()))?;
+        Ok(WatchedTree {
+            count: 1,
+            workdir: repo.workdir().to_path_buf(),
+            git_dirs: vec![
+                root.join(".git"),
+                canonical(local.git_dir()),
+                canonical(local.common_dir()),
+            ],
+            _watcher: watcher,
+        })
+    }
+
     /// 구독을 끝낸다. 그 저장소를 보는 구독이 없으면 감시를 멈춘다. 모르는 id면 `false`.
     /// OS 감시는 잠금 밖에서 버린다(macOS FSEvents는 버릴 때 스레드를 기다린다).
     pub fn unwatch(&self, id: u64) -> bool {
         let mut stopped_repo = None;
         let mut stopped_file = None;
+        let mut stopped_tree = None;
         let known = {
             let mut inner = self.inner.lock().unwrap();
             match inner.subscriptions.remove(&id) {
@@ -315,11 +407,21 @@ impl Watchers {
                     }
                     true
                 }
+                Some(Key::Tree(root)) => {
+                    if let Some(watched) = inner.trees.get_mut(&root) {
+                        watched.count -= 1;
+                        if watched.count == 0 {
+                            stopped_tree = inner.trees.remove(&root);
+                        }
+                    }
+                    true
+                }
                 None => false,
             }
         };
         drop(stopped_repo);
         drop(stopped_file);
+        drop(stopped_tree);
         known
     }
 
@@ -350,7 +452,7 @@ impl Watchers {
     /// 감시 중인 저장소·파일 수
     pub fn watching(&self) -> usize {
         let inner = self.inner.lock().unwrap();
-        inner.repos.len() + inner.files.len()
+        inner.repos.len() + inner.files.len() + inner.trees.len()
     }
 
     fn start(&self, repo: Arc<Repo>) -> Result<Watched, String> {
@@ -406,8 +508,8 @@ fn debounce(state: &Mutex<Inner>, rx: &mpsc::Receiver<(Key, PathBuf)>, on_change
     let mut dirty: HashMap<Key, Instant> = HashMap::new();
     loop {
         let timeout = dirty
-            .values()
-            .map(|at| (*at + DEBOUNCE).saturating_duration_since(Instant::now()))
+            .iter()
+            .map(|(key, at)| (*at + delay(key)).saturating_duration_since(Instant::now()))
             .min()
             .unwrap_or(Duration::from_secs(3600));
         match rx.recv_timeout(timeout) {
@@ -423,7 +525,7 @@ fn debounce(state: &Mutex<Inner>, rx: &mpsc::Receiver<(Key, PathBuf)>, on_change
         let now = Instant::now();
         let ready: Vec<Key> = dirty
             .iter()
-            .filter(|(_, at)| now.duration_since(**at) >= DEBOUNCE)
+            .filter(|(key, at)| now.duration_since(**at) >= delay(key))
             .map(|(key, _)| key.clone())
             .collect();
         for key in ready {
@@ -431,11 +533,23 @@ fn debounce(state: &Mutex<Inner>, rx: &mpsc::Receiver<(Key, PathBuf)>, on_change
             let change = match &key {
                 Key::Repo(workdir) => repo_change(state, workdir).map(Change::Repo),
                 Key::File(file) => file_change(state, file).map(Change::File),
+                Key::Tree(root) => state.lock().unwrap().trees.get(root).map(|tree| {
+                    Change::Tree(TreeChange {
+                        repo: tree.workdir.to_string_lossy().into_owned(),
+                    })
+                }),
             };
             if let Some(change) = change {
                 on_change(change);
             }
         }
+    }
+}
+
+fn delay(key: &Key) -> Duration {
+    match key {
+        Key::Tree(_) => TREE_DEBOUNCE,
+        _ => DEBOUNCE,
     }
 }
 

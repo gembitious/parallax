@@ -210,6 +210,7 @@ export function buildMenus(src: MenuSources): BarMenu[] {
           item("커밋 그래프 (아래 패널)", handles.graph, { keys: "G" }),
         ]
       : []),
+    ...fromCommand(ws("changes")),
     SEPARATOR,
     ...fromCommand(ws("nextTab")),
     ...fromCommand(ws("previousTab")),

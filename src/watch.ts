@@ -1,5 +1,5 @@
 // 저장소·파일 변화 구독. 백엔드(plx-core/src/watch.rs)가 HEAD·참조가 바뀌면 "repo-changed",
-// 지켜보는 파일이 바뀌면 "file-changed" 이벤트를 보낸다.
+// 지켜보는 파일이 바뀌면 "file-changed", 지켜보는 작업트리(.git 밖)의 파일이 바뀌면 "tree-changed" 이벤트를 보낸다.
 import { listen } from "@tauri-apps/api/event";
 import { call } from "./ipc";
 
@@ -15,6 +15,9 @@ export type RepoChange = {
 /** plx-core/src/watch.rs FileChange */
 export type FileChange = { path: string };
 
+/** plx-core/src/watch.rs TreeChange */
+export type TreeChange = { repo: string };
+
 type Watching = { id: number; target: string };
 
 /**
@@ -28,6 +31,7 @@ type Channel<T> = { event: string; key(payload: T): string; subscribers: Map<str
 
 const repoChannel: Channel<RepoChange> = { event: "repo-changed", key: (c) => c.repo, subscribers: new Map() };
 const fileChannel: Channel<FileChange> = { event: "file-changed", key: (c) => c.path, subscribers: new Map() };
+const treeChannel: Channel<TreeChange> = { event: "tree-changed", key: (c) => c.repo, subscribers: new Map() };
 const listening = new Set<string>();
 
 function subscribe<T>(
@@ -76,6 +80,11 @@ export function watchRepo(repo: string, onChange: (change: RepoChange) => void):
 /** 파일 내용이 바뀌면(지우거나 다시 생겨도) `onChange`를 부른다. 돌려준 함수로 그만둔다. */
 export function watchFile(path: string, onChange: (change: FileChange) => void): () => void {
   return subscribe(fileChannel, "watch_file", { path }, onChange);
+}
+
+/** `repo`(저장소 안의 아무 경로)의 작업트리에서 파일이 생기거나 바뀌거나 없어지면 `onChange`를 부른다(작업트리 변경 화면). */
+export function watchTree(repo: string, onChange: (change: TreeChange) => void): () => void {
+  return subscribe(treeChannel, "watch_tree", { repo }, onChange);
 }
 
 /**
