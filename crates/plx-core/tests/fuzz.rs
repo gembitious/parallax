@@ -401,6 +401,70 @@ fn commit_table_bytes() {
     });
 }
 
+fn grep(
+    input: &[u8],
+    rev: Option<&str>,
+    rng: &mut Rng,
+) -> Result<usize, plx_core::grep::ParseError> {
+    let mut parser = plx_core::grep::GrepParser::new(rev);
+    let mut out = Vec::new();
+    for chunk in chunks(input, rng) {
+        parser.push(chunk, &mut out)?;
+    }
+    parser.finish(&mut out)?;
+    // 맞은 자리는 내용 안에 있고 앞에서 뒤로 온다(화면이 그대로 자른다).
+    for record in &out {
+        let len = record.line.text.encode_utf16().count() as u32;
+        let mut at = 0;
+        for &[start, end] in &record.line.ranges {
+            assert!(
+                at <= start && start < end && end <= len,
+                "{:?}",
+                record.line
+            );
+            at = end;
+        }
+    }
+    Ok(out.len())
+}
+
+#[test]
+fn grep_output() {
+    use plx_core::grep::{GrepQuery, grep_args};
+    let mut seeds = Vec::new();
+    for repo in repos() {
+        for (pattern, regex) in [("e", false), ("[가-힣]+|t.", true)] {
+            let query = GrepQuery {
+                pattern: pattern.to_owned(),
+                regex,
+                case_sensitive: false,
+                word: false,
+                rev: None,
+                paths: Vec::new(),
+            };
+            let args = grep_args(&query, Some("HEAD"));
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            seeds.push(git(&repo, &args));
+        }
+    }
+    // 내용 안의 표시 비슷한 바이트, 닫지 않은 표시, 깨진 UTF-8, 아주 긴 줄
+    seeds.push(b"HEAD:a\x001\x00\x1b[7m\x1b[7mx\x1b[m\x1b[m\x1b[\xff\x1b[7m\n".to_vec());
+    seeds.push(
+        [
+            b"HEAD:b\x002\x00".as_slice(),
+            &"가".repeat(900).into_bytes(),
+            b"\x1b[7m\xed\x95\x1b[m\n",
+        ]
+        .concat(),
+    );
+    for seed in &seeds {
+        grep(seed, Some("HEAD"), &mut Rng(1)).expect("씨앗은 git의 실제 출력이다");
+    }
+    fuzz("grep", &seeds, |input, rng| {
+        let _ = grep(input, Some("HEAD"), rng);
+    });
+}
+
 #[test]
 fn recent_repos_file() {
     use plx_core::recent;

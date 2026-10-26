@@ -2010,6 +2010,131 @@ kbd {
   display: none;
 }
 
+/* ---------------------------------------------------------------- 저장소 검색 */
+.search-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.search-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.search-bar input {
+  min-width: 0;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+
+.search-input {
+  flex: 3 1 200px;
+}
+
+.search-paths {
+  flex: 2 1 140px;
+}
+
+.search-rev {
+  flex: 1 1 110px;
+}
+
+.search-list {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  outline: none;
+}
+
+.search-rows {
+  position: relative;
+}
+
+/* 행 높이는 SearchView의 ROW_HEIGHT(22px)와 같다. */
+.search-row {
+  position: absolute;
+  right: 0;
+  left: 0;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 0 12px;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.search-row:hover {
+  background: var(--line-active);
+}
+
+.search-row.selected {
+  background: var(--selection);
+}
+
+.search-file {
+  gap: 6px;
+  padding-left: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.search-file .tree-chevron {
+  flex-shrink: 0;
+  width: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.search-file-name {
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+.search-file-dir {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-count {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.search-line {
+  padding-left: 24px;
+}
+
+.search-line-no {
+  flex-shrink: 0;
+  min-width: 4ch;
+  color: var(--muted);
+  text-align: right;
+}
+
+.search-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+
+.search-hit {
+  border-radius: 2px;
+  background: var(--search-current);
+  color: inherit;
+}
+
 /* 레인은 목록 위에 겹친 캔버스 하나에 그린다(클릭은 목록이 받는다). */
 .graph-lanes {
   position: absolute;

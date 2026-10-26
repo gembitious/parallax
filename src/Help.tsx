@@ -24,6 +24,7 @@ const COMMON: Key[] = [
 const WORKSPACE: Key[] = [
   { keys: `${MOD}B`, what: "파일 트리 보이기·숨기기" },
   { keys: IS_MAC ? "⌘⇧E" : "Ctrl+Shift+E", what: "파일 트리로", note: "Esc로 돌아온다" },
+  { keys: IS_MAC ? "⌘⇧F" : "Ctrl+Shift+F", what: "저장소에서 찾기", note: "git grep · 고른 글이 있으면 그것을 찾는다" },
   { keys: `${MOD}J`, what: "아래 패널 열기·닫기", note: "히스토리·그래프·커밋 상세" },
   { keys: "Ctrl+Tab / Ctrl+Shift+Tab", what: "다음·이전 탭", note: "Ctrl+PageDown·PageUp" },
   { keys: `${MOD}W`, what: "탭 닫기", note: "탭이 없으면 창 숨기기 · 가운데 단추로 탭을 눌러도 닫는다" },
@@ -36,7 +37,7 @@ const WORKSPACE: Key[] = [
 /** 파일 트리에는 없는 화면 키(에디터로 열기, 워크트리, 뒤로) */
 const TREE_SKIPS = new Set(["o", "W", "q"]);
 
-export type HelpView = "workspace" | "blame" | "commit" | "history" | "graph";
+export type HelpView = "workspace" | "blame" | "commit" | "history" | "graph" | "search";
 
 const TITLES: Record<HelpView, string> = {
   workspace: "파일 트리",
@@ -44,6 +45,7 @@ const TITLES: Record<HelpView, string> = {
   commit: "커밋 상세",
   history: "파일 히스토리",
   graph: "커밋 그래프",
+  search: "저장소 검색",
 };
 
 const KEYS: Record<HelpView, Key[]> = {
@@ -107,7 +109,18 @@ const KEYS: Record<HelpView, Key[]> = {
     { keys: "/", what: "검색 (메시지·작성자·sha)", note: "path:경로면 그 경로를 바꾼 커밋" },
     { keys: "n / N", what: "다음·이전 검색 결과" },
     { keys: "m", what: "비교 기준으로 표시", note: `${MOD}클릭으로도 · 다시 누르거나 Esc로 지운다` },
+    { keys: "F", what: "이 커밋의 파일에서 찾기", note: "저장소 검색을 이 리비전으로" },
     { keys: "d", what: "표시한 커밋 ↔ 고른 커밋 비교", note: "표시가 없으면 고른 커밋 ↔ 작업트리 · 우클릭에 갈라진 지점부터" },
+  ],
+  search: [
+    { keys: "j / k", what: "다음·이전 맞은 줄" },
+    { keys: "J / K · n / N", what: "다음·이전 파일" },
+    { keys: "Enter", what: "그 줄의 blame", note: `${MOD}Enter 옆 그룹에 · 파일 줄이면 접기·펴기` },
+    { keys: "Space · ← / →", what: "파일 접기·펴기" },
+    { keys: "H", what: "그 파일의 히스토리" },
+    { keys: "y", what: "경로:줄 복사" },
+    { keys: "/", what: "검색 칸으로", note: "Enter·↓·Esc로 목록에 돌아온다" },
+    { keys: "Alt+C · Alt+W · Alt+R", what: "대소문자 · 낱말 · 정규식", note: "정규식은 git의 확장 정규식(ERE)" },
   ],
 };
 

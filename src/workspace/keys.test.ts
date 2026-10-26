@@ -19,6 +19,8 @@ describe("workspaceKey", () => {
     expect(workspaceKey(key("b", { ctrlKey: true }), true)).toBeNull();
     expect(workspaceKey(key("j", { ctrlKey: true }), false)).toBe("togglePanel");
     expect(workspaceKey(key("E", { ctrlKey: true, shiftKey: true }), false)).toBe("focusTree");
+    expect(workspaceKey(key("F", { ctrlKey: true, shiftKey: true }), false)).toBe("search");
+    expect(workspaceKey(key("ㄹ", { metaKey: true, shiftKey: true }, "KeyF"), true)).toBe("search");
     expect(workspaceKey(key("b", { ctrlKey: true, shiftKey: true }), false)).toBeNull();
   });
 

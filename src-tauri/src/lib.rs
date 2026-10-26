@@ -70,6 +70,8 @@ pub fn run() {
             git::commit_detail,
             git::compare,
             git::ref_names,
+            git::grep_open,
+            git::grep_cancel,
             git::file_versions,
             git::file_stats,
             instance::current_request,

@@ -22,6 +22,7 @@ import { CommitView } from "../commit/CommitView";
 import { ComparePicker } from "../compare/ComparePicker";
 import { openInEditor } from "../editor";
 import { GraphView } from "../graph/GraphView";
+import { SearchView } from "../search/SearchView";
 import { Help } from "../Help";
 import { HistoryView } from "../history/HistoryView";
 import { toggleHud } from "../Hud";
@@ -452,6 +453,18 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
       from: { pane: "editor", tab: -1 },
     });
   };
+  /** 저장소 검색(아래 패널). 한 줄만 고른 글이 있으면 그것을 찾는다. */
+  const openSearch = (rev: string | null = null) => {
+    const { repo } = latest.current.state;
+    if (!repo) return;
+    const selected = window.getSelection()?.toString() ?? "";
+    const query = selected.includes("\n") ? "" : selected.trim().slice(0, 200);
+    dispatch({
+      type: "navigate",
+      navigation: { kind: "search", repo, rev, query },
+      from: { pane: "editor", tab: -1 },
+    });
+  };
   /** 두 리비전 비교(고르기 창에서 고른 것, 아래 패널) */
   const openCompare = (compare: Compare) => {
     const { repo } = latest.current.state;
@@ -526,6 +539,15 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
       detail: "커밋하지 않은 것 (아래 패널)",
       app: true,
       run: () => openChanges(),
+    },
+    {
+      id: "search",
+      label: "저장소에서 찾기",
+      keys: `${SHIFT_MOD}F`,
+      accelerator: "CmdOrCtrl+Shift+F",
+      detail: "git grep (아래 패널)",
+      app: true,
+      run: () => openSearch(),
     },
     {
       id: "compare",
@@ -670,6 +692,7 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
     const run: Record<WorkspaceKey, () => void> = {
       toggleTree,
       focusTree,
+      search: () => openSearch(),
       togglePanel: () => dispatch({ type: "togglePanel" }),
       nextTab: () => dispatch({ type: "cycle", delta: 1 }),
       previousTab: () => dispatch({ type: "cycle", delta: -1 }),
@@ -844,6 +867,8 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
           />
         ) : entry.view === "graph" ? (
           <GraphView {...common} repo={entry.repo} focus={entry.focus} cold={cold} />
+        ) : entry.view === "search" ? (
+          <SearchView {...common} repo={entry.repo} rev={entry.rev} query={entry.query} />
         ) : (
           <CommitView
             {...common}
