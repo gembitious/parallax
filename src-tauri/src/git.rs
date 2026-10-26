@@ -6,7 +6,7 @@ use std::sync::Arc;
 use plx_core::ai_notes::{AiAttribution, AiItem, AiNotes};
 use plx_core::blame_session::{SessionEvent, Sessions};
 use plx_core::cache::DiskCache;
-use plx_core::changes::{self, Comparison, Side};
+use plx_core::changes::{self, Comparison, RefName, Side};
 use plx_core::cli::Request;
 use plx_core::commit::{self, CommitDetail, FileStat, FileVersions, StatRequest};
 use plx_core::commit_graph::{self, GraphStatus, Progress};
@@ -566,6 +566,19 @@ pub async fn compare(
             None => Side::Worktree,
         };
         changes::compare(&repo, base, target, merge_base.unwrap_or(false))
+    })
+    .await
+}
+
+/// 비교할 리비전을 고르는 칸이 권할 이름(브랜치, 원격 브랜치, 태그)
+#[tauri::command]
+pub async fn ref_names(
+    git: State<'_, Arc<GitState>>,
+    repo: String,
+) -> Result<Vec<RefName>, String> {
+    blocking(git, move |git| {
+        let repo = git.repos.for_path(Path::new(&repo))?;
+        changes::ref_names(&repo)
     })
     .await
 }

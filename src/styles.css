@@ -2211,6 +2211,66 @@ mark.quick-open-hit {
   font-size: 11px;
 }
 
+/* 두 리비전 비교 고르기: 칸 둘(그 아래 푼 커밋), 비교 방법, 권하는 이름 */
+.compare-picker h2 {
+  margin: 0 0 8px;
+}
+
+.compare-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.compare-field {
+  display: grid;
+  grid-template-columns: 3em 1fr;
+  gap: 2px 8px;
+  align-items: center;
+}
+
+.compare-field input {
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 14px;
+}
+
+.compare-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.compare-resolved {
+  grid-column: 2;
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compare-swap {
+  align-self: flex-start;
+  margin-left: calc(3em + 8px);
+}
+
+.compare-options {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  margin: 8px 0 0;
+}
+
+/* 그래프에서 비교 기준으로 표시한 커밋 */
+.graph-row.marked {
+  box-shadow: inset 3px 0 0 var(--warn);
+}
+
 /* AI가 쓴 줄(git-ai 노트): 나이 막대 옆에 보라 줄, 작성자 자리에 도구 이름 */
 .cm-blame-line.ai {
   box-shadow: inset 3px 0 0 var(--ai);
@@ -2277,4 +2337,19 @@ mark.quick-open-hit {
   color: var(--accent);
   font-size: 14px;
   pointer-events: none;
+}
+
+/* 그래프 머리줄의 비교 기준 표시 */
+.compare-mark {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.compare-mark button.icon {
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: inherit;
+  line-height: 1;
 }

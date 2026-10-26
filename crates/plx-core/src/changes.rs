@@ -406,3 +406,70 @@ pub fn worktree_size(repo: &Repo, rel: &str) -> Option<u64> {
         Err(_) => None,
     }
 }
+
+/// 비교할 리비전을 고르는 칸이 권할 이름의 종류
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RefKind {
+    Branch,
+    Remote,
+    Tag,
+}
+
+/// 비교할 리비전을 고르는 칸이 권할 이름(짧은 이름: `main`, `origin/main`, `v1.0`)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefName {
+    pub name: String,
+    pub kind: RefKind,
+    /// HEAD가 가리키는 브랜치
+    pub current: bool,
+}
+
+/// 권할 이름을 이만큼만 보낸다(원격 브랜치가 수만 개인 저장소).
+pub const REF_NAMES_LIMIT: usize = 20_000;
+
+/// 브랜치(HEAD의 브랜치 먼저), 원격 브랜치, 태그 순의 이름. 기호 참조(`origin/HEAD`)와 UTF-8이 아닌 이름은 뺀다.
+/// 참조를 읽기만 하고 객체는 읽지 않는다(이름이 커밋을 가리키는지는 고른 뒤 비교가 본다).
+pub fn ref_names(repo: &Repo) -> Result<Vec<RefName>> {
+    let local = repo.local();
+    let current = repo.head_branch()?;
+    let platform = local
+        .references()
+        .map_err(|e| Error(format!("참조: {e}")))?;
+    let mut names = Vec::new();
+    for reference in platform.all().map_err(|e| Error(format!("참조: {e}")))? {
+        let Ok(reference) = reference else { continue };
+        if matches!(reference.target(), gix::refs::TargetRef::Symbolic(_)) {
+            continue;
+        }
+        let full = reference.name().as_bstr();
+        let (kind, short) = if let Some(short) = full.strip_prefix(b"refs/heads/") {
+            (RefKind::Branch, short)
+        } else if let Some(short) = full.strip_prefix(b"refs/remotes/") {
+            (RefKind::Remote, short)
+        } else if let Some(short) = full.strip_prefix(b"refs/tags/") {
+            (RefKind::Tag, short)
+        } else {
+            continue;
+        };
+        let Ok(name) = std::str::from_utf8(short) else {
+            continue;
+        };
+        names.push(RefName {
+            current: kind == RefKind::Branch && current.as_deref() == Some(name),
+            name: name.to_owned(),
+            kind,
+        });
+    }
+    names.sort_by(|a, b| {
+        let rank = |r: &RefName| match r.kind {
+            RefKind::Branch => u8::from(!r.current),
+            RefKind::Remote => 2,
+            RefKind::Tag => 3,
+        };
+        rank(a).cmp(&rank(b)).then_with(|| a.name.cmp(&b.name))
+    });
+    names.truncate(REF_NAMES_LIMIT);
+    Ok(names)
+}

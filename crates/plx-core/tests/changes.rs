@@ -288,3 +288,41 @@ fn revisions_compare_like_git_diff() {
         git_rows(&dir, &[&format!("{main}...{topic}")])
     );
 }
+
+#[test]
+fn ref_names_list_branches_remotes_and_tags() {
+    let dir = base_repo("changes-refs");
+    let head = git_text(&dir, &["rev-parse", "HEAD"]);
+    git(&dir, &["branch", "topic"]);
+    git(&dir, &["branch", "기능/한글"]);
+    git(&dir, &["tag", "v1.0"]);
+    git(&dir, &["tag", "-a", "-m", "annotated", "v2.0"]);
+    git(&dir, &["update-ref", "refs/remotes/origin/main", &head]);
+    git(
+        &dir,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    );
+    git(&dir, &["checkout", "-q", "topic"]);
+    let repo = Repo::discover(&dir).unwrap();
+    let names: Vec<(String, changes::RefKind, bool)> = changes::ref_names(&repo)
+        .unwrap()
+        .into_iter()
+        .map(|r| (r.name, r.kind, r.current))
+        .collect();
+    use changes::RefKind::{Branch, Remote, Tag};
+    assert_eq!(
+        names,
+        vec![
+            ("topic".to_owned(), Branch, true),
+            ("main".to_owned(), Branch, false),
+            ("기능/한글".to_owned(), Branch, false),
+            ("origin/main".to_owned(), Remote, false),
+            ("v1.0".to_owned(), Tag, false),
+            ("v2.0".to_owned(), Tag, false),
+        ]
+    );
+}

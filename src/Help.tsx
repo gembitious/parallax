@@ -30,6 +30,7 @@ const WORKSPACE: Key[] = [
   { keys: `${MOD}\\`, what: "에디터 나누기", note: "보이는 탭을 오른쪽에 하나 더 · 탭을 끌어 그룹의 옆에 놓아도 된다" },
   { keys: `${MOD}1~4`, what: "에디터 그룹으로", note: "왼쪽부터" },
   { keys: "D", what: "작업트리 변경", note: "커밋하지 않은 것을 HEAD와 견준다 · 파일을 고치면 바로 다시 견준다" },
+  { keys: "두 리비전 비교…", what: "브랜치·태그·커밋 둘을 견준다", note: "명령 팔레트·보기 메뉴 · 그래프에서는 m으로 표시하고 d" },
 ];
 
 /** 파일 트리에는 없는 화면 키(에디터로 열기, 워크트리, 뒤로) */
@@ -81,6 +82,8 @@ const KEYS: Record<HelpView, Key[]> = {
     { keys: "a", what: "이 파일만 ↔ 모든 파일", note: "히스토리에서 열었을 때" },
     { keys: "y", what: "커밋 sha 복사" },
     { keys: "G", what: "커밋 그래프 (이 커밋을 골라서)" },
+    { keys: "m", what: "두 점 ↔ 갈라진 지점부터", note: "두 리비전 비교에서 · a b ↔ a...b" },
+    { keys: "x", what: "기준과 대상 바꾸기", note: "두 리비전 비교에서" },
   ],
   history: [
     { keys: "j / k", what: "아래·위 커밋" },
@@ -103,6 +106,8 @@ const KEYS: Record<HelpView, Key[]> = {
     { keys: "R", what: "원격 브랜치 모두 ↔ 로컬 브랜치와 upstream만" },
     { keys: "/", what: "검색 (메시지·작성자·sha)", note: "path:경로면 그 경로를 바꾼 커밋" },
     { keys: "n / N", what: "다음·이전 검색 결과" },
+    { keys: "m", what: "비교 기준으로 표시", note: `${MOD}클릭으로도 · 다시 누르거나 Esc로 지운다` },
+    { keys: "d", what: "표시한 커밋 ↔ 고른 커밋 비교", note: "표시가 없으면 고른 커밋 ↔ 작업트리 · 우클릭에 갈라진 지점부터" },
   ],
 };
 

@@ -8,7 +8,7 @@ import { copyText } from "../clipboard";
 import { formatCount, formatDate, relativeTime, shortSha } from "../blame/format";
 import { Acceleration } from "../history/Acceleration";
 import { scrollToRow, visibleRange } from "../history/list";
-import { lastName, type Navigation } from "../nav";
+import { lastName, type Compare, type Navigation } from "../nav";
 import { afterPaint, getPerfInfo, longFrameIn, nowMs, record } from "../perf";
 import { drawRows, graphWidth, readPalette, ROW_HEIGHT, type Palette, type Visible } from "./draw";
 import { reloadFocus, type Focus } from "./focus";
@@ -217,10 +217,22 @@ function GraphPane({
     reported: false,
   });
   const [accelRequest, setAccelRequest] = useState(0);
+  /** 비교 기준으로 표시한 커밋(`m`). 다른 행에서 `d`면 이 커밋 ↔ 그 커밋을 견준다. */
+  const [mark, setMark] = useState<string | null>(null);
   // 명령 팔레트: 키로 하는 일 모두와 머리줄 버튼(범위, 가속 설정). 함수들은 아래에 있다(누를 때 부른다).
   const commands: Command[] = [
     { id: "commit", label: "커밋 상세", keys: "Enter", run: () => openCommit() },
     { label: "커밋 sha 복사", keys: "y", run: () => copySha() },
+    { label: mark ? "비교 기준 표시 지우기" : "비교 기준으로 표시", keys: "m", detail: "다른 커밋에서 d로 견준다", run: () => toggleMark() },
+    {
+      label: mark ? "표시한 커밋과 비교" : "작업트리와 비교",
+      keys: "d",
+      detail: mark ? `${shortSha(mark)} ↔ 고른 커밋` : "고른 커밋 ↔ 작업트리",
+      run: () => compareSelected(false),
+    },
+    ...(mark
+      ? [{ label: "표시한 커밋과 비교 (갈라진 지점부터)", detail: `${shortSha(mark)}...고른 커밋`, run: () => compareSelected(true) }]
+      : []),
     ...SCOPES.map(
       (s): Command => ({
         label: `범위: ${s.name}`,
@@ -259,6 +271,7 @@ function GraphPane({
     help,
     total,
     found,
+    mark,
     openFiles: quickOpen.open,
     palette: commandPalette.open,
   });
@@ -277,6 +290,7 @@ function GraphPane({
     help,
     total,
     found,
+    mark,
     openFiles: quickOpen.open,
     palette: commandPalette.open,
   };
@@ -608,6 +622,45 @@ function GraphPane({
     onNavigate({ kind: "commit", repo: m.repo, rev: row.sha, path: null });
   };
 
+  /** 고른(`index`) 커밋을 비교 기준으로 표시한다. 이미 그 커밋이면 지운다. */
+  const toggleMark = (index?: number) => {
+    const row = current(index);
+    if (!row) return;
+    const next = latest.current.mark === row.sha ? null : row.sha;
+    setMark(next);
+    showToast(next ? `비교 기준: ${shortSha(next)} (다른 커밋에서 d로 견준다)` : "비교 기준 표시를 지웠다");
+  };
+
+  /**
+   * 고른 커밋을 견준다: 표시한 커밋이 있으면 그 커밋 ↔ 고른 커밋(`mergeBase`면 갈라진 지점부터), 없으면 고른 커밋 ↔
+   * 작업트리. 커밋 상세처럼 아래 패널에 연다.
+   */
+  const compareSelected = (mergeBase: boolean, index?: number) => {
+    const row = current(index);
+    if (!row) return;
+    const base = latest.current.mark;
+    if (!base) {
+      compareWorktree(index);
+      return;
+    }
+    if (base === row.sha) {
+      showToast("표시한 커밋이다: 다른 커밋을 골라 d");
+      return;
+    }
+    openCompare({ base, target: row.sha, mergeBase });
+  };
+
+  /** 고른 커밋 ↔ 작업트리 */
+  const compareWorktree = (index?: number) => {
+    const row = current(index);
+    if (row) openCompare({ base: row.sha, target: null, mergeBase: false });
+  };
+
+  const openCompare = (compare: Compare) => {
+    const m = latest.current.meta;
+    if (m) onNavigate({ kind: "commit", repo: m.repo, rev: compare.base, path: null, compare });
+  };
+
   const copySha = () => {
     const row = current();
     if (!row) return;
@@ -713,6 +766,28 @@ function GraphPane({
       { label: "커밋 상세", keys: "Enter", disabled: !row, run: () => openCommit(index) },
       "separator",
       { label: "커밋 sha 복사", keys: "y", disabled: !row, run: copySha },
+      "separator",
+      {
+        label: row && mark === row.sha ? "비교 기준 표시 지우기" : "비교 기준으로 표시",
+        keys: "m",
+        detail: mark && row && mark !== row.sha ? `지금 ${shortSha(mark)}` : undefined,
+        disabled: !row,
+        run: () => toggleMark(index),
+      },
+      ...(mark && row && mark !== row.sha
+        ? [
+            { label: "표시한 커밋과 비교", keys: "d", detail: `${shortSha(mark)} ↔ 이 커밋`, run: () => compareSelected(false, index) },
+            { label: "표시한 커밋과 비교 (갈라진 지점부터)", detail: `${shortSha(mark)}...이 커밋`, run: () => compareSelected(true, index) },
+          ]
+        : []),
+      {
+        label: "작업트리와 비교",
+        keys: mark ? undefined : "d",
+        detail: "이 커밋 ↔ 커밋하지 않은 것까지",
+        disabled: !row,
+        run: () => compareWorktree(index),
+      },
+      "separator",
       { label: "요약 복사", disabled: !row, run: () => row && copy(row.summary, row.summary)() },
       ...names.slice(0, 4).map((label) => ({ label: "이름 복사", detail: label.name, run: copy(label.name, label.name) })),
       "separator",
@@ -787,6 +862,12 @@ function GraphPane({
         case "y":
           copySha();
           break;
+        case "m":
+          toggleMark();
+          break;
+        case "d":
+          compareSelected(false);
+          break;
         case "/":
           openSearch();
           break;
@@ -815,6 +896,7 @@ function GraphPane({
           // 도움말을 닫고, 없으면 검색 강조를 지운다.
           if (helpOpen) setHelp(false);
           else if (latest.current.found) setFound(null);
+          else if (latest.current.mark) setMark(null);
           else handled = false;
           break;
         default:
@@ -894,6 +976,7 @@ function GraphPane({
   const rowClass = (i: number, row: GraphRow | undefined) => {
     const classes = ["graph-row"];
     if (i === selected) classes.push("selected");
+    if (mark !== null && row?.sha === mark) classes.push("marked");
     if (found?.kind === "path" ? found.set.has(i) : matchText !== null && row && rowMatches(row, matchText)) {
       classes.push("match");
     }
@@ -941,6 +1024,14 @@ function GraphPane({
         {hidden && (
           <span className="badge" title={scope === "branches" ? "R로 원격 브랜치까지 모두 보인다" : undefined}>
             {hidden}
+          </span>
+        )}
+        {mark && (
+          <span className="badge warn mono compare-mark" title="비교 기준(m). 다른 커밋에서 d로 견준다. Esc로 지운다">
+            비교 기준 {shortSha(mark)}
+            <button type="button" className="icon" aria-label="비교 기준 지우기" onClick={() => setMark(null)}>
+              ×
+            </button>
           </span>
         )}
         {depth > 1 && (
@@ -1023,7 +1114,11 @@ function GraphPane({
                     height: ROW_HEIGHT,
                     paddingLeft: width,
                   }}
-                  onClick={() => select(i)}
+                  onClick={(e) => {
+                    // Ctrl·⌘+클릭은 비교 기준 표시(고른 행은 그대로)
+                    if (e.ctrlKey || e.metaKey) toggleMark(i);
+                    else select(i);
+                  }}
                   onDoubleClick={() => {
                     select(i);
                     openCommit(i);
