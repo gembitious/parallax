@@ -203,6 +203,15 @@ export function BlameView({
     { id: "history", label: "파일 히스토리", keys: "H", run: run("history") },
     { id: "lineHistory", label: "라인 히스토리 (선택한 줄)", keys: "L", run: run("lineHistory") },
     { id: "graph", label: "커밋 그래프 (이 줄의 커밋)", keys: "G", run: run("graph") },
+    ...(meta?.rev
+      ? [
+          {
+            label: "이 리비전의 파일 트리",
+            detail: "왼쪽 파일 트리를 이 리비전 시점으로",
+            run: () => meta.rev && onNavigate({ kind: "browse", repo: meta.repo, rev: meta.rev }),
+          },
+        ]
+      : []),
     { label: "커밋 sha 복사", keys: "y", run: run("copySha") },
     { label: "파일 안에서 찾기", keys: "/", run: run("search") },
     { label: "에디터로 열기", keys: "o", detail: "작업트리 파일의 이 줄", run: run("openEditor") },

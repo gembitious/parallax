@@ -2,7 +2,8 @@
 // 누르면 미리보기 탭, 두 번 누르거나 Enter면 보통 탭, Mod+Enter면 옆(오른쪽) 에디터 그룹에 연다. 우클릭은 열기·옆에
 // 열기·히스토리·에디터로 열기·경로 복사.
 // 보이는 탭의 파일은 펼쳐서 고른다. 저장소가 바뀌거나(HEAD·참조) 창으로 돌아오면 펼친 폴더를 다시 읽는다(git add로
-// 늘어난 파일).
+// 늘어난 파일). 리비전 둘러보기(`rev`, M7-4)면 그 커밋의 트리이고 연 파일은 그 리비전의 blame이다(트리는 바뀌지 않아
+// 다시 읽지 않는다).
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { openInEditor } from "../editor";
 import { call } from "../ipc";
@@ -22,6 +23,8 @@ const INDENT_PX = 12;
 type Props = {
   /** 작업트리 경로 */
   repo: string;
+  /** 리비전 둘러보기의 커밋(sha). 없으면 작업트리(인덱스)의 추적 파일 */
+  rev: string | null;
   /** 키를 받는 칸이다 */
   focused: boolean;
   /** 바뀌면 (키를 받는 칸일 때) 포커스를 다시 가져온다: 그 위에 뜬 창(Quick Open 등)이 닫혔다 */
@@ -37,7 +40,7 @@ type Props = {
   onLeave(): void;
 };
 
-export function FileTree({ repo, focused, focusTick, activeFile, onOpen, onOpenSide, onHistory, onLeave }: Props) {
+export function FileTree({ repo, rev, focused, focusTick, activeFile, onOpen, onOpenSide, onHistory, onLeave }: Props) {
   const [listings, setListings] = useState<ReadonlyMap<string, DirListing>>(() => new Map());
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const [selected, setSelected] = useState<string | null>(null);
@@ -52,7 +55,7 @@ export function FileTree({ repo, focused, focusTick, activeFile, onOpen, onOpenS
   // 폴더 목록을 읽어 넣는다. 저장소마다 새 컴포넌트다(작업 공간이 key를 준다).
   const load = (dirs: Iterable<string>) => {
     for (const dir of dirs) {
-      call<DirListing>("files_dir", { repo, dir }).then(
+      call<DirListing>("files_dir", { repo, dir, rev }).then(
         (listing) => {
           setListings((map) => new Map(map).set(dir, sortListing(listing)));
           if (dir === "") setFailed(null);
@@ -68,6 +71,7 @@ export function FileTree({ repo, focused, focusTick, activeFile, onOpen, onOpenS
 
   useEffect(() => {
     load([""]);
+    if (rev !== null) return;
     const stop = watchRepo(repo, refresh);
     window.addEventListener("focus", refresh);
     return () => {
@@ -171,7 +175,7 @@ export function FileTree({ repo, focused, focusTick, activeFile, onOpen, onOpenS
         label: "에디터로 열기",
         detail: row.missing ? "작업트리에서 지운 파일" : undefined,
         disabled: row.missing,
-        run: () => void openInEditor({ repo, path: row.path, rev: null, line: null }).then((message) => toast(message)),
+        run: () => void openInEditor({ repo, path: row.path, rev, line: null }).then((message) => toast(message)),
       },
       "separator",
       ...copies,
@@ -260,7 +264,7 @@ export function FileTree({ repo, focused, focusTick, activeFile, onOpen, onOpenS
       )}
       {!failed && listings.has("") && rows.length === 0 && (
         <div className="tree-message">
-          <p>추적하는 파일이 없다.</p>
+          <p>{rev === null ? "추적하는 파일이 없다." : "이 커밋에는 파일이 없다."}</p>
         </div>
       )}
     </div>

@@ -194,6 +194,26 @@ kbd,
   white-space: nowrap;
 }
 
+/* 리비전 둘러보기(M7-4): 트리가 보이는 커밋 */
+.sidebar-revision {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+  align-items: center;
+  padding: 4px 6px 4px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 12px;
+}
+
+.sidebar-revision-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tree-list {
   position: relative;
   flex: 1;

@@ -17,9 +17,11 @@ import {
 import { createPortal, flushSync } from "react-dom";
 import { BlameView, requestGotoLine, type EditorStatus } from "../blame/BlameView";
 import { shortSha } from "../blame/format";
+import type { CommitInfo } from "../blame/types";
 import { toggleBlameGutter, useBlameGutter } from "../blame/gutterSetting";
 import { CommitView } from "../commit/CommitView";
 import { ComparePicker } from "../compare/ComparePicker";
+import { RevisionPicker } from "../compare/RevisionPicker";
 import { openInEditor } from "../editor";
 import { GraphView } from "../graph/GraphView";
 import { SearchView } from "../search/SearchView";
@@ -392,6 +394,12 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
   const [help, setHelp] = useState(false);
   /** 두 리비전 비교 고르기 */
   const [comparing, setComparing] = useState(false);
+  /** 리비전 둘러보기(M7-4): 파일 트리가 보이는 커밋. 없으면 작업트리(인덱스)다. */
+  const [treeRev, setTreeRev] = useState<CommitInfo | null>(null);
+  /** 리비전 둘러보기 고르기 */
+  const [pickingRev, setPickingRev] = useState(false);
+  // 저장소가 바뀌면(작업 공간을 새로 열었다) 작업트리로 돌아온다.
+  useEffect(() => setTreeRev(null), [state.repo]);
   // 작업 공간의 창(Quick Open·팔레트·도움말)을 닫으면 키를 받던 칸(트리)에 포커스를 돌려준다.
   const [focusTick, setFocusTick] = useState(0);
   const refocus = () => setFocusTick((tick) => tick + 1);
@@ -407,8 +415,11 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
   const activeGroup = activeGroupOf(state);
   const activeTab = activeTabOf(state);
   const activeTop = activeTab ? topOf(activeTab) : null;
+  // 트리가 보이는 리비전(둘러보기면 그 커밋, 아니면 작업트리)의 파일이면 트리에서 펼쳐 고른다.
   const activeFile =
-    activeTop?.view === "blame" && activeTop.target.rev === null && activeTop.target.repo !== null ? activeTop.target.path : null;
+    activeTop?.view === "blame" && activeTop.target.rev === (treeRev?.sha ?? null) && activeTop.target.repo !== null
+      ? activeTop.target.path
+      : null;
   const editorShown = !(state.panelOpen && state.panelMax);
   const panelShown = state.panelOpen && state.panel.length > 0;
   /** 키를 받는 화면이 없다(트리, 탭이 없는 에디터): 작업 공간이 Quick Open·팔레트·도움말 키를 받는다 */
@@ -442,6 +453,33 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
   const openGraph = () => {
     const { repo } = latest.current.state;
     if (repo) dispatch({ type: "navigate", navigation: { kind: "graph", repo, rev: null }, from: { pane: "editor", tab: -1 } });
+  };
+  /** 리비전 둘러보기: 파일 트리를 그 커밋의 트리로 바꾸고 트리로 간다. */
+  const showRevision = (info: CommitInfo) => {
+    setPickingRev(false);
+    setTreeRev(info);
+    if (!latest.current.treeOpen) {
+      setTreeOpen(true);
+      latest.current.treeOpen = true;
+      saveTreeOpen();
+    }
+    dispatch({ type: "focus", focus: "tree" });
+    refocus();
+  };
+  const browse = (rev: string) => {
+    const { repo } = latest.current.state;
+    if (!repo) return;
+    call<CommitInfo>("commit_info", { repo, rev }).then(showRevision, (e: unknown) => toast(String(e)));
+  };
+  /** 파일 트리를 작업트리로 되돌린다 */
+  const browseWorktree = () => {
+    setTreeRev(null);
+    if (latest.current.state.focus === "tree") refocus();
+  };
+  /** 화면이 연 곳: 리비전 둘러보기는 트리가 받고 나머지는 작업 공간 상태가 받는다. */
+  const go = (navigation: Navigation, from: Place) => {
+    if (navigation.kind === "browse") browse(navigation.rev);
+    else navigate(navigation, from);
   };
   /** 작업트리 변경(HEAD ↔ 작업트리, 아래 패널). `path`면 그 파일을 골라 둔다. */
   const openChanges = (path: string | null = null) => {
@@ -524,7 +562,7 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
   const quickOpen = useQuickOpen({
     repo: state.repo,
     current: activeFile,
-    onNavigate: (navigation) => navigate(navigation, { pane: "editor", tab: activeTab?.key ?? -1 }),
+    onNavigate: (navigation) => go(navigation, { pane: "editor", tab: activeTab?.key ?? -1 }),
     onClosed: refocus,
   });
 
@@ -549,6 +587,24 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
       app: true,
       run: () => openSearch(),
     },
+    {
+      id: "browse",
+      label: "리비전 둘러보기…",
+      detail: "파일 트리를 그 커밋 시점으로",
+      app: true,
+      run: () => setPickingRev(true),
+    },
+    ...(treeRev
+      ? [
+          {
+            id: "browseWorktree" as const,
+            label: "파일 트리를 작업트리로",
+            detail: `지금 ${shortSha(treeRev.sha)}`,
+            app: true,
+            run: browseWorktree,
+          },
+        ]
+      : []),
     {
       id: "compare",
       label: "두 리비전 비교…",
@@ -681,9 +737,9 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
   useEffect(() => setTarget(target, focusSlot));
   useEffect(() => () => setTarget(null, () => {}), []);
 
-  const overlay = help || comparing || quickOpen.isOpen || palette.isOpen;
-  const latest = useRef({ state, treeOpen, noView, help, overlay, quickOpen, palette });
-  latest.current = { state, treeOpen, noView, help, overlay, quickOpen, palette };
+  const overlay = help || comparing || pickingRev || quickOpen.isOpen || palette.isOpen;
+  const latest = useRef({ state, treeOpen, treeRev, noView, help, overlay, quickOpen, palette });
+  latest.current = { state, treeOpen, treeRev, noView, help, overlay, quickOpen, palette };
 
   // 작업 공간 키(트리·패널·탭·그룹)는 어느 칸에서든 화면보다 먼저 받는다. 떠 있는 창(팔레트·Quick Open의 Ctrl+J 등,
   // 라이선스)과 메뉴의 키는 그 창의 것이다. 키를 받는 화면이 없으면(트리, 탭이 없는 에디터) Quick Open·팔레트·도움말·
@@ -840,7 +896,7 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
         depth,
         onShown: shownFor(entry),
         onBack: () => back(place),
-        onNavigate: (navigation: Navigation) => navigate(navigation, place),
+        onNavigate: (navigation: Navigation) => go(navigation, place),
       };
       const view =
         entry.view === "blame" ? (
@@ -1097,6 +1153,11 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
         { label: "작업트리 변경", keys: "D", detail: "커밋하지 않은 것", run: () => openChanges() },
         { label: "폴더 히스토리", detail: "저장소 전체", run: () => openHistory(repo, ".", null, fromActive()) },
         "separator",
+        { label: "리비전 둘러보기…", detail: "파일 트리를 그 커밋 시점으로", run: () => setPickingRev(true) },
+        ...(latest.current.treeRev
+          ? [{ label: "파일 트리를 작업트리로", detail: `지금 ${shortSha(latest.current.treeRev.sha)}`, run: browseWorktree }]
+          : []),
+        "separator",
         {
           label: "에디터로 열기",
           detail: "작업트리 폴더",
@@ -1153,17 +1214,29 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
               <div className="sidebar-header" title={state.repo}>
                 {repoName}
               </div>
+              {treeRev && (
+                <div className="sidebar-revision" title={`${treeRev.sha}\n${treeRev.summary}`}>
+                  <span className="badge mono warn">{shortSha(treeRev.sha)}</span>
+                  <span className="sidebar-revision-summary">{treeRev.summary}</span>
+                  <button type="button" className="icon" aria-label="작업트리로" title="파일 트리를 작업트리로" onClick={browseWorktree}>
+                    ×
+                  </button>
+                </div>
+              )}
               <FileTree
-                key={state.repo}
+                key={`${state.repo}@${treeRev?.sha ?? ""}`}
                 repo={state.repo}
+                rev={treeRev?.sha ?? null}
                 focused={state.focus === "tree"}
                 focusTick={focusTick}
                 activeFile={activeFile}
-                onOpen={(path, missing, preview) => dispatch({ type: "open", repo: state.repo!, path, missing, preview })}
-                onOpenSide={(path, missing) =>
-                  dispatch({ type: "open", repo: state.repo!, path, missing, preview: false, side: true })
+                onOpen={(path, missing, preview) =>
+                  dispatch({ type: "open", repo: state.repo!, path, missing, preview, rev: treeRev?.sha ?? null })
                 }
-                onHistory={(path) => openHistory(state.repo!, path, null, fromActive())}
+                onOpenSide={(path, missing) =>
+                  dispatch({ type: "open", repo: state.repo!, path, missing, preview: false, side: true, rev: treeRev?.sha ?? null })
+                }
+                onHistory={(path) => openHistory(state.repo!, path, treeRev?.sha ?? null, fromActive())}
                 onLeave={leaveTree}
               />
             </aside>
@@ -1336,6 +1409,17 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
       <HostPlacer hosts={hosts} placements={placements} containers={containers} cursors={cursors} />
       {portals.map((portal) => portal.element)}
       {help && <Help view="workspace" onClose={closeHelp} />}
+      {pickingRev && state.repo && (
+        <RevisionPicker
+          repo={state.repo}
+          title="리비전 둘러보기"
+          onPick={showRevision}
+          onClose={() => {
+            setPickingRev(false);
+            refocus();
+          }}
+        />
+      )}
       {comparing && state.repo && (
         <ComparePicker
           repo={state.repo}
