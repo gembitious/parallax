@@ -211,6 +211,7 @@ export function buildMenus(src: MenuSources): BarMenu[] {
         ]
       : []),
     ...fromCommand(ws("changes")),
+    ...fromCommand(ws("compare")),
     SEPARATOR,
     ...fromCommand(ws("nextTab")),
     ...fromCommand(ws("previousTab")),

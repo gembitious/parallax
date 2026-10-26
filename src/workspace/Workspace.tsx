@@ -19,6 +19,7 @@ import { BlameView, requestGotoLine, type EditorStatus } from "../blame/BlameVie
 import { shortSha } from "../blame/format";
 import { toggleBlameGutter, useBlameGutter } from "../blame/gutterSetting";
 import { CommitView } from "../commit/CommitView";
+import { ComparePicker } from "../compare/ComparePicker";
 import { openInEditor } from "../editor";
 import { GraphView } from "../graph/GraphView";
 import { Help } from "../Help";
@@ -28,7 +29,7 @@ import { call } from "../ipc";
 import { isComposing } from "../keys";
 import { openContextMenu, type MenuEntry } from "../menu/Menu";
 import { setTarget, usePublish, type ViewSlot } from "../menu/registry";
-import { WORKTREE_CHANGES, backDirectionAt, lastName, type Navigation, type StackEntry } from "../nav";
+import { WORKTREE_CHANGES, backDirectionAt, lastName, type Compare, type Navigation, type StackEntry } from "../nav";
 import { commonCommands, usePalette, type Command, type CommandId } from "../palette/Palette";
 import { isPaletteKey } from "../palette/keys";
 import { getPerfInfo } from "../perf";
@@ -388,6 +389,8 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
   const containers = useRef(new Map<string, HTMLElement>());
   const containerRefs = useRef(new Map<string, (el: HTMLDivElement | null) => void>());
   const [help, setHelp] = useState(false);
+  /** 두 리비전 비교 고르기 */
+  const [comparing, setComparing] = useState(false);
   // 작업 공간의 창(Quick Open·팔레트·도움말)을 닫으면 키를 받던 칸(트리)에 포커스를 돌려준다.
   const [focusTick, setFocusTick] = useState(0);
   const refocus = () => setFocusTick((tick) => tick + 1);
@@ -446,6 +449,18 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
     dispatch({
       type: "navigate",
       navigation: { kind: "commit", repo, rev: WORKTREE_CHANGES.base, path, compare: WORKTREE_CHANGES },
+      from: { pane: "editor", tab: -1 },
+    });
+  };
+  /** 두 리비전 비교(고르기 창에서 고른 것, 아래 패널) */
+  const openCompare = (compare: Compare) => {
+    const { repo } = latest.current.state;
+    setComparing(false);
+    refocus();
+    if (!repo) return;
+    dispatch({
+      type: "navigate",
+      navigation: { kind: "commit", repo, rev: compare.base, path: null, compare },
       from: { pane: "editor", tab: -1 },
     });
   };
@@ -511,6 +526,13 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
       detail: "커밋하지 않은 것 (아래 패널)",
       app: true,
       run: () => openChanges(),
+    },
+    {
+      id: "compare",
+      label: "두 리비전 비교…",
+      detail: "브랜치·태그·커밋 둘 (아래 패널)",
+      app: true,
+      run: () => setComparing(true),
     },
     {
       id: "tree",
@@ -637,7 +659,7 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
   useEffect(() => setTarget(target, focusSlot));
   useEffect(() => () => setTarget(null, () => {}), []);
 
-  const overlay = help || quickOpen.isOpen || palette.isOpen;
+  const overlay = help || comparing || quickOpen.isOpen || palette.isOpen;
   const latest = useRef({ state, treeOpen, noView, help, overlay, quickOpen, palette });
   latest.current = { state, treeOpen, noView, help, overlay, quickOpen, palette };
 
@@ -1289,6 +1311,16 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
       <HostPlacer hosts={hosts} placements={placements} containers={containers} cursors={cursors} />
       {portals.map((portal) => portal.element)}
       {help && <Help view="workspace" onClose={closeHelp} />}
+      {comparing && state.repo && (
+        <ComparePicker
+          repo={state.repo}
+          onPick={openCompare}
+          onClose={() => {
+            setComparing(false);
+            refocus();
+          }}
+        />
+      )}
       {quickOpen.overlay}
       {palette.overlay}
       <DragLayer store={drags} />

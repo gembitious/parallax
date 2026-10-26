@@ -228,6 +228,16 @@ export function CommitView({
     { label: compare ? "커밋 sha 복사 (바뀐 뒤, 작업트리면 바뀌기 전)" : "커밋 sha 복사", keys: "y", run: () => copySha() },
     { id: "graph", label: "커밋 그래프 (이 커밋)", keys: "G", run: () => openGraph() },
     ...(compare?.target === null ? [{ label: "다시 견주기", detail: "작업트리", run: () => setStale((n) => n + 1) }] : []),
+    ...(compare && compare.target !== null
+      ? [
+          {
+            label: compare.mergeBase ? "두 점으로 비교 (a ↔ b)" : "갈라진 지점부터 비교 (a...b)",
+            keys: "m",
+            run: () => toggleMergeBase(),
+          },
+          { label: "기준과 대상 바꾸기", keys: "x", run: () => swapSides() },
+        ]
+      : []),
     { label: "에디터로 열기", keys: "o", detail: "고른 파일의 첫 바뀐 줄(작업트리)", run: () => openEditor() },
     ...commonCommands({
       files: quickOpen.open,
@@ -561,6 +571,16 @@ export function CommitView({
 
   const openGraph = () => onNavigate({ kind: "graph", repo, rev: mainSha(latest.current.detail) ?? null });
 
+  /** 두 리비전 비교를 바꿔(두 점 ↔ 갈라진 지점, 양쪽 바꾸기) 새 화면으로 연다(`q`로 돌아온다). 고른 파일은 그대로 고른다. */
+  const recompare = (next: Compare) => {
+    const { detail: d, selected: at } = latest.current;
+    const chosen = d?.files[at];
+    onNavigate({ kind: "commit", repo, rev: next.base, path: chosen?.path ?? null, compare: next });
+  };
+  const toggleMergeBase = () => compare?.target != null && recompare({ ...compare, mergeBase: !compare.mergeBase });
+  const swapSides = () =>
+    compare?.target != null && recompare({ base: compare.target, target: compare.base, mergeBase: compare.mergeBase });
+
   const toggleMode = () =>
     setMode((m) => {
       const next = m === "split" ? "unified" : "split";
@@ -720,6 +740,14 @@ export function CommitView({
         case "u":
           toggleMode();
           break;
+        case "m":
+          if (compare?.target != null) toggleMergeBase();
+          else handled = false;
+          break;
+        case "x":
+          if (compare?.target != null) swapSides();
+          else handled = false;
+          break;
         case "o":
           openEditor();
           break;
@@ -849,6 +877,33 @@ export function CommitView({
           <>
             <span className="badge">{compare.target === null ? "변경" : "비교"}</span>
             <span className="commit-summary">{compareTitle(compare)}</span>
+            {compare.target !== null && (
+              <>
+                <span className="segmented" role="group" aria-label="비교 방법">
+                  <button
+                    type="button"
+                    className={!compare.mergeBase ? "toggle primary" : "toggle"}
+                    aria-pressed={!compare.mergeBase}
+                    title="기준 커밋과 대상을 그대로 견준다 (git diff a b, m)"
+                    onClick={() => compare.mergeBase && toggleMergeBase()}
+                  >
+                    두 점
+                  </button>
+                  <button
+                    type="button"
+                    className={compare.mergeBase ? "toggle primary" : "toggle"}
+                    aria-pressed={compare.mergeBase}
+                    title="두 쪽이 갈라진 지점과 대상을 견준다: 대상 쪽에서 바꾼 것만 (git diff a...b, m)"
+                    onClick={() => !compare.mergeBase && toggleMergeBase()}
+                  >
+                    갈라진 지점부터
+                  </button>
+                </span>
+                <button type="button" className="icon" title="기준과 대상 바꾸기 (x)" aria-label="기준과 대상 바꾸기" onClick={swapSides}>
+                  ⇄
+                </button>
+              </>
+            )}
           </>
         ) : (
           <>
