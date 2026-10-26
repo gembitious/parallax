@@ -433,7 +433,7 @@ fn grep_output() {
     use plx_core::grep::{GrepQuery, grep_args};
     let mut seeds = Vec::new();
     for repo in repos() {
-        for (pattern, regex) in [("e", false), ("[가-힣]+|t.", true)] {
+        for (pattern, regex) in [("e", false), ("[^ -~]+|t.", true)] {
             let query = GrepQuery {
                 pattern: pattern.to_owned(),
                 regex,
