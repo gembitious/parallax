@@ -45,6 +45,7 @@ import { watchRepo } from "../watch";
 import { DRAG_THRESHOLD, dropTargetAt, type DragSource, type DropTarget } from "./drag";
 import { FileTree } from "./FileTree";
 import { ViewHosts, type Placement } from "./hosts";
+import { saveLayout, toLayout } from "./layout";
 import { IS_MAC, MOD, workspaceKey, type WorkspaceKey } from "./keys";
 import { absolutePath, copyPath } from "./paths";
 import {
@@ -870,7 +871,32 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
   const coldFor = (entry: StackEntry) =>
     entry.request !== undefined && entry.request === state.shown?.request.id && state.shown.request.cold;
 
-  // 화면들: 화면마다 자리(host)에 portal로 그리고, 자리를 그룹·패널 칸에 놓는다(HostPlacer).
+  // 작업 공간 복원(M7-5): 배치가 바뀌면 남기고, 커서 줄은 움직임이 멎으면 남긴다(다른 저장소로 옮기기 전에도 남긴다).
+  useEffect(() => {
+    const repo = state.repo;
+    if (repo === null) return;
+    const save = () => saveLayout(repo, toLayout(state, (key) => cursors.get(key)?.line));
+    save();
+    let timer: number | undefined;
+    const stop = cursors.subscribe(() => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        timer = undefined;
+        save();
+      }, 500);
+    });
+    return () => {
+      stop();
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+        save();
+      }
+    };
+  }, [state, cursors]);
+
+  // 화면들: 화면마다 자리(host)에 portal로 그리고, 자리를 그룹·패널 칸에 놓는다(HostPlacer). 한 번도 보이지 않은 화면
+  // (되살린 배치의 다른 탭·스택 아래 화면)은 처음 보일 때 만든다: 앱을 띄우자마자 탭마다 blame을 읽지 않는다.
+  const seen = useRef(new Set<number>());
   const views = useElementCache();
   const placements: Placement[] = [];
   const portals: { key: number; element: ReactElement }[] = [];
@@ -883,6 +909,8 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
     shown: { visible: boolean; active: boolean; slot: ViewSlot | null },
   ) => {
     const { visible, active, slot } = shown;
+    if (visible) seen.current.add(entry.key);
+    else if (!seen.current.has(entry.key)) return;
     placements.push({ key: entry.key, container, visible, active });
     const depth = index + 1;
     const backDirection = backDirectionAt(stack, index);
@@ -962,6 +990,7 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
     });
   });
   views.prune();
+  for (const key of seen.current) if (!placements.some((p) => p.key === key)) seen.current.delete(key);
   // 화면 순서는 key 순서로 둔다: 탭을 옮겨도 portal의 순서가 바뀌지 않는다.
   portals.sort((a, b) => a.key - b.key);
 
