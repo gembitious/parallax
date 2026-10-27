@@ -223,6 +223,7 @@ function GraphPane({
   const commands: Command[] = [
     { id: "commit", label: "커밋 상세", keys: "Enter", run: () => openCommit() },
     { label: "커밋 sha 복사", keys: "y", run: () => copySha() },
+    { label: "이 커밋의 파일에서 찾기", keys: "F", detail: "git grep (아래 패널)", run: () => searchCommit() },
     { label: mark ? "비교 기준 표시 지우기" : "비교 기준으로 표시", keys: "m", detail: "다른 커밋에서 d로 견준다", run: () => toggleMark() },
     {
       label: mark ? "표시한 커밋과 비교" : "작업트리와 비교",
@@ -661,6 +662,13 @@ function GraphPane({
     if (m) onNavigate({ kind: "commit", repo: m.repo, rev: compare.base, path: null, compare });
   };
 
+  /** 그 커밋의 파일에서 찾기(저장소 검색, 아래 패널) */
+  const searchCommit = (index?: number) => {
+    const m = latest.current.meta;
+    const row = current(index);
+    if (m && row) onNavigate({ kind: "search", repo: m.repo, rev: row.sha });
+  };
+
   const copySha = () => {
     const row = current();
     if (!row) return;
@@ -766,6 +774,7 @@ function GraphPane({
       { label: "커밋 상세", keys: "Enter", disabled: !row, run: () => openCommit(index) },
       "separator",
       { label: "커밋 sha 복사", keys: "y", disabled: !row, run: copySha },
+      { label: "이 커밋의 파일에서 찾기", keys: "F", disabled: !row, run: () => searchCommit(index) },
       "separator",
       {
         label: row && mark === row.sha ? "비교 기준 표시 지우기" : "비교 기준으로 표시",
@@ -867,6 +876,9 @@ function GraphPane({
           break;
         case "d":
           compareSelected(false);
+          break;
+        case "F":
+          searchCommit();
           break;
         case "/":
           openSearch();

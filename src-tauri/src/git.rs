@@ -12,6 +12,7 @@ use plx_core::commit::{self, CommitDetail, FileStat, FileVersions, StatRequest};
 use plx_core::commit_graph::{self, GraphStatus, Progress};
 use plx_core::files::{DirListing, FileLists, FileSearch};
 use plx_core::graph::{GraphEvent, GraphOptions, GraphSessions, GraphWindow};
+use plx_core::grep::{GrepEvent, GrepQuery, GrepSessions};
 use plx_core::history::{HistoryEvent, HistorySessions, LineRange};
 use plx_core::navigate::{self, Direction, Version};
 use plx_core::repo::{CommitInfo, FilePath, RepoCache};
@@ -38,6 +39,7 @@ pub struct GitState {
     blames: Sessions,
     histories: HistorySessions,
     graphs: GraphSessions,
+    greps: GrepSessions,
     watchers: Watchers,
     files: FileLists,
     ai: AiNotes,
@@ -70,6 +72,7 @@ impl GitState {
             blames,
             histories,
             graphs,
+            greps: GrepSessions::new(),
             watchers: Watchers::new(on_change),
             files: FileLists::new(),
             ai: AiNotes::new(),
@@ -195,6 +198,32 @@ pub async fn line_history_open(
         );
     });
     Ok(id)
+}
+
+/// 저장소 검색(`git grep`)을 시작하고 요청 id를 바로 돌려준다. 결과는 `on_event`로 온다
+/// (`meta` → `files`* → `done`·`error`·`cancelled`). `query.rev`가 없으면 작업트리(추적하는 파일)다.
+#[tauri::command]
+pub async fn grep_open(
+    git: State<'_, Arc<GitState>>,
+    repo: String,
+    query: GrepQuery,
+    on_event: Channel<GrepEvent>,
+) -> Result<u64, String> {
+    let git = git.inner().clone();
+    let id = git.greps.register();
+    tauri::async_runtime::spawn_blocking(move || {
+        git.greps
+            .run(id, &git.repos, Path::new(&repo), &query, |event| {
+                on_event.send(event).is_ok()
+            });
+    });
+    Ok(id)
+}
+
+/// 진행 중인 검색을 멈춘다. 이미 끝났으면 `false`.
+#[tauri::command]
+pub fn grep_cancel(git: State<'_, Arc<GitState>>, id: u64) -> bool {
+    git.greps.cancel(id)
 }
 
 /// 진행 중인 히스토리(파일·라인)를 멈춘다. 이미 끝났으면 `false`.

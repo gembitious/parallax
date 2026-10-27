@@ -182,7 +182,7 @@ function blameEntry(navigation: Extract<Navigation, { kind: "parent" | "older" |
   return { key: newKey(), view: "blame", target: navigation.target, line: navigation.line, via: navigation.kind };
 }
 
-function panelEntry(navigation: Extract<Navigation, { kind: "commit" | "history" | "graph" }>, from: Pane): PanelEntry {
+function panelEntry(navigation: Extract<Navigation, { kind: "commit" | "history" | "graph" | "search" }>, from: Pane): PanelEntry {
   const key = newKey();
   switch (navigation.kind) {
     case "commit":
@@ -201,6 +201,8 @@ function panelEntry(navigation: Extract<Navigation, { kind: "commit" | "history"
       return { key, view: "history", target: navigation.target, lines: navigation.lines ?? null, via: "history", from };
     case "graph":
       return { key, view: "graph", repo: navigation.repo, focus: navigation.rev, via: "graph", from };
+    case "search":
+      return { key, view: "search", repo: navigation.repo, rev: navigation.rev, query: navigation.query ?? "", via: "search", from };
   }
 }
 
@@ -225,6 +227,8 @@ function copyEntry(entry: StackEntry, line: number | null | undefined): StackEnt
       };
     case "graph":
       return { key, view: "graph", repo: entry.repo, focus: entry.focus, via: "graph" };
+    case "search":
+      return { key, view: "search", repo: entry.repo, rev: entry.rev, query: entry.query, via: "search" };
   }
 }
 
@@ -507,9 +511,17 @@ export function workspaceReducer(state: Workspace, action: WorkspaceAction): Wor
       const { navigation, from } = action;
       if (navigation.worktree) {
         // 다른 워크트리: 그 워크트리의 작업 공간에서 같은 화면을 연다.
-        const repo = navigation.kind === "commit" || navigation.kind === "graph" ? navigation.repo : navigation.target.repo;
+        const repo =
+          navigation.kind === "commit" || navigation.kind === "graph" || navigation.kind === "search"
+            ? navigation.repo
+            : navigation.target.repo;
         const base = { ...emptyWorkspace(repo), shown: state.shown };
-        if (navigation.kind === "commit" || navigation.kind === "history" || navigation.kind === "graph") {
+        if (
+          navigation.kind === "commit" ||
+          navigation.kind === "history" ||
+          navigation.kind === "graph" ||
+          navigation.kind === "search"
+        ) {
           return pushPanel(base, panelEntry(navigation, "editor"), false);
         }
         return openTab(base, blameEntry(navigation), { preview: false, from: "editor", group: base.activeGroup, reveal: false });
@@ -545,7 +557,7 @@ export function workspaceReducer(state: Workspace, action: WorkspaceAction): Wor
           });
         }
         default:
-          // 커밋 상세·히스토리·그래프는 패널에. 패널에서 갔거나 패널이 열려 있으면 패널 스택에 쌓는다.
+          // 커밋 상세·히스토리·그래프·검색은 패널에. 패널에서 갔거나 패널이 열려 있으면 패널 스택에 쌓는다.
           return pushPanel(
             state,
             panelEntry(navigation, from.pane),

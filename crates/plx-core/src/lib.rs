@@ -18,6 +18,7 @@ pub mod files;
 pub mod fuzzy;
 pub mod git;
 pub mod graph;
+pub mod grep;
 pub mod history;
 pub mod instance;
 pub mod line_log;

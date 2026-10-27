@@ -9,10 +9,10 @@ export type Entry = {
   /**
    * cold: 콜드 스타트, plx: 상주 인스턴스로 온 호출, blame: blame 요청(첫 줄 표시까지),
    * commit: 커밋 상세(첫 diff 표시까지), history: 파일 히스토리(첫 50개 표시까지), graph: 커밋 그래프(첫 화면 표시까지),
-   * files: Quick Open(글자마다 결과 표시까지), scroll: 스크롤 한 번의 프레임(간격 p95), ipc: 백엔드 요청, probe: 측정 버튼,
+   * files: Quick Open(글자마다 결과 표시까지), search: 저장소 검색(git grep 끝까지), scroll: 스크롤 한 번의 프레임(간격 p95), ipc: 백엔드 요청, probe: 측정 버튼,
    * menu: macOS 메뉴 막대 만들기, error: 화면에서 잡지 못한 오류(예외, 처리하지 않은 거부)
    */
-  kind: "cold" | "plx" | "blame" | "commit" | "history" | "graph" | "files" | "scroll" | "ipc" | "probe" | "menu" | "error";
+  kind: "cold" | "plx" | "blame" | "commit" | "history" | "graph" | "files" | "search" | "scroll" | "ipc" | "probe" | "menu" | "error";
   label: string;
   totalMs: number;
   phases: Phase[];

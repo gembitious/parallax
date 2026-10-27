@@ -5,6 +5,7 @@ type KeyLike = Pick<KeyboardEvent, "key" | "code" | "ctrlKey" | "metaKey" | "alt
 export type WorkspaceKey =
   | "toggleTree"
   | "focusTree"
+  | "search"
   | "togglePanel"
   | "nextTab"
   | "previousTab"
@@ -21,7 +22,7 @@ export const IS_MAC = typeof navigator !== "undefined" && /Mac/.test(navigator.u
 export const MOD = IS_MAC ? "⌘" : "Ctrl+";
 
 /**
- * Mod(macOS ⌘, 나머지 Ctrl)+B 트리, Mod+Shift+E 트리로, Mod+J 패널, Ctrl+Tab·Ctrl+Shift+Tab(Ctrl+PageDown·PageUp)
+ * Mod(macOS ⌘, 나머지 Ctrl)+B 트리, Mod+Shift+E 트리로, Mod+Shift+F 저장소 검색, Mod+J 패널, Ctrl+Tab·Ctrl+Shift+Tab(Ctrl+PageDown·PageUp)
  * 탭 옮기기, Mod+W 탭 닫기(탭이 없으면 창 숨기기. macOS 메뉴 막대의 ⌘W와 같다), Mod+\ 에디터 나누기, Mod+1~4 그
  * 그룹으로(VS Code와 같다). 글자는 자판 자리(`code`)로도 본다: 한글 입력 상태면 `key`가 한글 자모고, 한국어 자판의 \는
  * ₩다.
@@ -36,7 +37,7 @@ export function workspaceKey(e: KeyLike, mac = IS_MAC): WorkspaceKey | null {
   }
   const mod = mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
   if (!mod) return null;
-  if (e.shiftKey) return is("e") ? "focusTree" : null;
+  if (e.shiftKey) return is("e") ? "focusTree" : is("f") ? "search" : null;
   if (is("b")) return "toggleTree";
   if (is("j")) return "togglePanel";
   if (is("w")) return "closeTab";
