@@ -227,6 +227,7 @@ export function CommitView({
     ...(isError(current) ? [{ label: "이 파일 다시 받기", run: () => retry() }] : []),
     { label: compare ? "커밋 sha 복사 (바뀐 뒤, 작업트리면 바뀌기 전)" : "커밋 sha 복사", keys: "y", run: () => copySha() },
     { id: "graph", label: "커밋 그래프 (이 커밋)", keys: "G", run: () => openGraph() },
+    { label: "이 커밋의 파일 트리", detail: "왼쪽 파일 트리를 이 커밋 시점으로", run: () => browseTree() },
     ...(compare?.target === null ? [{ label: "다시 견주기", detail: "작업트리", run: () => setStale((n) => n + 1) }] : []),
     ...(compare && compare.target !== null
       ? [
@@ -570,6 +571,11 @@ export function CommitView({
   };
 
   const openGraph = () => onNavigate({ kind: "graph", repo, rev: mainSha(latest.current.detail) ?? null });
+  /** 이 커밋(비교면 바뀐 뒤, 작업트리면 바뀌기 전) 시점의 파일 트리 */
+  const browseTree = () => {
+    const sha = mainSha(latest.current.detail);
+    if (sha) onNavigate({ kind: "browse", repo, rev: sha });
+  };
 
   /** 두 리비전 비교를 바꿔(두 점 ↔ 갈라진 지점, 양쪽 바꾸기) 새 화면으로 연다(`q`로 돌아온다). 고른 파일은 그대로 고른다. */
   const recompare = (next: Compare) => {
@@ -687,6 +693,7 @@ export function CommitView({
       [
         copyItem(selectedText(e.target)),
         { label: "커밋 sha 복사", keys: "y", run: copySha },
+        { label: "이 커밋의 파일 트리", detail: "왼쪽 파일 트리를 이 커밋 시점으로", run: browseTree },
         ...(compare?.target === null ? [{ label: "다시 견주기", detail: "작업트리", run: () => setStale((n) => n + 1) }] : []),
         {
           label: "커밋 메시지 복사",

@@ -25,6 +25,8 @@ export type Navigation = (
   | { kind: "graph"; repo: string; rev: string | null }
   /** 저장소 검색(`Mod+Shift+F`, M7-3). `rev`가 있으면 그 리비전의 파일, 없으면 작업트리. `query`는 처음 찾을 글 */
   | { kind: "search"; repo: string; rev: string | null; query?: string }
+  /** 리비전 둘러보기(M7-4): 파일 트리를 그 리비전의 트리로 바꾼다(화면을 열지 않는다. 작업 공간이 받는다) */
+  | { kind: "browse"; repo: string; rev: string }
 ) & {
   /** 다른 워크트리로 옮긴다(`W`): 작업 공간을 그 워크트리의 것으로 새로 연다 */
   worktree?: boolean;

@@ -110,6 +110,7 @@ const KEYS: Record<HelpView, Key[]> = {
     { keys: "n / N", what: "다음·이전 검색 결과" },
     { keys: "m", what: "비교 기준으로 표시", note: `${MOD}클릭으로도 · 다시 누르거나 Esc로 지운다` },
     { keys: "F", what: "이 커밋의 파일에서 찾기", note: "저장소 검색을 이 리비전으로" },
+    { keys: "T", what: "이 커밋의 파일 트리", note: "왼쪽 트리를 이 커밋 시점으로 · 트리 머리의 ×로 작업트리" },
     { keys: "d", what: "표시한 커밋 ↔ 고른 커밋 비교", note: "표시가 없으면 고른 커밋 ↔ 작업트리 · 우클릭에 갈라진 지점부터" },
   ],
   search: [

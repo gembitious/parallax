@@ -451,6 +451,29 @@ impl FileLists {
         })
     }
 
+    /// 리비전 둘러보기(M7-4): `rev` 시점의 폴더 `dir` 바로 아래 폴더·파일. 커밋 트리를 바로 읽는다(목록을 기억하지
+    /// 않는다: 한 폴더는 트리 객체 하나다). 그 커밋에 없는 폴더는 빈 목록이다(펼쳐 둔 폴더가 그 시점에는 없다).
+    pub fn list_dir_at(repo: &Repo, rev: &str, dir: &str) -> Result<DirListing, String> {
+        let commit = repo.resolve_commit(rev).map_err(|e| e.to_string())?;
+        let dir = dir.trim_matches('/');
+        let (dirs, names) = repo
+            .dir_at(commit, dir)
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default();
+        Ok(DirListing {
+            repo: repo.workdir().display().to_string(),
+            dir: dir.to_owned(),
+            dirs,
+            files: names
+                .into_iter()
+                .map(|name| DirFile {
+                    name,
+                    missing: false,
+                })
+                .collect(),
+        })
+    }
+
     /// 최근 연 파일로 기억한다(빈 검색어일 때 앞에 보인다).
     pub fn touch(&self, repo: &Repo, path: &str) {
         let files = self.files(repo);

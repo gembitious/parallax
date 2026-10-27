@@ -87,8 +87,11 @@ export type WorkspaceAction =
   | { type: "located"; key: number; repo: string; path: string }
   /** 작업 공간의 저장소를 알았다(콜드 스타트) */
   | { type: "repo"; repo: string }
-  /** 파일 트리·빈 화면에서 연 파일. 작업트리에서 지운 파일은 HEAD 버전을 연다. `side`면 옆 그룹에 연다. */
-  | { type: "open"; repo: string; path: string; missing: boolean; preview: boolean; side?: boolean }
+  /**
+   * 파일 트리·빈 화면에서 연 파일. 작업트리에서 지운 파일은 HEAD 버전을 연다. `side`면 옆 그룹에 연다. `rev`는 리비전
+   * 둘러보기의 트리에서 연 파일의 리비전이다.
+   */
+  | { type: "open"; repo: string; path: string; missing: boolean; preview: boolean; side?: boolean; rev?: string | null }
   | { type: "activate"; tab: number }
   /** 그룹을 눌렀다: 그 그룹이 키를 받는다 */
   | { type: "focusGroup"; group: number }
@@ -509,6 +512,8 @@ export function workspaceReducer(state: Workspace, action: WorkspaceAction): Wor
     }
     case "navigate": {
       const { navigation, from } = action;
+      // 리비전 둘러보기는 파일 트리의 일이다(작업 공간 화면이 받는다). 스택에는 쌓지 않는다.
+      if (navigation.kind === "browse") return state;
       if (navigation.worktree) {
         // 다른 워크트리: 그 워크트리의 작업 공간에서 같은 화면을 연다.
         const repo =
@@ -605,7 +610,8 @@ export function workspaceReducer(state: Workspace, action: WorkspaceAction): Wor
     case "repo":
       return state.repo === null ? { ...state, repo: action.repo } : state;
     case "open": {
-      const target = { repo: action.repo, path: action.path, rev: action.missing ? "HEAD" : null };
+      // 리비전 둘러보기의 트리에서 연 파일은 그 리비전의 blame이다.
+      const target = { repo: action.repo, path: action.path, rev: action.rev ?? (action.missing ? "HEAD" : null) };
       const entry: BlameEntry = { key: newKey(), view: "blame", target, line: null, via: "file" };
       const side = action.side ?? false;
       const { state: next, group } = fileGroup(state, null, side);

@@ -349,3 +349,68 @@ fn typing_narrows_within_previous_results() {
         "src/lib.rs"
     );
 }
+
+/// 리비전 둘러보기: 커밋마다 따라 내려간 폴더·파일이 `git ls-tree -z`와 같다(서브모듈은 빼고, 한글 이름 포함).
+/// 그 커밋에 없는 폴더는 빈 목록이다.
+#[test]
+fn tree_at_revision_matches_ls_tree() {
+    fn ls_tree(repo: &Path, rev: &str, dir: &str) -> (Vec<String>, Vec<String>) {
+        let spec = if dir.is_empty() {
+            rev.to_owned()
+        } else {
+            format!("{rev}:{dir}")
+        };
+        let (mut dirs, mut files) = (Vec::new(), Vec::new());
+        for item in git(repo, &["ls-tree", "-z", &spec])
+            .split(|&b| b == 0)
+            .filter(|p| !p.is_empty())
+        {
+            let item = String::from_utf8(item.to_vec()).expect("UTF-8 이름");
+            let (head, name) = item.split_once('\t').unwrap();
+            match head.split(' ').nth(1).unwrap() {
+                "tree" => dirs.push(name.to_owned()),
+                "blob" => files.push(name.to_owned()),
+                _ => {}
+            }
+        }
+        (dirs, files)
+    }
+    fn walk(repo: &Repo, dir_path: &Path, rev: &str, dir: &str, seen: &mut usize) {
+        let listing = FileLists::list_dir_at(repo, rev, dir).unwrap();
+        assert_eq!(listing.dir, dir);
+        let files: Vec<String> = listing.files.iter().map(|f| f.name.clone()).collect();
+        assert!(listing.files.iter().all(|f| !f.missing));
+        assert_eq!(
+            (listing.dirs.clone(), files),
+            ls_tree(dir_path, rev, dir),
+            "{rev}:{dir}"
+        );
+        *seen += listing.files.len();
+        for sub in &listing.dirs {
+            let child = if dir.is_empty() {
+                sub.clone()
+            } else {
+                format!("{dir}/{sub}")
+            };
+            walk(repo, dir_path, rev, &child, seen);
+        }
+    }
+
+    for fixture in [history(), encoding()] {
+        let repo = Repo::discover(&fixture).unwrap();
+        let revs = git_text(&fixture, &["rev-list", "--all"]);
+        let mut seen = 0;
+        for rev in revs.lines() {
+            walk(&repo, &fixture, rev, "", &mut seen);
+        }
+        assert!(seen > 0, "{}", fixture.display());
+    }
+    let repo = Repo::discover(&history()).unwrap();
+    let none = FileLists::list_dir_at(&repo, "HEAD", "no/such/dir").unwrap();
+    assert!(none.dirs.is_empty() && none.files.is_empty());
+    assert_eq!(
+        FileLists::list_dir_at(&repo, "HEAD", "src/").unwrap(),
+        FileLists::list_dir_at(&repo, "HEAD", "src").unwrap()
+    );
+    assert!(FileLists::list_dir_at(&repo, "no-such-rev", "").is_err());
+}

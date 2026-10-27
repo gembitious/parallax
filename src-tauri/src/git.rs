@@ -416,12 +416,13 @@ pub async fn files_touch(
 }
 
 /// 파일 트리: `dir`(저장소 기준, `/` 구분, 루트는 빈 문자열) 바로 아래의 추적 폴더·파일. 목록은 Quick Open과
-/// 같은 인덱스이고 인덱스가 바뀌었으면 다시 읽는다.
+/// 같은 인덱스이고 인덱스가 바뀌었으면 다시 읽는다. `rev`가 있으면 그 커밋의 트리다(리비전 둘러보기).
 #[tauri::command]
 pub async fn files_dir(
     git: State<'_, Arc<GitState>>,
     repo: String,
     dir: String,
+    rev: Option<String>,
 ) -> Result<DirListing, String> {
     let git = git.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -429,7 +430,10 @@ pub async fn files_dir(
             .repos
             .for_path(Path::new(&repo))
             .map_err(|e| e.to_string())?;
-        git.files.list_dir(&repo, &dir)
+        match rev {
+            Some(rev) => FileLists::list_dir_at(&repo, &rev, &dir),
+            None => git.files.list_dir(&repo, &dir),
+        }
     })
     .await
     .map_err(|e| e.to_string())?

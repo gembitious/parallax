@@ -462,6 +462,46 @@ impl Repo {
         Ok(Some(blob.detach().data))
     }
 
+    /// `commit` 시점의 폴더 `dir`(저장소 기준, `/` 구분, 루트는 빈 문자열) 바로 아래의 (폴더, 파일) 이름. 리비전
+    /// 둘러보기(M7-4)의 파일 트리다. 서브모듈(커밋 항목)과 UTF-8이 아닌 이름은 뺀다(열 수 없다: 작업트리의 파일
+    /// 트리와 같다). 그 커밋에 폴더가 없으면 `None`.
+    pub fn dir_at(
+        &self,
+        commit: ObjectId,
+        dir: &str,
+    ) -> Result<Option<(Vec<String>, Vec<String>)>> {
+        let repo = self.local();
+        let mut tree = repo
+            .find_commit(commit)
+            .and_then(|commit| commit.tree())
+            .map_err(|e| err("커밋 트리", e))?;
+        if !dir.is_empty() {
+            let Some(entry) = tree
+                .lookup_entry_by_path(dir)
+                .map_err(|e| err("트리 조회", e))?
+            else {
+                return Ok(None);
+            };
+            if !entry.mode().is_tree() {
+                return Ok(None);
+            }
+            tree = entry.object().map_err(|e| err("트리 읽기", e))?.into_tree();
+        }
+        let decoded = tree.decode().map_err(|e| err("트리 읽기", e))?;
+        let (mut dirs, mut files) = (Vec::new(), Vec::new());
+        for entry in &decoded.entries {
+            let Ok(name) = std::str::from_utf8(entry.filename) else {
+                continue;
+            };
+            if entry.mode.is_tree() {
+                dirs.push(name.to_owned());
+            } else if !entry.mode.is_commit() {
+                files.push(name.to_owned());
+            }
+        }
+        Ok(Some((dirs, files)))
+    }
+
     /// `commit`에 `path` 파일(blob·실행 파일·심볼릭 링크)이 있는가. 내용은 읽지 않는다.
     pub fn has_file(&self, commit: ObjectId, path: &str) -> Result<bool> {
         let repo = self.local();
