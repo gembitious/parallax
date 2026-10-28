@@ -245,7 +245,7 @@ Windows·macOS의 성능 HUD(`그래프 … 스크롤`)로 확인한다(bench/re
       맨 위에 그 버전의 절), 릴리스 설명·README 갱신
 - [x] M8-2 새 버전 알림: 앱이 하루 한 번 GitHub Releases의 최신 버전을 보고 더 새것이면 상태 막대·첫 화면에 알리고
       누르면 릴리스 페이지를 연다. 명령 팔레트로 바로 묻기·끄기 — Windows·macOS 실기 확인 필요(`docs/MANUAL_CHECKS.md` 24)
-- [ ] M8-3 이름 확정, `v0.1.0` 태그 → 릴리스 초안(설치 파일 다섯, SHA256SUMS) 확인 → 사용자가 게시
+- [ ] M8-3 이름 확정(parallax, 끝), `v0.1.0` 태그 → 릴리스 초안(설치 파일 다섯, SHA256SUMS) 확인 → 사용자가 게시
 
 **완료 기준:** Releases에서 받은 설치 파일로 세 플랫폼(맥은 두 아키텍처)에서 앱이 열린다.
 
@@ -257,7 +257,7 @@ Windows·macOS의 성능 HUD(`그래프 … 스크롤`)로 확인한다(bench/re
 - [ ] 코드 서명·공증: Apple Developer ID와 Windows 코드 서명 인증서가 있어야 한다. 지금은 macOS ad-hoc 서명, Windows 서명 없음
       (처음 실행할 때 OS가 막거나 경고한다: 릴리스 설명의 설치 안내)
 - [x] Intel 맥: universal 빌드 대신 Intel 러너에서 따로 짓고 앱 확인을 한다(M8-1) — Intel 맥 실기 확인 필요
-- [ ] 이름 확정(지금은 parallax, 가칭) — M8-3
+- [x] 이름 확정: parallax(터미널 명령 `plx`), 2026-10-28 사용자 확인
 
 ## 하지 않는 것
 편집 · LSP · 내장 터미널 · 스테이징/커밋/푸시 · PR 등 원격 호스팅 연동.
