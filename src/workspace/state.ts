@@ -14,6 +14,7 @@ import {
   type Shown,
   type StackEntry,
 } from "../nav";
+import type { Layout, SavedEntry } from "./layout";
 
 /** 화면을 늘어놓는 칸: 가운데 에디터(그룹·탭)와 아래 패널 */
 export type Pane = "editor" | "panel";
@@ -140,6 +141,112 @@ export const emptyWorkspace = (repo: string | null = null): Workspace => {
     focus: "editor",
   };
 };
+
+/**
+ * 저장소를 열 때 남긴 배치를 찾는다(M7-5). App이 layout.ts의 loadLayout을 넣는다. 넣지 않으면(테스트) 처음처럼 연다.
+ */
+let layoutSource: (repo: string) => Layout | null = () => null;
+export function setLayoutSource(source: (repo: string) => Layout | null): void {
+  layoutSource = source;
+}
+
+function restoreEntry(saved: SavedEntry): StackEntry {
+  const key = newKey();
+  switch (saved.view) {
+    case "blame":
+      return { key, view: "blame", target: saved.target, line: saved.line, via: saved.via };
+    case "history":
+      return { key, view: "history", target: saved.target, lines: saved.lines, via: "history" };
+    case "commit":
+      return {
+        key,
+        view: "commit",
+        repo: saved.repo,
+        rev: saved.rev,
+        path: saved.path,
+        only: saved.only,
+        ...(saved.compare ? { compare: saved.compare } : {}),
+        via: "commit",
+      };
+    case "graph":
+      return { key, view: "graph", repo: saved.repo, focus: saved.focus, via: "graph" };
+    case "search":
+      return { key, view: "search", repo: saved.repo, rev: saved.rev, query: saved.query, via: "search" };
+  }
+}
+
+/** 남긴 배치(layout.ts)로 작업 공간을 만든다. 화면은 새 key다. */
+export function restoreWorkspace(repo: string, layout: Layout): Workspace {
+  const tabs: Tab[] = [];
+  const groups: Group[] = layout.groups.map((saved) => {
+    const groupTabs = saved.tabs.map((t): Tab => {
+      const tab: Tab = { key: newKey(), stack: t.stack.map(restoreEntry), preview: t.preview, from: t.from };
+      tabs.push(tab);
+      return tab;
+    });
+    const active = (saved.active !== null ? groupTabs[saved.active] : undefined)?.key ?? groupTabs[0]?.key ?? null;
+    return { key: newKey(), tabs: groupTabs, active, recent: active !== null ? [active] : [], weight: saved.weight };
+  });
+  layout.groups
+    .flatMap((g) => g.tabs)
+    .forEach((t, i) => {
+      if (t.opener !== undefined && t.opener !== i && tabs[t.opener]) tabs[i].opener = tabs[t.opener].key;
+    });
+  const panel: PanelEntry[] = layout.panel.map((entry) => ({ ...restoreEntry(entry), from: entry.from }));
+  const activeGroup = (groups[layout.activeGroup] ?? groups[0]).key;
+  const hasTab = groups.some((g) => g.key === activeGroup && g.active !== null);
+  const panelOpen = layout.panelOpen && panel.length > 0;
+  return {
+    repo,
+    shown: null,
+    groups,
+    activeGroup,
+    panel,
+    panelOpen,
+    panelMax: layout.panelMax && panelOpen,
+    focus: hasTab ? "editor" : panelOpen ? "panel" : "editor",
+  };
+}
+
+/** `repo` 저장소의 작업 공간: 남긴 배치가 있으면 그것, 없으면 빈 작업 공간 */
+function openWorkspace(repo: string | null): Workspace {
+  const layout = repo !== null ? layoutSource(repo) : null;
+  return layout && repo !== null ? restoreWorkspace(repo, layout) : emptyWorkspace(repo);
+}
+
+/**
+ * 콜드 스타트: 저장소를 모른 채 연 작업 공간(plx 요청의 화면)이 저장소를 알았다. 남긴 배치를 되살리고 그사이 연 화면을
+ * 그 위에 둔다(같은 파일의 탭이 있으면 그 탭 자리에, 패널 화면은 패널에). 화면 key는 그대로라 다시 읽지 않는다.
+ */
+function adoptRepo(state: Workspace, repo: string): Workspace {
+  const layout = layoutSource(repo);
+  if (!layout) return { ...state, repo };
+  let next: Workspace = { ...restoreWorkspace(repo, layout), shown: state.shown };
+  for (const tab of allTabs(state)) {
+    // 그 탭을 연 보기 탭은 되살린 배치에 없다.
+    const opened: Tab = { key: tab.key, stack: tab.stack, preview: false, from: tab.from };
+    const file = tabFile(tab);
+    const isFile = (t: Tab) => file !== null && tabFile(t) === file;
+    const same = activeGroupOf(next).tabs.find(isFile) ?? allTabs(next).find(isFile);
+    if (same) {
+      const owner = groupOfTab(next, same.key)!;
+      next = withGroup(next, owner.key, (g) => ({
+        ...g,
+        tabs: g.tabs.map((t) => (t === same ? opened : t)),
+        active: g.active === same.key ? opened.key : g.active,
+        recent: g.recent.filter((key) => key !== same.key),
+      }));
+      next = activate(next, opened.key);
+    } else {
+      const { state: placed, group } = fileGroup(next, null, false);
+      next = placeTab(placed, opened, { kind: "group", group });
+    }
+  }
+  if (state.panel.length > 0) next = { ...next, panel: state.panel, panelOpen: true, panelMax: false };
+  const focus: Focus =
+    state.focus === "panel" && state.panel.length > 0 ? "panel" : activeTabOf(next) !== null ? "editor" : next.focus;
+  return { ...next, focus };
+}
 
 /** plx 요청의 첫 화면. 백엔드가 저장소와 저장소 기준 경로를 찾았으면 그것으로 연다(같은 파일의 탭을 찾을 수 있다). */
 function requestEntry(request: PlxRequest): BlameEntry | PanelEntry {
@@ -491,7 +598,7 @@ export function workspaceReducer(state: Workspace, action: WorkspaceAction): Wor
       const shown = { request, receivedMs: action.receivedMs };
       // 다른 저장소(또는 아직 모르는 저장소)면 작업 공간을 새로 연다.
       const base: Workspace =
-        state.repo !== null && request.repo === state.repo ? { ...state, shown } : { ...emptyWorkspace(request.repo), shown };
+        state.repo !== null && request.repo === state.repo ? { ...state, shown } : { ...openWorkspace(request.repo), shown };
       const entry = requestEntry(request);
       if (entry.view !== "blame") return pushPanel({ ...base, panelMax: false }, entry as PanelEntry, false);
       // 같은 파일의 탭이 있으면(키를 받는 그룹 먼저) 그 탭을 이 요청의 화면 하나로 바꾼다(다시 연다: 그 줄로, 캐시라 빠르다).
@@ -520,7 +627,7 @@ export function workspaceReducer(state: Workspace, action: WorkspaceAction): Wor
           navigation.kind === "commit" || navigation.kind === "graph" || navigation.kind === "search"
             ? navigation.repo
             : navigation.target.repo;
-        const base = { ...emptyWorkspace(repo), shown: state.shown };
+        const base = { ...openWorkspace(repo), shown: state.shown };
         if (
           navigation.kind === "commit" ||
           navigation.kind === "history" ||
@@ -605,10 +712,10 @@ export function workspaceReducer(state: Workspace, action: WorkspaceAction): Wor
           ? { ...entry, target: { ...entry.target, repo, path } }
           : entry,
       );
-      return next.repo === null ? { ...next, repo } : next;
+      return next.repo === null ? adoptRepo(next, repo) : next;
     }
     case "repo":
-      return state.repo === null ? { ...state, repo: action.repo } : state;
+      return state.repo === null ? adoptRepo(state, action.repo) : state;
     case "open": {
       // 리비전 둘러보기의 트리에서 연 파일은 그 리비전의 blame이다.
       const target = { repo: action.repo, path: action.path, rev: action.rev ?? (action.missing ? "HEAD" : null) };

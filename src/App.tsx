@@ -15,8 +15,10 @@ import type { Navigation, PlxRequest, Shown } from "./nav";
 import { afterPaint, bootMarks, getPerfInfo, nowMs, phasesBetween, record } from "./perf";
 import { IS_MAC } from "./workspace/keys";
 import { WorkspaceView } from "./workspace/Workspace";
+import { loadLayout } from "./workspace/layout";
 import {
   emptyWorkspace,
+  setLayoutSource,
   windowTitle,
   workspaceReducer,
   type Place,
@@ -77,6 +79,9 @@ function recordShown({ request, receivedMs }: Shown, committedMs: number, painte
 const hideWindow = () => invoke("hide_window").catch((e) => console.error("창 숨기기 실패", e));
 
 type Reload = Extract<WorkspaceAction, { type: "reload" }>;
+
+// 저장소를 열 때 그 저장소에 남긴 배치를 되살린다(M7-5).
+setLayoutSource(loadLayout);
 
 const firstState = (request: PlxRequest | null): Workspace =>
   request ? workspaceReducer(emptyWorkspace(), { type: "request", request, receivedMs: nowMs() }) : emptyWorkspace();
