@@ -2,7 +2,7 @@
 # 릴리스 빌드(`npm run tauri build -- --bundles …`)가 만든 설치 파일을 배포 이름으로 한 디렉터리에 모은다.
 # CI가 실행 결과(Artifacts)에 올리고, 태그 빌드에서는 그대로 릴리스 초안에 붙인다.
 #   Windows  parallax_<버전>_x64-setup.exe (NSIS), parallax_<버전>_x64-portable.zip (plx.exe + 라이선스)
-#   macOS    parallax_<버전>_aarch64.dmg (CI 러너의 아키텍처)
+#   macOS    parallax_<버전>_aarch64.dmg, parallax_<버전>_x64.dmg (CI 러너의 아키텍처: Apple Silicon, Intel)
 #   Linux    parallax_<버전>_amd64.deb
 # GITHUB_OUTPUT이 있으면 모은 파일의 경로를 `installer`(설치 파일)와 `portable`(Windows 압축 파일)로 쓴다.
 #

@@ -42,6 +42,7 @@ for name in \
   "parallax_${version}_x64-setup.exe" \
   "parallax_${version}_x64-portable.zip" \
   "parallax_${version}_aarch64.dmg" \
+  "parallax_${version}_x64.dmg" \
   "parallax_${version}_amd64.deb"; do
   if [ ! -s "$assets/$name" ]; then
     echo "릴리스에 넣을 파일이 없다: $name" >&2
@@ -51,8 +52,18 @@ done
 [ "$missing" -eq 0 ] || exit 1
 (cd "$assets" && sha256sum -- * >SHA256SUMS.txt && cat SHA256SUMS.txt)
 
+# 설명: CHANGELOG.md의 이 버전 절(머리줄 뺌) + 설치 안내. 절이 없으면 초안을 만들지 않는다(적고 다시 낸다).
 notes="$work/notes.md"
-sed "s/{{VERSION}}/$version/g" "$root/.github/release-notes.md" >"$notes"
+awk -v head="## $version" '
+  $0 == head { inside = 1; found = 1; next }
+  inside && /^## / { exit }
+  inside { print }
+  END { if (!found) exit 1 }
+' "$root/CHANGELOG.md" >"$notes" || {
+  echo "CHANGELOG.md에 '## $version' 절이 없다" >&2
+  exit 1
+}
+sed "s/{{VERSION}}/$version/g" "$root/.github/release-notes.md" >>"$notes"
 
 if draft="$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null)"; then
   if [ "$draft" != "true" ]; then

@@ -109,7 +109,8 @@ docs/              MILESTONES.md
   `scripts/collect-dist.sh <디렉터리>`가 배포 이름으로 모은다. CI는 PR·main 커밋마다 앱 확인을 통과한 것을 실행 결과에
   올린다(14일, 사람이 내려받아 화면을 확인한다: `docs/MANUAL_CHECKS.md` 0)
 - 릴리스: 버전을 올린다(`Cargo.toml`의 `[workspace.package]`, `npm version <버전> --no-git-tag-version`,
-  `src-tauri/tauri.conf.json`. `Cargo.lock`은 cargo가 고친다. `node scripts/check-version.mjs`가 모두 같은지 본다) →
+  `src-tauri/tauri.conf.json`. `Cargo.lock`은 cargo가 고친다. `node scripts/check-version.mjs`가 모두 같은지 본다)과
+  `CHANGELOG.md`에 `## <버전>` 절을 쓴다(릴리스 초안 설명의 맨 위) →
   main에 머지 → 그 커밋에 `v<버전>` 태그를 밀면(`git tag v<버전> && git push origin v<버전>`) CI가 검사·앱 확인을 거쳐
   릴리스 초안을 만든다 → GitHub의 Releases에서 초안을 보고 게시한다
 - 앱 아이콘 다시 만들기(원본 `src-tauri/icons/source/*.svg`를 고친 뒤): `scripts/make-icons.sh`
@@ -606,3 +607,10 @@ blame은 작업트리에 있는 파일만 받고(컴파일러·grep 형식 `<fil
   화면도 모두 만들어 읽었다. 그 화면들은 모두 한 번 보인 것이라 동작은 같다). 그래서 뜰 때 읽는 것은 보이는 화면뿐이다.
   남긴 화면의 파일이 그새 지워졌으면 그 화면이 오류를 보인다(띄울 때 파일마다 확인하지 않는다). 파일 트리의 리비전
   둘러보기·Quick Open의 최근 파일은 남기지 않는다.
+- 2026-10-28: Intel 맥 빌드(M8-1). 2026-10-19 배포 결정에서 미룬 Intel 맥을 universal 빌드가 아니라 CI 앱 확인에 Intel
+  러너(`macos-15-intel`)를 하나 더해 낸다(`parallax_<버전>_x64.dmg`). 이유: universal 빌드는 Apple Silicon 러너에서 두
+  아키텍처를 짓기만 하고 Intel 쪽을 띄워 보지 못한다(Rosetta로 돌려도 Intel 맥의 WebKit·GPU가 아니다). 따로 지으면 다른 플랫폼처럼
+  그 러너에서 앱 자동 확인(check-app.sh)을 통과한 것만 낸다. 대신 macOS 동시 실행이 PR마다 하나 늘고(한도 5) 내려받을 파일이
+  둘이다(설치 안내에 칩으로 고르게 적었다). 릴리스 초안의 설명은 `CHANGELOG.md`의 그 버전 절 + `.github/release-notes.md`(설치
+  안내)이고, 절이 없으면 초안을 만들지 않는다.
+

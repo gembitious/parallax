@@ -7,13 +7,13 @@
 
 Tauri 2 + Rust(`gix`, git CLI) + React. Windows와 macOS를 1급으로 지원한다(Linux도 CI에서 확인한다).
 
-**상태:** 개발 중. M0~M6(앱으로 열기, 에디터 화면, 마우스 조작)을 구현했고 Windows·macOS 화면 확인이 남았다
-([docs/MILESTONES.md](docs/MILESTONES.md)).
+**상태:** 첫 릴리스 준비 중(0.1.0). M0~M7을 구현했고 Windows·macOS 화면 확인이 남았다
+([docs/MILESTONES.md](docs/MILESTONES.md), 버전마다 바뀐 것은 [CHANGELOG.md](CHANGELOG.md)).
 
 ## 설치
 
 [Releases](https://github.com/gembitious/parallax/releases)에서 받는다: Windows(x64) 설치 프로그램 또는 설치 없이 쓰는 zip,
-macOS(Apple Silicon) DMG, Linux deb. 코드 서명을 하지 않은 빌드라 처음 실행할 때 OS가 막으면 릴리스 설명의 안내대로 연다.
+macOS DMG(Apple Silicon, Intel), Linux deb. 코드 서명을 하지 않은 빌드라 처음 실행할 때 OS가 막으면 릴리스 설명의 안내대로 연다.
 터미널 명령 `plx`는 앱 첫 화면의 "터미널 명령 설치"로 넣는다(앱만 써도 된다).
 
 ## 빌드
