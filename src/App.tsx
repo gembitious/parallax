@@ -11,6 +11,7 @@ import { Start } from "./start/Start";
 import { isOpenRepoKey } from "./start/keys";
 import { openPath, openRepoDialog } from "./start/open";
 import { Toasts } from "./Toasts";
+import { startUpdateChecks } from "./update/check";
 import type { Navigation, PlxRequest, Shown } from "./nav";
 import { afterPaint, bootMarks, getPerfInfo, nowMs, phasesBetween, record } from "./perf";
 import { IS_MAC } from "./workspace/keys";
@@ -127,6 +128,11 @@ export default function App({ initial }: { initial: PlxRequest | null }) {
     readySent.current = true;
     call("app_ready").catch((e) => console.error("app_ready 실패", e));
   };
+
+  // 새 버전 알림(M8-2): 개발 빌드는 묻지 않는다.
+  useEffect(() => {
+    if (info) return startUpdateChecks(info.version, info.updateCheck && !import.meta.env.DEV);
+  }, [info]);
 
   useEffect(() => {
     let disposed = false;

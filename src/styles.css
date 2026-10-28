@@ -693,6 +693,12 @@ button.status-item[aria-pressed="true"] {
   flex: 1;
 }
 
+/* 새 버전 알림(M8-2) */
+button.status-item.status-update {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 /* 도구 막대(맨 위): Windows·Linux의 메뉴 막대, 화면의 주요 이동, 파일 찾기·명령 팔레트·도움말 */
 .toolbar {
   display: flex;
@@ -1033,6 +1039,11 @@ kbd.menu-keys {
   flex-wrap: wrap;
   gap: 4px 10px;
   align-items: baseline;
+}
+
+.start-update {
+  margin-top: 24px !important;
+  color: var(--accent);
 }
 
 .start-footer {

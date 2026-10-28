@@ -9,6 +9,8 @@ import { OPEN_REPO_KEYS } from "../start/keys";
 import { installCli, openPath, openRepoDialog, recentRepos } from "../start/open";
 import { workspaceCommands } from "../menu/registry";
 import { MOD } from "../workspace/keys";
+import { checkNow, setUpdateCheck, updateState } from "../update/check";
+import { toast } from "../Toasts";
 
 export type Command = {
   /** 팔레트에 보이는 이름(검색 대상) */
@@ -212,7 +214,21 @@ export function commonCommands(actions: {
     { label: "뒤로 (맨 앞 화면이면 창 숨기기)", keys: "q", id: "back", run: actions.back },
     { label: "터미널 명령 plx 설치", detail: "터미널에서 plx로 이 창에 연다", app: true, run: () => void installCli() },
     { label: "오픈 소스 라이선스", detail: "앱에 든 다른 프로젝트의 저작권 고지", app: true, run: openNotices },
+    ...updateCommands(),
   ];
   if (actions.hud) list.push({ label: "성능 HUD 보이기·숨기기", keys: "`", app: true, run: actions.hud });
   return list;
+}
+
+/** 새 버전 알림(M8-2): 지금 묻기, 켜기·끄기 */
+function updateCommands(): Command[] {
+  const state = updateState();
+  const ask = () =>
+    void checkNow().then(({ text, error }) => toast(text, error));
+  return [
+    { label: "새 버전 확인", detail: state.current ? `지금 v${state.current}` : undefined, app: true, run: ask },
+    state.enabled
+      ? { label: "새 버전 알림 끄기", detail: "GitHub에 최신 버전을 묻지 않는다", app: true, run: () => setUpdateCheck(false) }
+      : { label: "새 버전 알림 켜기", detail: "하루 한 번 GitHub에 최신 버전을 묻는다", app: true, run: () => setUpdateCheck(true) },
+  ];
 }

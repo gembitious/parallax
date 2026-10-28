@@ -41,6 +41,7 @@ import { isQuickOpenKey } from "../quickopen/pick";
 import { OPEN_REPO_KEYS } from "../start/keys";
 import { openRepoDialog } from "../start/open";
 import { toast } from "../Toasts";
+import { openRelease, useUpdate } from "../update/check";
 import { watchRepo } from "../watch";
 import { DRAG_THRESHOLD, dropTargetAt, type DragSource, type DropTarget } from "./drag";
 import { FileTree } from "./FileTree";
@@ -328,6 +329,7 @@ function StatusBar({
 }) {
   const status = useSyncExternalStore(cursors.subscribe, () => cursors.get(statusKey));
   const showGutter = useBlameGutter();
+  const update = useUpdate();
   return (
     <footer className="status-bar">
       {repoState && (
@@ -341,6 +343,16 @@ function StatusBar({
         </button>
       )}
       <span className="status-spacer" />
+      {update.newer && (
+        <button
+          type="button"
+          className="status-item status-update"
+          onClick={() => openRelease(update.newer!)}
+          title={`새 버전 ${update.newer}이 나왔다(지금 v${update.current}). 누르면 릴리스 페이지(브라우저)`}
+        >
+          새 버전 {update.newer}
+        </button>
+      )}
       {status && (
         <>
           <button type="button" className="status-item" onClick={onGotoLine} title="줄로 이동 (Ctrl+G)">

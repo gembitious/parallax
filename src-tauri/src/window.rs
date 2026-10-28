@@ -43,6 +43,12 @@ pub fn quit_app(app: AppHandle) {
     app.exit(0);
 }
 
+/// 새 버전 알림을 눌렀다: 그 릴리스 페이지를 기본 브라우저로 연다(`v<주>.<부>.<수>` 태그만).
+#[tauri::command]
+pub fn open_release(tag: String) -> Result<(), String> {
+    plx_core::release::open(&tag).map_err(|e| format!("릴리스 페이지를 열지 못했다: {e}"))
+}
+
 /// 탐색으로 화면이 바뀌면 창 제목을 바꾼다.
 #[tauri::command]
 pub fn set_window_title(app: AppHandle, title: String) {

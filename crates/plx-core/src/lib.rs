@@ -26,6 +26,7 @@ pub mod linemap;
 pub mod log;
 pub mod navigate;
 pub mod recent;
+pub mod release;
 pub mod renames;
 pub mod repo;
 pub mod requests;

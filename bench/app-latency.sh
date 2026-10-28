@@ -112,7 +112,7 @@ if [ "$(wc -l <"$files" | tr -d ' ')" -lt "$half" ]; then
 fi
 
 # 콜드 스타트. 분리 실행을 끄고 셸의 자식으로 띄워 끝날 때 정리한다.
-PLX_PERF=1 PLX_PERF_LOG="$log" PLX_CACHE_DIR="$cache_dir" PLX_DATA_DIR="$data_dir" PLX_DETACH=0 "$bin" "$target" >/dev/null 2>&1 &
+PLX_PERF=1 PLX_PERF_LOG="$log" PLX_CACHE_DIR="$cache_dir" PLX_DATA_DIR="$data_dir" PLX_UPDATE_CHECK=0 PLX_DETACH=0 "$bin" "$target" >/dev/null 2>&1 &
 primary=$!
 if ! wait_for '"kind":"cold"'; then
   if kill -0 "$primary" 2>/dev/null; then
