@@ -1,4 +1,4 @@
-# parallax (가칭) — 로컬 git 이력 뷰어
+# parallax — 로컬 git 이력 뷰어
 
 작업을 시작할 때마다 이 파일과 `docs/MILESTONES.md`의 "진행 중" 마일스톤을 먼저 읽는다.
 마일스톤을 끝내거나 범위·설계를 바꾸면 두 문서를 함께 갱신한다.
@@ -109,7 +109,8 @@ docs/              MILESTONES.md
   `scripts/collect-dist.sh <디렉터리>`가 배포 이름으로 모은다. CI는 PR·main 커밋마다 앱 확인을 통과한 것을 실행 결과에
   올린다(14일, 사람이 내려받아 화면을 확인한다: `docs/MANUAL_CHECKS.md` 0)
 - 릴리스: 버전을 올린다(`Cargo.toml`의 `[workspace.package]`, `npm version <버전> --no-git-tag-version`,
-  `src-tauri/tauri.conf.json`. `Cargo.lock`은 cargo가 고친다. `node scripts/check-version.mjs`가 모두 같은지 본다) →
+  `src-tauri/tauri.conf.json`. `Cargo.lock`은 cargo가 고친다. `node scripts/check-version.mjs`가 모두 같은지 본다)과
+  `CHANGELOG.md`에 `## <버전>` 절을 쓴다(릴리스 초안 설명의 맨 위) →
   main에 머지 → 그 커밋에 `v<버전>` 태그를 밀면(`git tag v<버전> && git push origin v<버전>`) CI가 검사·앱 확인을 거쳐
   릴리스 초안을 만든다 → GitHub의 Releases에서 초안을 보고 게시한다
 - 앱 아이콘 다시 만들기(원본 `src-tauri/icons/source/*.svg`를 고친 뒤): `scripts/make-icons.sh`
@@ -165,6 +166,7 @@ blame은 작업트리에 있는 파일만 받고(컴파일러·grep 형식 `<fil
   측정·자동 확인 스크립트는 임시 디렉터리를 줘서 사용자 캐시와 섞지 않는다.
 - `PLX_DATA_DIR=<디렉터리>`: 앱 데이터(최근 저장소 `recent.json`) 위치(기본: OS 앱 데이터 위치의
   `com.gembitious.parallax`). 자동 확인 스크립트는 임시 디렉터리를 줘서 사용자 목록과 섞지 않는다.
+- `PLX_UPDATE_CHECK=0`: 새 버전 알림이 GitHub에 묻지 않는다(측정·자동 확인 스크립트가 준다. 개발 빌드는 늘 묻지 않는다).
 - `PLX_EDITOR`: `o`(에디터로 열기)가 띄울 에디터. 이름·경로(`code`, `zed`, `cursor`, `subl`, `idea` …, 줄 넘기는 법을
   안다) 또는 `{file}`·`{line}`·`{col}`을 넣은 명령 틀(`"my-editor --line {line} {file}"`). 없으면 `VISUAL`·`EDITOR`가
   아는 GUI 에디터일 때 그것, 다음은 PATH의 `code`·`cursor`·`windsurf`·`zed`·`subl`, 그다음 설치 위치(Windows VS Code,
@@ -234,6 +236,8 @@ blame은 작업트리에 있는 파일만 받고(컴파일러·grep 형식 `<fil
 - 리비전 둘러보기(M7-4): 그래프의 `T`, 커밋 상세·리비전 blame의 "이 커밋(리비전)의 파일 트리", 트리 머리 우클릭·보기
   메뉴·팔레트의 "리비전 둘러보기…"는 왼쪽 파일 트리를 그 커밋 시점으로 바꾼다(트리 위에 그 커밋, ×로 작업트리). 트리에서
   연 파일은 그 리비전의 blame, 히스토리는 그 리비전부터다.
+- 새 버전 알림(M8-2): 더 새 릴리스가 있으면 상태 막대(첫 화면)에 `새 버전 v…`가 보이고 누르면 그 릴리스 페이지를
+  브라우저로 연다. 명령 팔레트의 "새 버전 확인"은 바로 묻고, "새 버전 알림 끄기·켜기"로 묻기를 끄고 켠다.
 - 파일 찾기(Quick Open): 어느 화면에서든 `f`(입력란 밖이면)·Ctrl+P(macOS ⌘P). 추적 파일을 퍼지 검색한다
   (파일 이름 일치 먼저, 초성 `ㅍㅇ`, 공백으로 나눈 낱말은 모두 맞아야 한다, `파일:줄`이면 그 줄로). `↑`/`↓`·Ctrl+N/J/K로
   고르고 `Enter`는 작업트리 blame, `Shift+Enter`는 파일 히스토리. 빈 검색어는 최근 연 파일부터 보인다.
@@ -606,3 +610,23 @@ blame은 작업트리에 있는 파일만 받고(컴파일러·grep 형식 `<fil
   화면도 모두 만들어 읽었다. 그 화면들은 모두 한 번 보인 것이라 동작은 같다). 그래서 뜰 때 읽는 것은 보이는 화면뿐이다.
   남긴 화면의 파일이 그새 지워졌으면 그 화면이 오류를 보인다(띄울 때 파일마다 확인하지 않는다). 파일 트리의 리비전
   둘러보기·Quick Open의 최근 파일은 남기지 않는다.
+- 2026-10-28: Intel 맥 빌드(M8-1). 2026-10-19 배포 결정에서 미룬 Intel 맥을 universal 빌드가 아니라 CI 앱 확인에 Intel
+  러너(`macos-15-intel`)를 하나 더해 낸다(`parallax_<버전>_x64.dmg`). 이유: universal 빌드는 Apple Silicon 러너에서 두
+  아키텍처를 짓기만 하고 Intel 쪽을 띄워 보지 못한다(Rosetta로 돌려도 Intel 맥의 WebKit·GPU가 아니다). 따로 지으면 다른 플랫폼처럼
+  그 러너에서 앱 자동 확인(check-app.sh)을 통과한 것만 낸다. 대신 macOS 동시 실행이 PR마다 하나 늘고(한도 5) 내려받을 파일이
+  둘이다(설치 안내에 칩으로 고르게 적었다). 릴리스 초안의 설명은 `CHANGELOG.md`의 그 버전 절 + `.github/release-notes.md`(설치
+  안내)이고, 절이 없으면 초안을 만들지 않는다.
+- 2026-10-28: 새 버전 알림(M8-2). 앱이 뜬 뒤 5초, 그 뒤 상주하는 동안 하루에 한 번 GitHub의
+  `repos/gembitious/parallax/releases/latest`(게시한 것만, 초안·시험판 제외)를 묻고 이 앱보다 높은 `v<주>.<부>.<수>`면
+  상태 막대·첫 화면에 알린다(`src/update/check.ts`). 누르면 그 릴리스 페이지를 기본 브라우저로 열 뿐이고 내려받기·설치는
+  사용자가 한다. Tauri updater 플러그인을 쓰지 않은 이유: 내려받은 파일을 검증할 서명 키(CI 비밀)가 있어야 하고, 코드 서명이
+  없는 지금은 설치 프로그램을 바꿔 끼워도 OS가 처음처럼 막는다. 묻기는 웹뷰의 `fetch`로 한다(CSP `connect-src`에
+  `https://api.github.com`만 더했다. Rust에 HTTP 의존성을 더하지 않는다). 브라우저는 Rust가 태그 모양을 확인한 이
+  저장소의 릴리스 주소만 연다(`plx_core::release`: macOS `open`, Windows `rundll32 url.dll`, Linux `xdg-open`). 마지막
+  물은 때·답·끄기는 localStorage(`plx.update`)에 두고, 앱을 다시 띄워도 하루 안이면 묻지 않는다. 묻는 것은 GitHub에 IP와
+  요청을 보내는 일이라 명령 팔레트에서 끌 수 있다(기본은 켬, VS Code·GitHub Desktop과 같다). 개발 빌드와
+  `PLX_UPDATE_CHECK=0`(측정·자동 확인 스크립트)은 스스로 묻지 않는다.
+- 2026-10-28: 이름을 parallax로 확정한다(사용자 확인, 가칭을 뗐다). 터미널 명령은 `plx`, 앱 식별자는
+  `com.gembitious.parallax`다. 첫 릴리스 뒤에 바꾸면 앱 데이터·캐시 폴더(식별자)와 설치 파일 이름이 바뀌어 최근 저장소·배치가
+  옮겨 가지 않으므로 v0.1.0 전에 정했다.
+

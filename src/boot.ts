@@ -9,7 +9,7 @@ import { initPerf, nowMs } from "./perf";
 /** 첫 JS를 실행한 시각(epoch ms): JS 묶음을 받아 파싱한 직후, 큰 모듈을 실행하기 전이다. */
 export const scriptStartMs = nowMs();
 
-export type AppInfo = { version: string; coreVersion: string };
+export type AppInfo = { version: string; coreVersion: string; updateCheck: boolean };
 
 let handler: ((request: PlxRequest) => void) | null = null;
 let early: PlxRequest[] = [];

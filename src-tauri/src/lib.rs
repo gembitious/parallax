@@ -16,6 +16,8 @@ use tauri::{Emitter, Manager};
 struct AppInfo {
     version: &'static str,
     core_version: &'static str,
+    /// 새 버전 알림을 묻는다(`PLX_UPDATE_CHECK=0`이면 묻지 않는다: 측정·자동 확인 스크립트)
+    update_check: bool,
 }
 
 #[tauri::command]
@@ -23,6 +25,7 @@ fn app_info() -> AppInfo {
     AppInfo {
         version: env!("CARGO_PKG_VERSION"),
         core_version: plx_core::VERSION,
+        update_check: std::env::var_os("PLX_UPDATE_CHECK").is_none_or(|v| v != "0"),
     }
 }
 
@@ -85,6 +88,7 @@ pub fn run() {
             window::hide_window,
             window::quit_app,
             window::set_window_title,
+            window::open_release,
             menu::set_app_menu,
             perf::perf_info,
             perf::perf_record,

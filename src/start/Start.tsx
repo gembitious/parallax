@@ -6,6 +6,7 @@ import { isComposing } from "../keys";
 import { openContextMenu } from "../menu/Menu";
 import { openNotices } from "../notices/Notices";
 import { toast } from "../Toasts";
+import { openRelease, useUpdate } from "../update/check";
 import { copyPath } from "../workspace/paths";
 import { OPEN_REPO_KEYS, startKey } from "./keys";
 import {
@@ -19,6 +20,7 @@ import {
 } from "./open";
 
 export function Start({ version }: { version: string | null }) {
+  const update = useUpdate();
   const { repos, loaded } = useRecentRepos();
   const [selected, setSelected] = useState(0);
   const [cli, setCli] = useState<CliStatus | null>(null);
@@ -167,6 +169,15 @@ export function Start({ version }: { version: string | null }) {
             ))}
           {cli?.note && <p className="muted">{cli.note}</p>}
         </section>
+
+        {update.newer && (
+          <p className="start-update">
+            새 버전 {update.newer}이 나왔다.{" "}
+            <button type="button" className="link" onClick={() => openRelease(update.newer!)}>
+              릴리스 페이지 열기
+            </button>
+          </p>
+        )}
 
         <p className="start-footer">
           <button type="button" className="link" onClick={openNotices}>

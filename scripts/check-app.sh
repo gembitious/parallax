@@ -82,8 +82,8 @@ cleanup() {
   rm -rf "$work"
 }
 trap cleanup EXIT
-# 사용자의 blame 캐시·최근 저장소와 섞이지 않게 캐시와 앱 데이터도 임시 디렉터리에 둔다.
-export PLX_PERF=1 PLX_PERF_LOG="$log" PLX_CACHE_DIR="$work/cache" PLX_DATA_DIR="$work/data"
+# 사용자의 blame 캐시·최근 저장소와 섞이지 않게 캐시와 앱 데이터도 임시 디렉터리에 둔다. 새 버전 알림도 묻지 않는다.
+export PLX_PERF=1 PLX_PERF_LOG="$log" PLX_CACHE_DIR="$work/cache" PLX_DATA_DIR="$work/data" PLX_UPDATE_CHECK=0
 
 # 기록에 문자열이 나타날 때까지 기다린다(최대 약 15초, 횟수를 주면 그만큼 0.05초씩).
 wait_for() { # wait_for <문자열> [횟수]

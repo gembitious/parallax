@@ -123,6 +123,8 @@ jobs:
           - { name: Linux, os: ubuntu-24.04, bundles: deb }
           - { name: Windows, os: windows-latest, bundles: nsis }
           - { name: macOS, os: macos-latest, bundles: "app,dmg" }
+          # Intel 맥용: 따로 짓고 그 러너에서 앱 확인까지 한다(universal 빌드는 확인하지 못하는 쪽이 생긴다).
+          - { name: macOS Intel, os: macos-15-intel, bundles: "app,dmg" }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     defaults:
