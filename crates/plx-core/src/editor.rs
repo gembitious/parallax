@@ -1,6 +1,7 @@
 //! 에디터로 열기(`o`): 파일을 VS Code·Zed 같은 GUI 에디터에서 `파일:줄:열`로 연다.
 //!
 //! 에디터는 이 순서로 고른다. 환경 변수는 마지막 `plx` 호출이 넘긴 셸의 값을 먼저 본다([`Env`]).
+//! 0. 앱의 설정 화면에서 고른 에디터([`Editor::choose`]의 `chosen`, `PLX_EDITOR`와 같은 형식)
 //! 1. `PLX_EDITOR`: 아는 이름(`code`, `zed` …)이나 경로, 또는 `{file}`·`{line}`·`{col}`을 넣은 명령 틀
 //!    (예: `subl {file}:{line}`, `"C:\Program Files\Foo\foo.exe" --goto {file}:{line}`)
 //! 2. `VISUAL`·`EDITOR`가 아는 GUI 에디터일 때(`code --wait`의 `--wait`는 버린다). vim 같은 터미널 에디터는
@@ -101,6 +102,14 @@ impl Env {
         dirs
     }
 
+    /// 띄운 에디터에 줄 PATH: 셸에서 PATH를 넘겨받았을 때만 [`Env::search_path`]
+    fn launch_path(&self) -> Option<OsString> {
+        self.shell
+            .contains_key("PATH")
+            .then(|| std::env::join_paths(self.search_path()).ok())
+            .flatten()
+    }
+
     /// PATH에서 실행 파일을 찾는다(Windows는 PATHEXT의 확장자도).
     pub fn which(&self, name: &str) -> Option<PathBuf> {
         let extensions: Vec<String> = if cfg!(windows) {
@@ -159,11 +168,7 @@ impl Editor {
     /// 환경(`PLX_EDITOR`, `VISUAL`, `EDITOR`, PATH, 설치 위치)에서 에디터를 고른다.
     pub fn find(env: &Env) -> Result<Editor, String> {
         let which = |name: &str| env.which(name);
-        let path = env
-            .shell
-            .contains_key("PATH")
-            .then(|| std::env::join_paths(env.search_path()).ok())
-            .flatten();
+        let path = env.launch_path();
         let found = |editor: Editor| Editor {
             path: path.clone(),
             ..editor
@@ -184,10 +189,22 @@ impl Editor {
             }
         }
         installed().map(found).ok_or_else(|| {
-            "에디터를 찾지 못했다. VS Code(`code`)나 Zed(`zed`)를 PATH에 두거나 PLX_EDITOR를 정한다 \
-             (예: PLX_EDITOR=zed, PLX_EDITOR=\"subl {file}:{line}\")"
+            "에디터를 찾지 못했다. 설정에서 에디터를 고르거나, VS Code(`code`)나 Zed(`zed`)를 PATH에 두거나 \
+             PLX_EDITOR를 정한다(예: PLX_EDITOR=zed, PLX_EDITOR=\"subl {file}:{line}\")"
                 .to_owned()
         })
+    }
+
+    /// 설정 화면에서 고른 에디터(`chosen`, `PLX_EDITOR`와 같은 형식)가 있으면 그것, 없으면 [`Editor::find`].
+    /// 고른 것을 찾지 못하면 다른 에디터로 넘어가지 않고 실패한다(고른 에디터가 아닌 것이 뜨면 헷갈린다).
+    pub fn choose(env: &Env, chosen: Option<&str>) -> Result<Editor, String> {
+        let Some(spec) = chosen.map(str::trim).filter(|spec| !spec.is_empty()) else {
+            return Editor::find(env);
+        };
+        let path = env.launch_path();
+        from_spec(spec, |name| env.which(name))
+            .map(|editor| Editor { path, ..editor })
+            .ok_or_else(|| format!("설정에서 고른 에디터를 찾지 못했다: {spec}"))
     }
 
     /// 에디터에 넘길 인자
@@ -311,6 +328,30 @@ pub fn locate(
         line,
         column: None,
     })
+}
+
+/// 설정 화면에 보일 에디터 하나
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Choice {
+    /// 화면 이름(VS Code, Zed …)
+    pub name: String,
+    /// [`Editor::choose`]에 넘길 값(실행 파일 이름)
+    pub spec: String,
+}
+
+/// PATH에서 찾은 아는 에디터들([`KNOWN`] 순서, 같은 화면 이름은 처음 것만). 설정 화면이 고를 목록이다.
+pub fn choices(env: &Env) -> Vec<Choice> {
+    let mut found: Vec<Choice> = Vec::new();
+    for &(name, display, _) in KNOWN {
+        if found.iter().any(|choice| choice.name == display) || env.which(name).is_none() {
+            continue;
+        }
+        found.push(Choice {
+            name: display.to_owned(),
+            spec: name.to_owned(),
+        });
+    }
+    found
 }
 
 fn known(name: &str, program: PathBuf) -> Option<Editor> {
@@ -667,6 +708,52 @@ mod tests {
         // 셸 값이 없으면 PATH를 따로 주지 않는다
         let env = Env::default();
         assert_eq!(env.var("PLX_TEST_NO_SUCH_VARIABLE"), None);
+    }
+
+    #[test]
+    fn chosen_editor_comes_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = fake_editor(dir.path(), "zed");
+        fake_editor(dir.path(), "zeditor");
+        let path = dir.path().to_str().unwrap().to_owned();
+        let env = Env::new(
+            [
+                ("PATH".to_owned(), path),
+                ("PLX_EDITOR".to_owned(), "plx-no-such-editor".to_owned()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        // 고른 것이 PLX_EDITOR보다 앞이다
+        let editor = Editor::choose(&env, Some(" zed ")).unwrap();
+        assert_eq!(editor.name, "Zed");
+        assert!(same_file(&editor.program, &exe), "{:?}", editor.program);
+        // 고르지 않았으면 지금처럼(PLX_EDITOR)
+        assert!(
+            Editor::choose(&env, None)
+                .unwrap_err()
+                .contains("PLX_EDITOR")
+        );
+        assert!(
+            Editor::choose(&env, Some(""))
+                .unwrap_err()
+                .contains("PLX_EDITOR")
+        );
+        // 고른 것이 없으면 다른 에디터로 넘어가지 않는다
+        let err = Editor::choose(&env, Some("plx-also-missing {file}")).unwrap_err();
+        assert!(err.contains("설정에서 고른"), "{err}");
+        // 목록: 같은 화면 이름(zed, zeditor)은 한 번
+        let zed: Vec<_> = choices(&env)
+            .into_iter()
+            .filter(|choice| choice.name == "Zed")
+            .collect();
+        assert_eq!(
+            zed,
+            [Choice {
+                name: "Zed".to_owned(),
+                spec: "zed".to_owned()
+            }]
+        );
     }
 
     #[test]

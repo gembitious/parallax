@@ -65,6 +65,7 @@ pub fn run() {
             git::files_dir,
             git::repo_state,
             git::open_in_editor,
+            git::editor_choices,
             git::ai_attribution,
             git::unwatch_repo,
             git::repo_acceleration,

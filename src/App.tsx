@@ -6,6 +6,7 @@ import { Hud } from "./Hud";
 import { MenuHost } from "./menu/Menu";
 import { useNativeMenu } from "./menu/native";
 import { Notices, useNoticesRequest } from "./notices/Notices";
+import { isSettingsKey, Settings, useSettingsRequest } from "./settings/Settings";
 import { call } from "./ipc";
 import { Start } from "./start/Start";
 import { isOpenRepoKey } from "./start/keys";
@@ -94,33 +95,35 @@ export default function App({ initial }: { initial: PlxRequest | null }) {
   const shownRef = useRef<Shown | null>(null);
   shownRef.current = state.shown;
   const readySent = useRef(false);
-  const [notices, setNotices] = useState(false);
-  useNoticesRequest(useCallback(() => setNotices(true), []));
-  // 라이선스 창은 모든 화면 위에 떠서 키를 다 먹는다. 떠 있는 동안 늦게 온 이동(`<`의 답 등)은 버리고 다시 열기
+  // 앱 창: 라이선스, 설정. 하나만 뜬다.
+  const [appWindow, setAppWindow] = useState<"notices" | "settings" | null>(null);
+  useNoticesRequest(useCallback(() => setAppWindow("notices"), []));
+  useSettingsRequest(useCallback(() => setAppWindow("settings"), []));
+  // 앱 창은 모든 화면 위에 떠서 키를 다 먹는다. 떠 있는 동안 늦게 온 이동(`<`의 답 등)은 버리고 다시 열기
   // (저장소 변화)는 닫을 때까지 미룬다: 새 화면이 포커스를 가져가 창은 떠 있는데 키는 아래 화면으로 간다.
   // 새 plx 호출은 그 화면을 보이려는 것이라 창을 닫는다.
-  const noticesRef = useRef(notices);
-  noticesRef.current = notices;
+  const appWindowRef = useRef(appWindow !== null);
+  appWindowRef.current = appWindow !== null;
   const deferredReloads = useRef<Reload[]>([]);
   const reload = useCallback((action: Reload) => {
-    if (noticesRef.current) deferredReloads.current.push(action);
+    if (appWindowRef.current) deferredReloads.current.push(action);
     else dispatch(action);
   }, []);
   const navigate = useCallback((navigation: Navigation, from: Place) => {
-    if (!noticesRef.current) dispatch({ type: "navigate", navigation, from });
+    if (!appWindowRef.current) dispatch({ type: "navigate", navigation, from });
   }, []);
-  // macOS 메뉴 막대(Windows·Linux는 작업 공간의 도구 막대가 그린다). 항목을 고르면 라이선스 창을 닫고 실행한다.
+  // macOS 메뉴 막대(Windows·Linux는 작업 공간의 도구 막대가 그린다). 항목을 고르면 앱 창을 닫고 실행한다.
   useNativeMenu(IS_MAC, () => {
-    noticesRef.current = false;
-    setNotices(false);
+    appWindowRef.current = false;
+    setAppWindow(null);
   });
   useEffect(() => {
-    if (notices) return;
+    if (appWindow) return;
     const actions = deferredReloads.current;
     deferredReloads.current = [];
     // 그사이 닫혔거나 다시 연 화면(옛 key)의 것은 reducer가 버린다.
     for (const action of actions) dispatch(action);
-  }, [notices]);
+  }, [appWindow]);
 
   // 콜드 스타트에서 창은 첫 화면을 그린 뒤에 보인다(빈 화면 깜빡임 방지).
   const markReady = () => {
@@ -143,7 +146,7 @@ export default function App({ initial }: { initial: PlxRequest | null }) {
     // 띄울 화면이 없으면(Finder·시작 메뉴로 띄움) 첫 화면 안내를 보인다.
     if (!initial) markReady();
     const stop = onRequest((request) => {
-      setNotices(false);
+      setAppWindow(null);
       dispatch({ type: "request", request, receivedMs: nowMs() });
     });
     return () => {
@@ -169,12 +172,18 @@ export default function App({ initial }: { initial: PlxRequest | null }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 저장소 열기(Ctrl+O·⌘O)는 어느 화면에서든 받는다. 화면들은 수정 키가 붙은 키를 건너뛴다(keys.ts routeKey).
+  // 저장소 열기(Ctrl+O·⌘O)와 설정(Ctrl+,·⌘,)은 어느 화면에서든 받는다. 화면들은 수정 키가 붙은 키를 건너뛴다
+  // (keys.ts routeKey).
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || !isOpenRepoKey(e)) return;
-      e.preventDefault();
-      openRepoDialog();
+      if (e.defaultPrevented) return;
+      if (isOpenRepoKey(e)) {
+        e.preventDefault();
+        openRepoDialog();
+      } else if (isSettingsKey(e, IS_MAC)) {
+        e.preventDefault();
+        setAppWindow("settings");
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -217,7 +226,8 @@ export default function App({ initial }: { initial: PlxRequest | null }) {
       ) : (
         <Start version={info?.version ?? null} />
       )}
-      {notices && <Notices onClose={() => setNotices(false)} />}
+      {appWindow === "notices" && <Notices onClose={() => setAppWindow(null)} />}
+      {appWindow === "settings" && <Settings onClose={() => setAppWindow(null)} />}
       {dragging && (
         <div className="drop-overlay" aria-hidden="true">
           <p>놓으면 연다: 폴더는 그 저장소의 그래프, 파일은 blame</p>

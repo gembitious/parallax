@@ -23,6 +23,7 @@ const sources = (more: Partial<MenuSources> = {}): MenuSources => ({
     openRecent: noop,
     installCli: noop,
     notices: noop,
+    settings: noop,
     quit: noop,
     toggleGutter: noop,
     hud: noop,
@@ -69,6 +70,7 @@ describe("buildMenus", () => {
       "-",
       "탭 닫기",
       "-",
+      "설정…",
       "터미널 명령 plx 설치…",
       "-",
       "종료",
@@ -109,6 +111,8 @@ describe("buildMenus", () => {
     expect(menu(menus, "도움말").role).toBe("help");
     expect(labels(menu(menus, "파일").items)).not.toContain("종료");
     expect(menu(menus, "파일").items[0]).toMatchObject({ keys: "⌘O", accelerator: "CmdOrCtrl+O" });
+    // 설정은 앱 메뉴의 관하여 다음(macOS 관례)
+    expect(menu(menus, "parallax").items[2]).toMatchObject({ label: "설정…", keys: "⌘,", accelerator: "CmdOrCtrl+," });
   });
 
   it("화면 메뉴: 앱 전역 명령과 제자리(보기·도움말)가 있는 것은 빼고, 어느 화면에나 있는 것은 끝에 묶는다", () => {

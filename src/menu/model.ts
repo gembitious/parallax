@@ -50,6 +50,7 @@ export type MenuActions = {
   openRecent(path: string): void;
   installCli(): void;
   notices(): void;
+  settings(): void;
   quit(): void;
   toggleGutter(): void;
   hud(): void;
@@ -136,6 +137,8 @@ export function buildMenus(src: MenuSources): BarMenu[] {
       items: [
         predefined("about", "parallax에 관하여"),
         SEPARATOR,
+        item("설정…", actions.settings, { keys: keysOf("CmdOrCtrl+,"), accelerator: "CmdOrCtrl+," }),
+        SEPARATOR,
         item("터미널 명령 plx 설치…", actions.installCli),
         SEPARATOR,
         predefined("services", "서비스"),
@@ -165,7 +168,15 @@ export function buildMenus(src: MenuSources): BarMenu[] {
         keys: keysOf("CmdOrCtrl+W"),
         accelerator: "CmdOrCtrl+W",
       }),
-      ...(mac ? [] : [SEPARATOR, item("터미널 명령 plx 설치…", actions.installCli), SEPARATOR, item("종료", actions.quit)]),
+      ...(mac
+        ? []
+        : [
+            SEPARATOR,
+            item("설정…", actions.settings, { keys: keysOf("CmdOrCtrl+,"), accelerator: "CmdOrCtrl+," }),
+            item("터미널 명령 plx 설치…", actions.installCli),
+            SEPARATOR,
+            item("종료", actions.quit),
+          ]),
     ]),
   });
 

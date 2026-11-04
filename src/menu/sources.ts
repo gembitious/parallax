@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { blameGutterShown, toggleBlameGutter } from "../blame/gutterSetting";
 import { toggleHud } from "../Hud";
 import { openNotices } from "../notices/Notices";
+import { openSettings } from "../settings/Settings";
 import { getPerfInfo } from "../perf";
 import { installCli, openPath, openRepoDialog, recentRepos } from "../start/open";
 import { IS_MAC } from "../workspace/keys";
@@ -47,6 +48,7 @@ export function currentMenus(mac = IS_MAC): BarMenu[] {
       openRecent: openPath,
       installCli: () => void installCli(),
       notices: openNotices,
+      settings: openSettings,
       quit,
       toggleGutter: toggleBlameGutter,
       hud: toggleHud,

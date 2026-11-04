@@ -1,5 +1,5 @@
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   --font-ui: system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "D2Coding", Consolas, "Apple SD Gothic Neo", "Malgun Gothic",
     monospace;
@@ -56,62 +56,65 @@
   --syn-meta: #6639ba;
   --syn-invalid: #82071e;
 
+  --code-font-size: 13px;
+  --code-line-height: 20px;
+
   font-family: var(--font-ui);
   font-size: 13px;
   line-height: 1.5;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0d1117;
-    --fg: #e6edf3;
-    --muted: #8d96a0;
-    --border: #30363d;
-    --panel: #161b22;
-    --accent: #4493f8;
-    --danger: #f85149;
-    --warn: #d29922;
-    --shadow: 0 4px 16px rgb(0 0 0 / 50%);
+/* 어두운 테마: public/theme.js와 settings/settings.ts가 시스템 설정이나 고른 테마로 data-theme을 놓는다. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0d1117;
+  --fg: #e6edf3;
+  --muted: #8d96a0;
+  --border: #30363d;
+  --panel: #161b22;
+  --accent: #4493f8;
+  --danger: #f85149;
+  --warn: #d29922;
+  --shadow: 0 4px 16px rgb(0 0 0 / 50%);
 
-    --line-active: #6e76811a;
-    --selection: #264f78;
-    --selection-match: #1f6feb33;
-    --search-match: #bb800926;
-    --search-current: #bb800966;
-    --blame-active: #4493f814;
-    --diff-add: #2ea04326;
-    --diff-del: #f8514926;
+  --line-active: #6e76811a;
+  --selection: #264f78;
+  --selection-match: #1f6feb33;
+  --search-match: #bb800926;
+  --search-current: #bb800966;
+  --blame-active: #4493f814;
+  --diff-add: #2ea04326;
+  --diff-del: #f8514926;
 
-    --heat-0: #1e2a3a;
-    --heat-1: #24426a;
-    --heat-2: #2c5c99;
-    --heat-3: #3a78c7;
-    --heat-4: #6e4520;
-    --heat-5: #9c5a22;
-    --heat-6: #cc7424;
-    --heat-7: #f0883e;
-    --uncommitted: #3fb950;
-    --ai: #a371f7;
+  --heat-0: #1e2a3a;
+  --heat-1: #24426a;
+  --heat-2: #2c5c99;
+  --heat-3: #3a78c7;
+  --heat-4: #6e4520;
+  --heat-5: #9c5a22;
+  --heat-6: #cc7424;
+  --heat-7: #f0883e;
+  --uncommitted: #3fb950;
+  --ai: #a371f7;
 
-    --lane-0: #4493f8;
-    --lane-1: #3fb950;
-    --lane-2: #f0883e;
-    --lane-3: #a371f7;
-    --lane-4: #f85149;
-    --lane-5: #39c5cf;
-    --lane-6: #d29922;
-    --lane-7: #db61a2;
+  --lane-0: #4493f8;
+  --lane-1: #3fb950;
+  --lane-2: #f0883e;
+  --lane-3: #a371f7;
+  --lane-4: #f85149;
+  --lane-5: #39c5cf;
+  --lane-6: #d29922;
+  --lane-7: #db61a2;
 
-    --syn-keyword: #ff7b72;
-    --syn-string: #a5d6ff;
-    --syn-comment: #8b949e;
-    --syn-constant: #79c0ff;
-    --syn-function: #d2a8ff;
-    --syn-type: #ffa657;
-    --syn-property: #79c0ff;
-    --syn-meta: #d2a8ff;
-    --syn-invalid: #ffa198;
-  }
+  --syn-keyword: #ff7b72;
+  --syn-string: #a5d6ff;
+  --syn-comment: #8b949e;
+  --syn-constant: #79c0ff;
+  --syn-function: #d2a8ff;
+  --syn-type: #ffa657;
+  --syn-property: #79c0ff;
+  --syn-meta: #d2a8ff;
+  --syn-invalid: #ffa198;
 }
 
 * {
@@ -1836,6 +1839,85 @@ button.toggle.on {
   width: min(960px, calc(100vw - 32px));
   height: calc(100vh - 32px);
   overflow: hidden;
+}
+
+/* 설정 화면 */
+.help.settings {
+  width: min(620px, calc(100vw - 32px));
+  outline: none;
+}
+
+.settings section {
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.settings h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.settings-row {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  margin: 6px 0;
+}
+
+.settings-label {
+  flex: none;
+  width: 104px;
+}
+
+.settings-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  align-items: center;
+}
+
+.settings-choices label {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.settings select,
+.settings input[type="text"],
+.settings-choices button {
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+.settings-choices button {
+  min-width: 26px;
+  cursor: pointer;
+}
+
+.settings-choices button:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.settings-field {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-field input {
+  width: 100%;
+  font-family: var(--font-mono);
+}
+
+.settings-field p,
+.settings-note {
+  margin: 4px 0 0;
+  font-size: 12px;
 }
 
 .notices-body {

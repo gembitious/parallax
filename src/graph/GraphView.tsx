@@ -10,6 +10,7 @@ import { Acceleration } from "../history/Acceleration";
 import { scrollToRow, visibleRange } from "../history/list";
 import { lastName, type Compare, type Navigation } from "../nav";
 import { afterPaint, getPerfInfo, longFrameIn, nowMs, record } from "../perf";
+import { subscribeDark } from "../settings/settings";
 import { drawRows, graphWidth, readPalette, ROW_HEIGHT, type Palette, type Visible } from "./draw";
 import { reloadFocus, type Focus } from "./focus";
 import { CHUNK, RowCache, rowWidth } from "./rows";
@@ -563,9 +564,7 @@ function GraphPane({
     if (!list) return;
     const update = () => setPalette(readPalette(list));
     update();
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
+    return subscribeDark(update);
   }, []);
 
   // 다시 보이면 스크롤을 되돌리고(숨은 동안에는 읽을 수 없다) 그사이 바뀐 저장소를 읽는다.
