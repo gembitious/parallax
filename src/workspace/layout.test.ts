@@ -6,6 +6,7 @@ import {
   activeTabOf,
   allTabs,
   emptyWorkspace,
+  repoRelative,
   restoreWorkspace,
   setLayoutSource,
   topOf,
@@ -181,6 +182,26 @@ describe("저장소를 열 때", () => {
     expect(topOf(activeTabOf(s)!).key).toBe(entry.key);
     expect(s.focus).toBe("editor");
     expect(s.panel.map((e) => e.view)).toEqual(["graph", "commit"]);
+  });
+
+  it("콜드 스타트: 저장소 상태가 blame보다 먼저 와도 같은 파일의 탭에 둔다", () => {
+    const saved = toLayout(sample())!;
+    setLayoutSource((repo) => (repo === "/repo" ? saved : null));
+    let s = run(emptyWorkspace(), req(request(1, { kind: "blame", path: "/repo/b.rs", line: 2 }, { repo: null, cold: true })));
+    const entry = topOf(activeTabOf(s)!);
+    s = run(s, { type: "repo", repo: "/repo" });
+    expect(files(s)).toEqual([["a.rs", "b.rs"], ["c.rs"]]);
+    expect(topOf(activeTabOf(s)!)).toMatchObject({ key: entry.key, target: { repo: "/repo", path: "b.rs" } });
+    // 뒤에 온 blame 메타는 바꿀 것이 없다
+    expect(files(run(s, { type: "located", key: entry.key, repo: "/repo", path: "b.rs" }))).toEqual(files(s));
+  });
+
+  it("저장소 기준 경로", () => {
+    expect(repoRelative("/repo", "/repo/a/b.rs")).toBe("a/b.rs");
+    expect(repoRelative("/repo/", "/repo/a.rs")).toBe("a.rs");
+    expect(repoRelative("C:\\work\\repo", "C:\\work\\repo\\src\\a.rs")).toBe("src/a.rs");
+    expect(repoRelative("/repo", "/repository/a.rs")).toBeNull();
+    expect(repoRelative("/repo", "/repo")).toBeNull();
   });
 
   it("콜드 스타트의 패널 요청은 패널을 그 화면으로 바꾼다", () => {
