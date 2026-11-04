@@ -10,7 +10,7 @@ import { Acceleration } from "../history/Acceleration";
 import { scrollToRow, visibleRange } from "../history/list";
 import { lastName, type Compare, type Navigation } from "../nav";
 import { afterPaint, getPerfInfo, longFrameIn, nowMs, record } from "../perf";
-import { subscribeDark } from "../settings/settings";
+import { subscribeDark } from "../settings/store";
 import { drawRows, graphWidth, readPalette, ROW_HEIGHT, type Palette, type Visible } from "./draw";
 import { reloadFocus, type Focus } from "./focus";
 import { CHUNK, RowCache, rowWidth } from "./rows";

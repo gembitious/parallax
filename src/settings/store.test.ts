@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULTS, lineHeightFor, parseSettings } from "./settings";
+import { DEFAULTS, lineHeightFor, parseSettings } from "./store";
 import { isSettingsKey } from "./Settings";
 
 describe("설정 읽기", () => {

@@ -64,7 +64,7 @@
   line-height: 1.5;
 }
 
-/* 어두운 테마: public/theme.js와 settings/settings.ts가 시스템 설정이나 고른 테마로 data-theme을 놓는다. */
+/* 어두운 테마: public/theme.js와 settings/store.ts가 시스템 설정이나 고른 테마로 data-theme을 놓는다. */
 :root[data-theme="dark"] {
   color-scheme: dark;
   --bg: #0d1117;

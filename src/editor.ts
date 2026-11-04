@@ -2,7 +2,7 @@
 // 백엔드: src-tauri/src/git.rs open_in_editor, plx-core/src/editor.rs(에디터 고르기: 설정에서 고른 것, PLX_EDITOR, PATH의
 // code·zed …).
 import { call } from "./ipc";
-import { getSettings } from "./settings/settings";
+import { getSettings } from "./settings/store";
 
 export type EditorTarget = {
   /** 저장소 안의 아무 경로 */

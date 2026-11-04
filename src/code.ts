@@ -5,7 +5,7 @@ import { languages } from "@codemirror/language-data";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
-import { isDark, subscribeDark } from "./settings/settings";
+import { isDark, subscribeDark } from "./settings/store";
 
 // 색은 styles.css의 변수라 밝은·어두운 테마를 CSS만으로 바꾼다.
 export const highlightStyle = HighlightStyle.define([

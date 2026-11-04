@@ -7,7 +7,7 @@ import type { DiffMode } from "../commit/diff";
 import { readDiffMode, writeDiffMode } from "../commit/diffMode";
 import { editorChoices, type EditorChoices } from "../editor";
 import { setUpdateCheck, useUpdate } from "../update/check";
-import { FONT_SIZES, updateSettings, useSettings, type Theme } from "./settings";
+import { FONT_SIZES, updateSettings, useSettings, type Theme } from "./store";
 
 const OPEN_EVENT = "plx-open-settings";
 
