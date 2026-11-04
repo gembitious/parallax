@@ -2591,3 +2591,45 @@ mark.quick-open-hit {
   color: inherit;
   line-height: 1;
 }
+
+/* ---------------------------------------------------------------- reflog · stash (M10) */
+.reflog-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.reflog-name {
+  flex-shrink: 0;
+  width: 84px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.reflog-action {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.reflog-action.reflog-commit {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.reflog-action.reflog-move {
+  border-color: var(--syn-function);
+  color: var(--syn-function);
+}
+
+.reflog-action.reflog-reset {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.reflog-row.gone .history-summary,
+.reflog-row.gone .history-sha {
+  opacity: 0.55;
+}

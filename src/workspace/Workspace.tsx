@@ -24,6 +24,7 @@ import { ComparePicker } from "../compare/ComparePicker";
 import { RevisionPicker } from "../compare/RevisionPicker";
 import { openInEditor } from "../editor";
 import { GraphView } from "../graph/GraphView";
+import { ReflogView } from "../reflog/ReflogView";
 import { SearchView } from "../search/SearchView";
 import { Help } from "../Help";
 import { HistoryView } from "../history/HistoryView";
@@ -32,7 +33,7 @@ import { call } from "../ipc";
 import { isComposing } from "../keys";
 import { openContextMenu, type MenuEntry } from "../menu/Menu";
 import { setTarget, usePublish, type ViewSlot } from "../menu/registry";
-import { WORKTREE_CHANGES, backDirectionAt, lastName, type Compare, type Navigation, type StackEntry } from "../nav";
+import { WORKTREE_CHANGES, backDirectionAt, lastName, type Compare, type Navigation, type ReflogWhich, type StackEntry } from "../nav";
 import { commonCommands, usePalette, type Command, type CommandId } from "../palette/Palette";
 import { isPaletteKey } from "../palette/keys";
 import { getPerfInfo } from "../perf";
@@ -516,6 +517,12 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
       from: { pane: "editor", tab: -1 },
     });
   };
+  /** reflog·stash 목록(아래 패널) */
+  const openReflog = (which: ReflogWhich) => {
+    const { repo } = latest.current.state;
+    if (!repo) return;
+    dispatch({ type: "navigate", navigation: { kind: "reflog", repo, which }, from: { pane: "editor", tab: -1 } });
+  };
   /** 두 리비전 비교(고르기 창에서 고른 것, 아래 패널) */
   const openCompare = (compare: Compare) => {
     const { repo } = latest.current.state;
@@ -599,6 +606,20 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
       detail: "git grep (아래 패널)",
       app: true,
       run: () => openSearch(),
+    },
+    {
+      id: "reflog",
+      label: "HEAD reflog",
+      detail: "HEAD가 거쳐 간 커밋 (아래 패널)",
+      app: true,
+      run: () => openReflog("head"),
+    },
+    {
+      id: "stash",
+      label: "stash 목록",
+      detail: "아래 패널",
+      app: true,
+      run: () => openReflog("stash"),
     },
     {
       id: "browse",
@@ -965,6 +986,8 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
           <GraphView {...common} repo={entry.repo} focus={entry.focus} cold={cold} />
         ) : entry.view === "search" ? (
           <SearchView {...common} repo={entry.repo} rev={entry.rev} query={entry.query} />
+        ) : entry.view === "reflog" ? (
+          <ReflogView {...common} repo={entry.repo} which={entry.which} />
         ) : (
           <CommitView
             {...common}

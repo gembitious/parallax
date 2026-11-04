@@ -32,13 +32,14 @@ const WORKSPACE: Key[] = [
   { keys: `${MOD}\\`, what: "에디터 나누기", note: "보이는 탭을 오른쪽에 하나 더 · 탭을 끌어 그룹의 옆에 놓아도 된다" },
   { keys: `${MOD}1~4`, what: "에디터 그룹으로", note: "왼쪽부터" },
   { keys: "D", what: "작업트리 변경", note: "커밋하지 않은 것을 HEAD와 견준다 · 파일을 고치면 바로 다시 견준다" },
+  { keys: "HEAD reflog · stash 목록", what: "HEAD가 거쳐 간 커밋과 stash", note: "명령 팔레트·보기 메뉴 · 리셋으로 잃은 커밋도 찾는다" },
   { keys: "두 리비전 비교…", what: "브랜치·태그·커밋 둘을 견준다", note: "명령 팔레트·보기 메뉴 · 그래프에서는 m으로 표시하고 d" },
 ];
 
 /** 파일 트리에는 없는 화면 키(에디터로 열기, 워크트리, 뒤로) */
 const TREE_SKIPS = new Set(["o", "W", "q"]);
 
-export type HelpView = "workspace" | "blame" | "commit" | "history" | "graph" | "search";
+export type HelpView = "workspace" | "blame" | "commit" | "history" | "graph" | "search" | "reflog";
 
 const TITLES: Record<HelpView, string> = {
   workspace: "파일 트리",
@@ -47,6 +48,7 @@ const TITLES: Record<HelpView, string> = {
   history: "파일 히스토리",
   graph: "커밋 그래프",
   search: "저장소 검색",
+  reflog: "reflog · stash",
 };
 
 const KEYS: Record<HelpView, Key[]> = {
@@ -123,6 +125,18 @@ const KEYS: Record<HelpView, Key[]> = {
     { keys: "y", what: "경로:줄 복사" },
     { keys: "/", what: "검색 칸으로", note: "Enter·↓·Esc로 목록에 돌아온다" },
     { keys: "Alt+C · Alt+W · Alt+R", what: "대소문자 · 낱말 · 정규식", note: "정규식은 git의 확장 정규식(ERE)" },
+  ],
+  reflog: [
+    { keys: "j / k", what: "다음·이전 항목", note: "맨 위가 가장 최근(HEAD@{0}·stash@{0})" },
+    { keys: "Enter", what: "커밋 상세", note: "stash면 stash한 변경(그때의 HEAD와 견준다)" },
+    { keys: "u", what: "stash의 추적하지 않던 파일", note: "stash -u로 넣은 것" },
+    { keys: "d", what: "작업트리와 비교" },
+    { keys: "G", what: "그래프에서 보기", note: "브랜치에서 떨어진 커밋은 그래프에 없다" },
+    { keys: "T", what: "이 커밋의 파일 트리", note: "리비전 둘러보기" },
+    { keys: "F", what: "이 커밋의 파일에서 찾기" },
+    { keys: "y", what: "커밋 sha 복사", note: "우클릭에 HEAD@{n} 이름 복사" },
+    { keys: "s", what: "HEAD reflog ↔ stash" },
+    { keys: "/", what: "거르기", note: "이름·sha·종류·메시지 · Esc로 지운다" },
   ],
 };
 

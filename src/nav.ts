@@ -25,12 +25,17 @@ export type Navigation = (
   | { kind: "graph"; repo: string; rev: string | null }
   /** 저장소 검색(`Mod+Shift+F`, M7-3). `rev`가 있으면 그 리비전의 파일, 없으면 작업트리. `query`는 처음 찾을 글 */
   | { kind: "search"; repo: string; rev: string | null; query?: string }
+  /** reflog·stash 목록(M10): HEAD의 reflog(이 워크트리) 또는 stash */
+  | { kind: "reflog"; repo: string; which: ReflogWhich }
   /** 리비전 둘러보기(M7-4): 파일 트리를 그 리비전의 트리로 바꾼다(화면을 열지 않는다. 작업 공간이 받는다) */
   | { kind: "browse"; repo: string; rev: string }
 ) & {
   /** 다른 워크트리로 옮긴다(`W`): 작업 공간을 그 워크트리의 것으로 새로 연다 */
   worktree?: boolean;
 };
+
+/** reflog 목록의 대상(plx-core/src/reflog.rs Which) */
+export type ReflogWhich = "head" | "stash";
 
 /** 두 지점의 비교(plx-core/src/changes.rs): `base` 리비전 ↔ `target` 리비전(null이면 작업트리) */
 export type Compare = {
@@ -82,7 +87,7 @@ export type PlxRequest = {
 export type Shown = { request: PlxRequest; receivedMs: number };
 
 /** 탐색 스택의 화면 하나. 아래 화면은 숨긴 채 살려 둬 뒤로 오면 커서·스크롤이 그대로다. */
-export type StackEntry = BlameEntry | CommitEntry | HistoryEntry | GraphEntry | SearchEntry;
+export type StackEntry = BlameEntry | CommitEntry | HistoryEntry | GraphEntry | SearchEntry | ReflogStackEntry;
 
 export type BlameEntry = {
   key: number;
@@ -149,6 +154,17 @@ export type SearchEntry = {
   request?: number;
 };
 
+export type ReflogStackEntry = {
+  key: number;
+  view: "reflog";
+  /** 저장소 안의 아무 경로 */
+  repo: string;
+  /** 처음 보일 목록(화면에서 바꿀 수 있다) */
+  which: ReflogWhich;
+  via: "reflog";
+  request?: number;
+};
+
 /** 탐색 스택(탭 하나, 패널)이 이보다 깊어지면 가장 아래 화면부터 버린다. */
 export const MAX_STACK = 30;
 
@@ -167,6 +183,8 @@ export const backDirectionAt = (stack: readonly StackEntry[], index: number) =>
 export function titleOf(entry: StackEntry): string {
   if (entry.view === "commit") return entry.compare ? compareTitle(entry.compare) : `커밋 ${shortSha(entry.rev)}`;
   if (entry.view === "graph") return `그래프 ${lastName(entry.repo)}`;
+  // 화면 안에서 HEAD reflog ↔ stash를 바꾸므로 이름은 하나다(stash도 refs/stash의 reflog다).
+  if (entry.view === "reflog") return `reflog ${lastName(entry.repo)}`;
   if (entry.view === "search") return `검색 ${lastName(entry.repo)}${entry.rev ? ` @${revName(entry.rev)}` : ""}`;
   const { target } = entry;
   const at = target.rev ? ` @${shortSha(target.rev)}` : "";
