@@ -5,6 +5,7 @@ import { languages } from "@codemirror/language-data";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
+import { isDark, subscribeDark } from "./settings/store";
 
 // 색은 styles.css의 변수라 밝은·어두운 테마를 CSS만으로 바꾼다.
 export const highlightStyle = HighlightStyle.define([
@@ -25,7 +26,11 @@ export const highlightStyle = HighlightStyle.define([
 export const codeTheme = EditorView.theme({
   "&": { height: "100%", backgroundColor: "var(--bg)", color: "var(--fg)" },
   "&.cm-focused": { outline: "none" },
-  ".cm-scroller": { fontFamily: "var(--font-mono)", fontSize: "13px", lineHeight: "20px" },
+  ".cm-scroller": {
+    fontFamily: "var(--font-mono)",
+    fontSize: "var(--code-font-size)",
+    lineHeight: "var(--code-line-height)",
+  },
   ".cm-content": { caretColor: "var(--fg)", padding: "0" },
   ".cm-gutters": { backgroundColor: "var(--bg)", color: "var(--muted)", border: "none" },
   ".cm-lineNumbers .cm-gutterElement": { padding: "0 10px 0 6px", minWidth: "4ch" },
@@ -91,8 +96,6 @@ export function selectedLines(state: EditorState): { start: number; end: number 
   return { start, end: to > from && to === last.from ? Math.max(start, last.number - 1) : last.number };
 }
 
-const darkQuery = window.matchMedia?.("(prefers-color-scheme: dark)");
-
 /**
  * 코드 뷰 하나(또는 diff 양쪽)에 붙이는 공통 확장과, 뷰를 만든 뒤 다크 모드와 언어를 따라가게 하는 연결.
  * 구문 강조는 내용을 먼저 그린 뒤에 붙인다. 언어 모듈은 따로 나뉜 청크라 처음에는 불러오고 평가하는 시간이 들고,
@@ -107,15 +110,14 @@ export function codeSupport(path: string): { extensions: Extension; attach(views
     searchPhrases,
     syntaxHighlighting(highlightStyle),
     language.of([]),
-    scheme.of(EditorView.darkTheme.of(darkQuery?.matches ?? false)),
+    scheme.of(EditorView.darkTheme.of(isDark())),
     codeTheme,
   ];
   const attach = (views: EditorView[]) => {
     let detached = false;
-    const onScheme = (e: MediaQueryListEvent) => {
-      for (const view of views) view.dispatch({ effects: scheme.reconfigure(EditorView.darkTheme.of(e.matches)) });
-    };
-    darkQuery?.addEventListener("change", onScheme);
+    const stopScheme = subscribeDark((dark) => {
+      for (const view of views) view.dispatch({ effects: scheme.reconfigure(EditorView.darkTheme.of(dark)) });
+    });
     const description = LanguageDescription.matchFilename(languages, path);
     if (description) {
       requestAnimationFrame(() =>
@@ -133,7 +135,7 @@ export function codeSupport(path: string): { extensions: Extension; attach(views
     }
     return () => {
       detached = true;
-      darkQuery?.removeEventListener("change", onScheme);
+      stopScheme();
     };
   };
   return { extensions, attach };

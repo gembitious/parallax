@@ -5,6 +5,7 @@ import { highlightRuns } from "../quickopen/highlight";
 import { Runs } from "../quickopen/QuickOpen";
 import { filterByLabel } from "./match";
 import { openNotices } from "../notices/Notices";
+import { openSettings } from "../settings/Settings";
 import { OPEN_REPO_KEYS } from "../start/keys";
 import { installCli, openPath, openRepoDialog, recentRepos } from "../start/open";
 import { workspaceCommands } from "../menu/registry";
@@ -213,6 +214,14 @@ export function commonCommands(actions: {
     { label: "단축키 도움말", keys: "?", id: "help", run: actions.help },
     { label: "뒤로 (맨 앞 화면이면 창 숨기기)", keys: "q", id: "back", run: actions.back },
     { label: "터미널 명령 plx 설치", detail: "터미널에서 plx로 이 창에 연다", app: true, run: () => void installCli() },
+    {
+      label: "설정…",
+      keys: `${MOD},`,
+      accelerator: "CmdOrCtrl+,",
+      detail: "테마, 글자 크기, 에디터, 새 버전 알림",
+      app: true,
+      run: openSettings,
+    },
     { label: "오픈 소스 라이선스", detail: "앱에 든 다른 프로젝트의 저작권 고지", app: true, run: openNotices },
     ...updateCommands(),
   ];

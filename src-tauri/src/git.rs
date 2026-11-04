@@ -480,9 +480,9 @@ pub struct Opened {
     line: Option<u32>,
 }
 
-/// 작업트리 파일을 에디터(`PLX_EDITOR`, PATH의 code·zed …)로 연다. `path`(저장소 기준)가 없으면 작업트리 폴더를
-/// 연다. `rev`의 `line`은 작업트리 파일의 줄로 옮긴다. 환경 변수는 마지막 `plx` 호출의 셸 값을 먼저 본다.
-/// 저장소는 바꾸지 않는다.
+/// 작업트리 파일을 에디터(설정에서 고른 것 `editor`, 없으면 `PLX_EDITOR`, PATH의 code·zed …)로 연다. `path`(저장소
+/// 기준)가 없으면 작업트리 폴더를 연다. `rev`의 `line`은 작업트리 파일의 줄로 옮긴다. 환경 변수는 마지막 `plx` 호출의
+/// 셸 값을 먼저 본다. 저장소는 바꾸지 않는다.
 #[tauri::command]
 pub async fn open_in_editor(
     git: State<'_, Arc<GitState>>,
@@ -491,6 +491,7 @@ pub async fn open_in_editor(
     path: Option<String>,
     rev: Option<String>,
     line: Option<u32>,
+    editor: Option<String>,
 ) -> Result<Opened, String> {
     let git = git.inner().clone();
     let env = requests.editor_env();
@@ -501,7 +502,7 @@ pub async fn open_in_editor(
             .map_err(|e| e.to_string())?;
         let target = plx_core::editor::locate(&repo, path.as_deref(), rev.as_deref(), line)
             .map_err(|e| e.to_string())?;
-        let editor = plx_core::editor::Editor::find(&env)?;
+        let editor = plx_core::editor::Editor::choose(&env, editor.as_deref())?;
         editor
             .open(&target)
             .map_err(|e| format!("{}를 띄우지 못했다: {e}", editor.name))?;
@@ -512,6 +513,52 @@ pub async fn open_in_editor(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorChoices {
+    /// 고르지 않았을 때 쓸 에디터의 이름(`PLX_EDITOR`, PATH, 설치 위치). 찾지 못했으면 `null`.
+    auto: Option<String>,
+    /// 찾지 못한 까닭
+    auto_error: Option<String>,
+    /// PATH에서 찾은 아는 에디터들
+    found: Vec<EditorChoice>,
+}
+
+#[derive(Serialize)]
+pub struct EditorChoice {
+    name: String,
+    spec: String,
+}
+
+/// 설정 화면의 에디터 목록: 고르지 않았을 때 쓸 에디터와 PATH에서 찾은 에디터들. 환경은 마지막 `plx` 호출의 셸
+/// 값을 먼저 본다(`open_in_editor`와 같다).
+#[tauri::command]
+pub async fn editor_choices(
+    requests: State<'_, Arc<crate::instance::Requests>>,
+) -> Result<EditorChoices, String> {
+    let env = requests.editor_env();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (auto, auto_error) = match plx_core::editor::Editor::find(&env) {
+            Ok(editor) => (Some(editor.name), None),
+            Err(e) => (None, Some(e)),
+        };
+        let found = plx_core::editor::choices(&env)
+            .into_iter()
+            .map(|choice| EditorChoice {
+                name: choice.name,
+                spec: choice.spec,
+            })
+            .collect();
+        EditorChoices {
+            auto,
+            auto_error,
+            found,
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// blame 줄의 AI 출처(git-ai의 `refs/notes/ai`): (커밋, 그 커밋에서의 경로)마다 에이전트·사람이 쓴 줄 구간

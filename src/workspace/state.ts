@@ -223,9 +223,10 @@ function adoptRepo(state: Workspace, repo: string): Workspace {
   if (!layout) return { ...state, repo };
   let next: Workspace = { ...restoreWorkspace(repo, layout), shown: state.shown };
   for (const tab of allTabs(state)) {
-    // 그 탭을 연 보기 탭은 되살린 배치에 없다.
-    const opened: Tab = { key: tab.key, stack: tab.stack, preview: false, from: tab.from };
-    const file = tabFile(tab);
+    // 그 탭을 연 보기 탭은 되살린 배치에 없다. 저장소를 아직 모르는 화면(blame 메타보다 저장소 상태가 먼저 왔다)은
+    // 절대 경로가 이 저장소 안이면 여기서 저장소 기준 경로로 바꿔 같은 파일의 탭을 찾는다.
+    const opened: Tab = { key: tab.key, stack: tab.stack.map((entry) => locateIn(entry, repo)), preview: false, from: tab.from };
+    const file = tabFile(opened);
     const isFile = (t: Tab) => file !== null && tabFile(t) === file;
     const same = activeGroupOf(next).tabs.find(isFile) ?? allTabs(next).find(isFile);
     if (same) {
@@ -246,6 +247,20 @@ function adoptRepo(state: Workspace, repo: string): Workspace {
   const focus: Focus =
     state.focus === "panel" && state.panel.length > 0 ? "panel" : activeTabOf(next) !== null ? "editor" : next.focus;
   return { ...next, focus };
+}
+
+/** 저장소 안의 절대 경로를 저장소 기준 경로로(`/`로 나눈다). 저장소 밖이면 null */
+export function repoRelative(repo: string, path: string): string | null {
+  const root = repo.replace(/\\/g, "/").replace(/\/+$/, "");
+  const full = path.replace(/\\/g, "/");
+  return root !== "" && full.startsWith(`${root}/`) && full.length > root.length + 1 ? full.slice(root.length + 1) : null;
+}
+
+/** 저장소를 모르는 blame·히스토리 화면(콜드 스타트의 plx 요청)을 그 저장소의 화면으로 */
+function locateIn<E extends StackEntry>(entry: E, repo: string): E {
+  if ((entry.view !== "blame" && entry.view !== "history") || entry.target.repo !== null) return entry;
+  const path = repoRelative(repo, entry.target.path);
+  return path === null ? entry : { ...entry, target: { ...entry.target, repo, path } };
 }
 
 /** plx 요청의 첫 화면. 백엔드가 저장소와 저장소 기준 경로를 찾았으면 그것으로 연다(같은 파일의 탭을 찾을 수 있다). */

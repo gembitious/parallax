@@ -5,6 +5,7 @@ import { openInEditor } from "../editor";
 import { isComposing } from "../keys";
 import { openContextMenu } from "../menu/Menu";
 import { openNotices } from "../notices/Notices";
+import { openSettings } from "../settings/Settings";
 import { toast } from "../Toasts";
 import { openRelease, useUpdate } from "../update/check";
 import { copyPath } from "../workspace/paths";
@@ -180,6 +181,10 @@ export function Start({ version }: { version: string | null }) {
         )}
 
         <p className="start-footer">
+          <button type="button" className="link" onClick={openSettings}>
+            설정
+          </button>{" "}
+          ·{" "}
           <button type="button" className="link" onClick={openNotices}>
             오픈 소스 라이선스
           </button>

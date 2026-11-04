@@ -39,6 +39,7 @@ import {
   withStats,
 } from "./detail";
 import { createDiffView, type DiffMode, type DiffPoint, type DiffView } from "./diff";
+import { readDiffMode, writeDiffMode } from "./diffMode";
 import {
   STATUS_LETTER,
   STATUS_NAME,
@@ -79,23 +80,6 @@ const BUDGET_MS = 50;
 const TOAST_MS = 1800;
 /** 파일 목록 행 높이(px). styles.css의 .file-row와 같다. */
 const ROW_HEIGHT = 22;
-const MODE_KEY = "plx.diff.mode";
-
-function readMode(): DiffMode {
-  try {
-    return localStorage.getItem(MODE_KEY) === "unified" ? "unified" : "split";
-  } catch {
-    return "split";
-  }
-}
-
-function writeMode(mode: DiffMode) {
-  try {
-    localStorage.setItem(MODE_KEY, mode);
-  } catch {
-    // 저장하지 못해도 이번 실행에는 반영된다.
-  }
-}
 
 type VersionsState = FileVersions | "loading" | { error: string };
 
@@ -172,7 +156,7 @@ export function CommitView({
   /** 시간 안에 세지 못한 줄 수를 받다 실패했다 */
   const [statsError, setStatsError] = useState<string | null>(null);
   const [selected, setSelected] = useState(0);
-  const [mode, setMode] = useState<DiffMode>(readMode);
+  const [mode, setMode] = useState<DiffMode>(readDiffMode);
   const [versions, setVersions] = useState<ReadonlyMap<string, VersionsState>>(() => new Map());
   /** 바뀌면 고른 파일을 다시 받는다(받다 실패한 파일의 "다시 시도") */
   const [retries, setRetries] = useState(0);
@@ -590,7 +574,7 @@ export function CommitView({
   const toggleMode = () =>
     setMode((m) => {
       const next = m === "split" ? "unified" : "split";
-      writeMode(next);
+      writeDiffMode(next);
       return next;
     });
 
