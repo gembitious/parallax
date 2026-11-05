@@ -30,6 +30,14 @@ import { blameSwitch } from "../worktree/switch";
 import { openBlame, type BlameTarget } from "./session";
 import type { BlameBlock, BlameMeta, BlameStats, CommitInfo, Neighbor, Version } from "./types";
 import { useMounted } from "../mounted";
+import {
+  blameOptions,
+  blameOptionsLabel,
+  sameBlameOptions,
+  updateSettings,
+  useSettings,
+  type BlameMoves,
+} from "../settings/store";
 
 
 type Props = {
@@ -182,6 +190,10 @@ export function BlameView({
   /** HEAD가 움직였다는 마지막 알림의 HEAD(없었으면 undefined) */
   const [movedTo, setMovedTo] = useState<string | null | undefined>(undefined);
   const showGutter = useBlameGutter();
+  /** 이 화면을 연 blame 선택(-w, -M, -C). 설정에서 바꾸면 다시 연다 */
+  const [openedWith] = useState(() => blameOptions());
+  const options = blameOptions(useSettings());
+  const optionsLabel = blameOptionsLabel(openedWith);
   /** 상태 막대에 마지막으로 알린 것(다시 보일 때 다시 알린다) */
   const status = useRef<EditorStatus | null>(null);
   // 저장소를 아직 모르면(meta 전) 연 파일 경로로 찾는다(저장소 안의 아무 경로면 된다).
@@ -222,6 +234,18 @@ export function BlameView({
       detail: showGutter ? "커서 줄 끝에만 blame 한 줄" : "줄마다 커밋·작성자·나이",
       run: run("toggleGutter"),
     },
+    {
+      label: options.ignoreWhitespace ? "blame: 공백 무시 끄기" : "blame: 공백만 바꾼 커밋 무시 (-w)",
+      detail: "포매터·들여쓰기 커밋 너머의 작성자 · 설정에도 있다",
+      run: () => updateSettings({ blameIgnoreWhitespace: !options.ignoreWhitespace }),
+    },
+    ...(["off", "file", "files"] as const)
+      .filter((moves) => moves !== options.moves)
+      .map((moves) => ({
+        label: `blame: 옮긴 줄 ${MOVES_LABEL[moves]}`,
+        detail: MOVES_DETAIL[moves],
+        run: () => updateSettings({ blameMoves: moves }),
+      })),
     { label: "줄로 이동", keys: "Ctrl+G", run: () => void (editor.current && gotoLine(editor.current.view)) },
     ...commonCommands({
       files: run("files"),
@@ -308,7 +332,10 @@ export function BlameView({
   // 띄우고 `q`가 창을 숨겼다). 검색어는 새 화면으로 넘긴다(`n`/`N`이 이어서 찾는다).
   const busy = active && (overlay || !!hover?.pinned || searching);
   // HEAD 알림은 이 화면이 읽은 HEAD와 다를 때만 다시 연다(열기 바로 전의 커밋이 늦게 알려진 것은 거른다).
-  const stale = changed || headMoved(movedTo, meta ? meta.head : undefined, fatal !== null || progress.kind === "failed");
+  const stale =
+    changed ||
+    !sameBlameOptions(openedWith, options) ||
+    headMoved(movedTo, meta ? meta.head : undefined, fatal !== null || progress.kind === "failed");
   useEffect(() => {
     if (!stale || busy || !onReload) return;
     const view = editor.current?.view;
@@ -623,7 +650,7 @@ export function BlameView({
             : Math.round(stats.firstByteMs + FIRST_LINE_SLACK_MS);
       record({
         kind: "blame",
-        label: `blame ${relPath}${rev ? ` @${shortSha(rev)}` : ""}${stats.cached ? " (캐시)" : ""}${cold ? " (콜드 스타트)" : ""}`,
+        label: `blame ${relPath}${rev ? ` @${shortSha(rev)}` : ""}${optionsLabel ? ` ${optionsLabel}` : ""}${stats.cached ? " (캐시)" : ""}${cold ? " (콜드 스타트)" : ""}`,
         totalMs: firstLine - t0,
         budgetMs,
         phases,
@@ -632,7 +659,7 @@ export function BlameView({
       });
     };
 
-    const session = openBlame(target, (event) => {
+    const session = openBlame(target, openedWith, (event) => {
       switch (event.kind) {
         case "meta": {
           gotMeta = true;
@@ -912,6 +939,16 @@ export function BlameView({
             뒤로 q · {depth - 1}
           </span>
         )}
+        {optionsLabel && (
+          <span
+            className="badge mono"
+            title={`blame 선택: ${optionsLabel}${openedWith.ignoreWhitespace ? "\n-w 공백만 바꾼 변경은 지나간다" : ""}${
+              openedWith.moves === "off" ? "" : `\n${MOVES_DETAIL[openedWith.moves]}`
+            }\n설정(${IS_MAC_LABEL})에서 바꾼다`}
+          >
+            {optionsLabel}
+          </span>
+        )}
         {stale && (
           <span className="badge warn" title="파일이나 HEAD가 바뀌었다. 열린 창·검색을 닫으면 다시 연다">
             바뀜
@@ -1044,3 +1081,17 @@ function ProgressText({
       return <span className="error-text">blame 실패: {progress.message}</span>;
   }
 }
+
+/** 옮긴 줄 따라가기의 이름(팔레트)과 설명 */
+const MOVES_LABEL: Record<BlameMoves, string> = {
+  off: "따라가지 않기",
+  file: "따라가기: 파일 안 (-M)",
+  files: "따라가기: 다른 파일까지 (-M -C)",
+};
+const MOVES_DETAIL: Record<BlameMoves, string> = {
+  off: "git 기본 · 옮긴 커밋이 그 줄의 커밋이다",
+  file: "-M 같은 파일 안에서 옮긴 줄은 처음 쓴 커밋으로",
+  files: "-M -C 같은 커밋에서 바뀐 다른 파일에서 옮기거나 복사한 줄도 (느려질 수 있다)",
+};
+const IS_MAC_LABEL = typeof navigator !== "undefined" && /Mac/.test(navigator.userAgent) ? "⌘," : "Ctrl+,";
+

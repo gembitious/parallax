@@ -78,6 +78,7 @@ const KEYS: Record<HelpView, Key[]> = {
     { keys: "G", what: "커밋 그래프 (이 줄의 커밋을 골라서)" },
     { keys: "b", what: "blame 거터 보이기·숨기기", note: "끄면 커서 줄 끝에만 blame 한 줄" },
     { keys: "Ctrl+G", what: "줄로 이동", note: "상태 막대의 줄·열을 눌러도 된다" },
+    { keys: ":", what: "blame 옵션: 공백 무시(-w)·옮긴 줄(-M, -M -C)", note: "명령 팔레트·설정 화면 · 켜면 머리줄에 표시" },
   ],
   commit: [
     { keys: "j / k", what: "다음·이전 파일" },
