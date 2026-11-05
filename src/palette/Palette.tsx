@@ -55,6 +55,8 @@ export type CommandId =
   | "changes"
   | "compare"
   | "search"
+  | "reflog"
+  | "stash"
   | "browse"
   | "browseWorktree"
   // 에디터 그룹(나눠 보기)과 탭 ↔ 패널

@@ -74,6 +74,7 @@ pub fn run() {
             git::commit_detail,
             git::compare,
             git::ref_names,
+            git::reflog,
             git::grep_open,
             git::grep_cancel,
             git::file_versions,

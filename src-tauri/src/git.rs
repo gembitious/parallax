@@ -15,6 +15,7 @@ use plx_core::graph::{GraphEvent, GraphOptions, GraphSessions, GraphWindow};
 use plx_core::grep::{GrepEvent, GrepQuery, GrepSessions};
 use plx_core::history::{HistoryEvent, HistorySessions, LineRange};
 use plx_core::navigate::{self, Direction, Version};
+use plx_core::reflog::{self, Reflog, Which};
 use plx_core::repo::{CommitInfo, FilePath, RepoCache};
 use plx_core::watch::{Change, Watchers};
 use serde::Serialize;
@@ -659,6 +660,20 @@ pub async fn ref_names(
     blocking(git, move |git| {
         let repo = git.repos.for_path(Path::new(&repo))?;
         changes::ref_names(&repo)
+    })
+    .await
+}
+
+/// HEAD의 reflog(이 워크트리) 또는 stash 목록, 최근 것부터(M10). gix로 읽고 git을 띄우지 않는다.
+#[tauri::command]
+pub async fn reflog(
+    git: State<'_, Arc<GitState>>,
+    repo: String,
+    which: Which,
+) -> Result<Reflog, String> {
+    blocking(git, move |git| {
+        let repo = git.repos.for_path(Path::new(&repo))?;
+        reflog::read(&repo, which)
     })
     .await
 }

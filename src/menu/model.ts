@@ -223,6 +223,8 @@ export function buildMenus(src: MenuSources): BarMenu[] {
       : []),
     ...fromCommand(ws("changes")),
     ...fromCommand(ws("search")),
+    ...fromCommand(ws("reflog")),
+    ...fromCommand(ws("stash")),
     ...fromCommand(ws("browse")),
     ...fromCommand(ws("browseWorktree")),
     ...fromCommand(ws("compare")),

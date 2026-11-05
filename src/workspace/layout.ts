@@ -1,7 +1,7 @@
 // 작업 공간 복원(M7-5): 저장소마다 그룹·탭(화면 스택)·패널 배치를 이 컴퓨터에 남기고, 그 저장소를 다시 열면(앱을 다시
 // 띄운 뒤에도) 되살린다. 여기는 배치 ↔ 저장 모양(순수 함수, layout.test.ts)과 저장소(localStorage)다. 되살린 배치를
 // 작업 공간으로 만드는 것(화면 key)은 state.ts의 restoreWorkspace가 한다.
-import type { Compare, StackEntry } from "../nav";
+import type { Compare, ReflogWhich, StackEntry } from "../nav";
 import type { Pane, Workspace } from "./state";
 
 /** 저장하는 화면 하나: key·plx 요청·다시 열기 때 넘긴 검색은 뺀다. */
@@ -15,7 +15,8 @@ export type SavedEntry =
   | { view: "history"; target: { repo: string; path: string; rev: string | null }; lines: { start: number; end: number } | null }
   | { view: "commit"; repo: string; rev: string; path: string | null; only: boolean; compare?: Compare }
   | { view: "graph"; repo: string; focus: string | null }
-  | { view: "search"; repo: string; rev: string | null; query: string };
+  | { view: "search"; repo: string; rev: string | null; query: string }
+  | { view: "reflog"; repo: string; which: ReflogWhich };
 
 export type SavedTab = {
   stack: SavedEntry[];
@@ -121,6 +122,8 @@ function saveEntry(entry: StackEntry, line: number | null | undefined): SavedEnt
       return { view: "graph", repo: entry.repo, focus: entry.focus };
     case "search":
       return { view: "search", repo: entry.repo, rev: entry.rev, query: entry.query };
+    case "reflog":
+      return { view: "reflog", repo: entry.repo, which: entry.which };
   }
 }
 
@@ -171,6 +174,10 @@ export function readEntry(v: Json): SavedEntry | null {
     case "search":
       return isString(v.repo) && isStringOrNull(v.rev) && isString(v.query)
         ? { view: "search", repo: v.repo, rev: v.rev, query: v.query }
+        : null;
+    case "reflog":
+      return isString(v.repo) && (v.which === "head" || v.which === "stash")
+        ? { view: "reflog", repo: v.repo, which: v.which }
         : null;
     default:
       return null;

@@ -94,6 +94,24 @@ describe("배치 남기기·되살리기", () => {
     expect(entry).toEqual({ view: "blame", target: { repo: "/repo", path: "a.rs", rev: null }, line: 3, via: "file" });
   });
 
+  it("reflog·stash 목록도 패널에 남기고 되살린다", () => {
+    const s = run(
+      emptyWorkspace("/repo"),
+      nav({ kind: "reflog", repo: "/repo", which: "head" }, { pane: "editor", tab: -1 }),
+      nav({ kind: "reflog", repo: "/repo", which: "stash" }, { pane: "panel" }),
+    );
+    const layout = readLayout(JSON.parse(JSON.stringify(toLayout(s))))!;
+    expect(layout.panel).toEqual([
+      { view: "reflog", repo: "/repo", which: "head", from: "editor" },
+      { view: "reflog", repo: "/repo", which: "stash", from: "panel" },
+    ]);
+    const restored = restoreWorkspace("/repo", layout);
+    expect(restored.panel.map((e) => e.view === "reflog" && e.which)).toEqual(["head", "stash"]);
+    // 모르는 목록은 그 화면만 뺀다
+    const broken = { ...layout, panel: [{ view: "reflog", repo: "/repo", which: "branch", from: "panel" }, layout.panel[1]] };
+    expect(readLayout(JSON.parse(JSON.stringify(broken)))?.panel).toEqual([layout.panel[1]]);
+  });
+
   it("남길 것이 없으면 null", () => {
     expect(toLayout(emptyWorkspace("/repo"))).toBeNull();
     expect(toLayout(emptyWorkspace())).toBeNull();

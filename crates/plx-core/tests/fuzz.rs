@@ -489,6 +489,31 @@ fn recent_repos_file() {
 }
 
 #[test]
+fn reflog_file() {
+    use plx_core::reflog::{self, Which};
+    use plx_core::repo::Repo;
+    // 클론한 저장소의 reflog는 우리가 쓰지 않았다(손으로 고쳤거나 다른 도구가 썼다). 줄이 깨져도 그 줄만 건너뛴다.
+    let dir = common::scratch_repo("fuzz-reflog");
+    std::fs::write(dir.join("a.txt"), "1\n").unwrap();
+    common::commit_all(&dir, "하나");
+    std::fs::write(dir.join("a.txt"), "2\n").unwrap();
+    common::commit_all(&dir, "fix: 둘");
+    git(&dir, &["checkout", "-q", "-b", "dev"]);
+    git(&dir, &["reset", "-q", "HEAD~1"]);
+    let log = dir.join(".git/logs/HEAD");
+    let seeds = vec![std::fs::read(&log).unwrap()];
+    let repo = Repo::discover(&dir).unwrap();
+    fuzz("reflog", &seeds, |input, _| {
+        std::fs::write(&log, input).unwrap();
+        let list = reflog::read(&repo, Which::Head).expect("깨진 reflog도 읽는다");
+        assert!(list.entries.len() <= reflog::LIMIT);
+        for (i, entry) in list.entries.iter().enumerate() {
+            assert_eq!(entry.index, i);
+        }
+    });
+}
+
+#[test]
 fn cli_install_files() {
     use plx_core::cli_install::{
         first_in_path, path_has_dir, path_with_dir, path_with_dir_before, shim_script, shim_target,

@@ -172,6 +172,8 @@ function restoreEntry(saved: SavedEntry): StackEntry {
       return { key, view: "graph", repo: saved.repo, focus: saved.focus, via: "graph" };
     case "search":
       return { key, view: "search", repo: saved.repo, rev: saved.rev, query: saved.query, via: "search" };
+    case "reflog":
+      return { key, view: "reflog", repo: saved.repo, which: saved.which, via: "reflog" };
   }
 }
 
@@ -307,7 +309,10 @@ function blameEntry(navigation: Extract<Navigation, { kind: "parent" | "older" |
   return { key: newKey(), view: "blame", target: navigation.target, line: navigation.line, via: navigation.kind };
 }
 
-function panelEntry(navigation: Extract<Navigation, { kind: "commit" | "history" | "graph" | "search" }>, from: Pane): PanelEntry {
+function panelEntry(
+  navigation: Extract<Navigation, { kind: "commit" | "history" | "graph" | "search" | "reflog" }>,
+  from: Pane,
+): PanelEntry {
   const key = newKey();
   switch (navigation.kind) {
     case "commit":
@@ -328,6 +333,8 @@ function panelEntry(navigation: Extract<Navigation, { kind: "commit" | "history"
       return { key, view: "graph", repo: navigation.repo, focus: navigation.rev, via: "graph", from };
     case "search":
       return { key, view: "search", repo: navigation.repo, rev: navigation.rev, query: navigation.query ?? "", via: "search", from };
+    case "reflog":
+      return { key, view: "reflog", repo: navigation.repo, which: navigation.which, via: "reflog", from };
   }
 }
 
@@ -354,6 +361,8 @@ function copyEntry(entry: StackEntry, line: number | null | undefined): StackEnt
       return { key, view: "graph", repo: entry.repo, focus: entry.focus, via: "graph" };
     case "search":
       return { key, view: "search", repo: entry.repo, rev: entry.rev, query: entry.query, via: "search" };
+    case "reflog":
+      return { key, view: "reflog", repo: entry.repo, which: entry.which, via: "reflog" };
   }
 }
 
@@ -639,7 +648,10 @@ export function workspaceReducer(state: Workspace, action: WorkspaceAction): Wor
       if (navigation.worktree) {
         // 다른 워크트리: 그 워크트리의 작업 공간에서 같은 화면을 연다.
         const repo =
-          navigation.kind === "commit" || navigation.kind === "graph" || navigation.kind === "search"
+          navigation.kind === "commit" ||
+          navigation.kind === "graph" ||
+          navigation.kind === "search" ||
+          navigation.kind === "reflog"
             ? navigation.repo
             : navigation.target.repo;
         const base = { ...openWorkspace(repo), shown: state.shown };
@@ -647,7 +659,8 @@ export function workspaceReducer(state: Workspace, action: WorkspaceAction): Wor
           navigation.kind === "commit" ||
           navigation.kind === "history" ||
           navigation.kind === "graph" ||
-          navigation.kind === "search"
+          navigation.kind === "search" ||
+          navigation.kind === "reflog"
         ) {
           return pushPanel(base, panelEntry(navigation, "editor"), false);
         }
@@ -684,7 +697,7 @@ export function workspaceReducer(state: Workspace, action: WorkspaceAction): Wor
           });
         }
         default:
-          // 커밋 상세·히스토리·그래프·검색은 패널에. 패널에서 갔거나 패널이 열려 있으면 패널 스택에 쌓는다.
+          // 커밋 상세·히스토리·그래프·검색·reflog는 패널에. 패널에서 갔거나 패널이 열려 있으면 패널 스택에 쌓는다.
           return pushPanel(
             state,
             panelEntry(navigation, from.pane),
