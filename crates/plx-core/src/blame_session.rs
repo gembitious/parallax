@@ -13,7 +13,7 @@ use std::time::Instant;
 
 use serde::Serialize;
 
-use crate::blame::{Blame, BlameBlock, BlameCommit, BlameError, Chunk, Stats};
+use crate::blame::{Blame, BlameBlock, BlameCommit, BlameError, BlameOptions, Chunk, Stats};
 use crate::cache::{CacheKey, DiskCache};
 use crate::repo::{FilePath, Repo, RepoCache};
 use crate::requests::{self, Requests};
@@ -107,20 +107,23 @@ fn start(
     cache: Option<&DiskCache>,
     file: &FilePath,
     rev: Option<&str>,
+    options: BlameOptions,
 ) -> Result<(BlameMeta, Source), String> {
     let (repo, rel) = repos.locate(file).map_err(|e| e.to_string())?;
+    // 선택이 바꾸는 것은 결과뿐이라 설정 지문에 붙인다(기본값이면 붙이지 않아 옛 캐시가 맞는다).
+    let settings = format!("{}{}", repo.blame_settings(), options.fingerprint());
     let commit = rev
         .map(|rev| repo.resolve_commit(rev))
         .transpose()
         .map_err(|e| e.to_string())?;
     let Some(commit) = commit else {
-        return start_worktree(&repo, cache, &rel);
+        return start_worktree(&repo, cache, &rel, &settings, options);
     };
     let sha = commit.to_string();
     // 얕은 클론(이력을 더 받으면)과 부모를 바꾼 저장소(`git replace`)는 결과가 바뀐다.
     let key = cache
         .filter(|_| repo.cacheable())
-        .map(|_| CacheKey::commit(repo.workdir(), &sha, &rel, &repo.blame_settings()));
+        .map(|_| CacheKey::commit(repo.workdir(), &sha, &rel, &settings));
     let cached = key
         .as_ref()
         .zip(cache)
@@ -128,7 +131,7 @@ fn start(
     // blob을 읽는 동안 git이 일을 시작하도록 먼저 띄운다.
     let blame = cached.is_none().then(|| {
         let (dir, path, rev) = (repo.workdir().to_owned(), rel.clone(), sha.clone());
-        Spawning::new(move || Blame::spawn(&dir, &path, Some(&rev)))
+        Spawning::new(move || Blame::spawn_with(&dir, &path, Some(&rev), None, &options))
     });
     // 실패하거나 바이너리면 git은 버린다(Drop이 끝내고 거둔다).
     let bytes = repo
@@ -158,6 +161,8 @@ fn start_worktree(
     repo: &Repo,
     cache: Option<&DiskCache>,
     rel: &str,
+    settings: &str,
+    options: BlameOptions,
 ) -> Result<(BlameMeta, Source), String> {
     // 심볼릭 링크는 가리키는 파일을 blame한다(터미널에서 준 경로도 실제 경로로 푼다).
     let rel = repo.resolve_link(rel).map_err(|e| e.to_string())?;
@@ -196,7 +201,7 @@ fn start_worktree(
             repo.workdir(),
             &head.to_string(),
             &rel,
-            &repo.blame_settings(),
+            settings,
             &bytes,
             &repo.to_git(&rel, &bytes),
         )),
@@ -210,7 +215,7 @@ fn start_worktree(
         return Ok((meta(Some(decoded)), Source::Cached(chunk)));
     }
     let (dir, path) = (repo.workdir().to_owned(), rel.clone());
-    let blame = Spawning::new(move || Blame::spawn_contents(&dir, &path, bytes));
+    let blame = Spawning::new(move || Blame::spawn_with(&dir, &path, None, Some(bytes), &options));
     Ok((meta(Some(decoded)), Source::Git(blame, key)))
 }
 
@@ -295,11 +300,24 @@ impl Sessions {
         repos: &RepoCache,
         file: impl Into<FilePath>,
         rev: Option<&str>,
+        on_event: impl FnMut(SessionEvent) -> bool,
+    ) {
+        self.run_with(id, repos, file, rev, BlameOptions::default(), on_event);
+    }
+
+    /// [`Sessions::run`]에 blame 선택(`-w`, `-M`, `-C`)을 더한 것
+    pub fn run_with(
+        &self,
+        id: u64,
+        repos: &RepoCache,
+        file: impl Into<FilePath>,
+        rev: Option<&str>,
+        options: BlameOptions,
         mut on_event: impl FnMut(SessionEvent) -> bool,
     ) {
         let file = file.into();
         let end = requests::catch(
-            || self.drive(id, repos, &file, rev, &mut on_event),
+            || self.drive(id, repos, &file, rev, options, &mut on_event),
             |message| SessionEvent::Error { message },
         );
         self.requests.finish(id);
@@ -312,13 +330,14 @@ impl Sessions {
         repos: &RepoCache,
         file: &FilePath,
         rev: Option<&str>,
+        options: BlameOptions,
         on_event: &mut impl FnMut(SessionEvent) -> bool,
     ) -> SessionEvent {
         let started = Instant::now();
         if self.requests.is_cancelled(id) {
             return SessionEvent::Cancelled;
         }
-        let (meta, source) = match start(repos, self.cache(), file, rev) {
+        let (meta, source) = match start(repos, self.cache(), file, rev, options) {
             Ok(started) => started,
             Err(message) => return SessionEvent::Error { message },
         };

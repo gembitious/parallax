@@ -22,6 +22,55 @@ use serde::{Deserialize, Serialize};
 
 use crate::git::{self, StreamError};
 
+/// 줄을 어느 커밋에 돌리는지 바꾸는 blame 선택(M11). 기본값은 git 기본과 같다(아무것도 주지 않는다).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BlameOptions {
+    /// 공백만 바꾼 변경은 지나간다(`-w`): 포매터·들여쓰기 커밋 너머의 작성자
+    pub ignore_whitespace: bool,
+    /// 옮긴 줄을 따라간다
+    pub moves: Moves,
+}
+
+/// 옮기거나 복사한 줄을 어디까지 따라가는가
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Moves {
+    /// 따라가지 않는다(git 기본)
+    #[default]
+    Off,
+    /// 같은 파일 안에서 옮긴 줄(`-M`)
+    File,
+    /// 같은 파일 안과, 같은 커밋에서 바뀐 다른 파일에서 옮기거나 복사한 줄(`-M -C`)
+    Files,
+}
+
+impl BlameOptions {
+    /// git blame에 줄 인자
+    pub fn args(&self) -> Vec<&'static str> {
+        let mut args = Vec::new();
+        if self.ignore_whitespace {
+            args.push("-w");
+        }
+        match self.moves {
+            Moves::Off => {}
+            Moves::File => args.push("-M"),
+            Moves::Files => args.extend(["-M", "-C"]),
+        }
+        args
+    }
+
+    /// 캐시 열쇠에 붙일 지문. 기본값은 빈 글이라 선택을 더하기 전의 캐시가 그대로 맞는다.
+    pub fn fingerprint(&self) -> String {
+        let args = self.args();
+        if args.is_empty() {
+            String::new()
+        } else {
+            format!("\noptions {}", args.join(" "))
+        }
+    }
+}
+
 /// 블록이 가리키는 커밋. 같은 커밋은 처음 한 번만 나온다.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -315,23 +364,32 @@ enum Read {
 impl Blame {
     /// `repo_dir`에서 `path`(저장소 기준, `/` 구분)를 blame한다. `rev`가 없으면 작업트리 파일이다.
     pub fn spawn(repo_dir: &Path, path: &str, rev: Option<&str>) -> io::Result<Blame> {
-        Self::spawn_inner(repo_dir, path, rev, None)
+        Self::spawn_with(repo_dir, path, rev, None, &BlameOptions::default())
     }
 
     /// 작업트리 blame을 `contents`(작업트리에서 읽은 내용)로 한다(`--contents -`). 화면에 보이는 내용과 같은 것을
     /// blame하므로 읽은 뒤 파일이 바뀌어도 줄이 어긋나지 않는다. git은 작업트리 파일처럼 clean 변환(줄 끝 등)을 한다.
     pub fn spawn_contents(repo_dir: &Path, path: &str, contents: Vec<u8>) -> io::Result<Blame> {
-        Self::spawn_inner(repo_dir, path, None, Some(contents))
+        Self::spawn_with(
+            repo_dir,
+            path,
+            None,
+            Some(contents),
+            &BlameOptions::default(),
+        )
     }
 
-    fn spawn_inner(
+    /// [`Blame::spawn`]·[`Blame::spawn_contents`]에 선택(`-w`, `-M`, `-C`)을 더한 것
+    pub fn spawn_with(
         repo_dir: &Path,
         path: &str,
         rev: Option<&str>,
         contents: Option<Vec<u8>>,
+        options: &BlameOptions,
     ) -> io::Result<Blame> {
         let mut command = git::command(repo_dir);
         command.args(["blame", "--incremental"]);
+        command.args(options.args());
         if let Some(rev) = rev {
             command.arg(rev);
         }

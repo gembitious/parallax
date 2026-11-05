@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use common::{commit_all, encoding, git, git_text, history, scratch_repo, ten_lines};
-use plx_core::blame::{Blame, BlameCommit, is_uncommitted};
+use plx_core::blame::{Blame, BlameCommit, BlameOptions, Moves, is_uncommitted};
 use plx_core::linemap::LineMap;
 use plx_core::repo::Repo;
 
@@ -25,9 +25,13 @@ struct Line {
 }
 
 fn ours(repo: &Path, path: &str, rev: Option<&str>) -> Vec<Line> {
+    ours_with(repo, path, rev, &BlameOptions::default())
+}
+
+fn ours_with(repo: &Path, path: &str, rev: Option<&str>, options: &BlameOptions) -> Vec<Line> {
     let mut commits: HashMap<String, BlameCommit> = HashMap::new();
     let mut blocks = Vec::new();
-    let blame = Blame::spawn(repo, path, rev).expect("git blame 실행");
+    let blame = Blame::spawn_with(repo, path, rev, None, options).expect("git blame 실행");
     blame
         .stream(|chunk| {
             for commit in chunk.commits {
@@ -75,7 +79,12 @@ fn ours(repo: &Path, path: &str, rev: Option<&str>) -> Vec<Line> {
 
 /// `git blame --line-porcelain`: 줄마다 헤더를 모두 반복하는 형식.
 fn reference(repo: &Path, path: &str, rev: Option<&str>) -> Vec<Line> {
+    reference_with(repo, path, rev, &[])
+}
+
+fn reference_with(repo: &Path, path: &str, rev: Option<&str>, extra: &[&str]) -> Vec<Line> {
     let mut args = vec!["blame", "--line-porcelain"];
+    args.extend(extra);
     args.extend(rev);
     args.extend(["--", path]);
     let out = git(repo, &args);
@@ -133,6 +142,147 @@ fn compare(repo: &Path, path: &str, rev: Option<&str>) -> Vec<Line> {
         assert_eq!(a, b, "{path} {rev:?}: {}번째 줄", i + 1);
     }
     ours
+}
+
+/// 공백만 바꾼 커밋(-w), 파일 안에서 옮긴 줄(-M), 같은 커밋에서 다른 파일로 옮긴 줄(-C)
+#[test]
+fn blame_options_match_git() {
+    let dir = scratch_repo("blame-options");
+    let block = |name: &str| {
+        format!(
+            "fn {name}() {{\n    let total_amount_for_{name} = compute_the_value_of({name}_input, 42);\n    \
+             println!(\"{name} result is {{}}\", total_amount_for_{name});\n}}\n"
+        )
+    };
+    let (alpha, beta, gamma) = (block("alpha"), block("beta"), block("gamma"));
+    std::fs::write(dir.join("a.rs"), format!("{alpha}{beta}{gamma}")).unwrap();
+    commit_all(&dir, "처음 쓴 셋");
+    // 들여쓰기만 바꾼다(포매터)
+    let reindent = |text: &str| text.replace("    ", "\t");
+    std::fs::write(dir.join("a.rs"), reindent(&format!("{alpha}{beta}{gamma}"))).unwrap();
+    git(
+        &dir,
+        &["-c", "user.name=포매터", "commit", "-qam", "들여쓰기"],
+    );
+    // 파일 안에서 순서를 바꾸고(gamma를 맨 앞으로), beta는 b.rs로 옮긴다
+    std::fs::write(dir.join("a.rs"), reindent(&format!("{gamma}{alpha}"))).unwrap();
+    std::fs::write(
+        dir.join("b.rs"),
+        reindent(&format!("// 옮겨 온 것\n{beta}")),
+    )
+    .unwrap();
+    git(&dir, &["add", "-A"]);
+    git(
+        &dir,
+        &["-c", "user.name=옮긴 사람", "commit", "-qm", "옮기기"],
+    );
+
+    let cases = [
+        BlameOptions::default(),
+        BlameOptions {
+            ignore_whitespace: true,
+            moves: Moves::Off,
+        },
+        BlameOptions {
+            ignore_whitespace: false,
+            moves: Moves::File,
+        },
+        BlameOptions {
+            ignore_whitespace: true,
+            moves: Moves::File,
+        },
+        BlameOptions {
+            ignore_whitespace: true,
+            moves: Moves::Files,
+        },
+    ];
+    let mut authors = Vec::new();
+    for options in cases {
+        for path in ["a.rs", "b.rs"] {
+            for rev in [None, Some("HEAD")] {
+                let ours = ours_with(&dir, path, rev, &options);
+                assert_eq!(
+                    ours,
+                    reference_with(&dir, path, rev, &options.args()),
+                    "{path} {rev:?} {options:?}"
+                );
+                if rev.is_none() {
+                    authors.push((
+                        options,
+                        path,
+                        ours.iter().map(|l| l.author.clone()).collect::<Vec<_>>(),
+                    ));
+                }
+            }
+        }
+    }
+    // 선택이 실제로 결과를 바꾼다: -w는 포매터를, -M은 a.rs 안의 이동을, -C는 b.rs로의 이동을 지나 처음 쓴 사람에게 간다.
+    let of = |options: BlameOptions, path: &str| {
+        authors
+            .iter()
+            .find(|(o, p, _)| *o == options && *p == path)
+            .unwrap()
+            .2
+            .clone()
+    };
+    let all_t = |names: &[String]| names.iter().all(|n| n == "T");
+    assert!(!all_t(&of(BlameOptions::default(), "a.rs")));
+    assert!(all_t(&of(
+        BlameOptions {
+            ignore_whitespace: true,
+            moves: Moves::File
+        },
+        "a.rs"
+    )));
+    assert!(!all_t(
+        &of(
+            BlameOptions {
+                ignore_whitespace: true,
+                moves: Moves::File
+            },
+            "b.rs"
+        )[1..]
+    ));
+    assert!(all_t(
+        &of(
+            BlameOptions {
+                ignore_whitespace: true,
+                moves: Moves::Files
+            },
+            "b.rs"
+        )[1..]
+    ));
+}
+
+#[test]
+fn options_args_and_fingerprint() {
+    assert!(BlameOptions::default().args().is_empty());
+    assert_eq!(BlameOptions::default().fingerprint(), "");
+    let all = BlameOptions {
+        ignore_whitespace: true,
+        moves: Moves::Files,
+    };
+    assert_eq!(all.args(), ["-w", "-M", "-C"]);
+    assert_ne!(
+        all.fingerprint(),
+        BlameOptions {
+            ignore_whitespace: true,
+            moves: Moves::File
+        }
+        .fingerprint()
+    );
+    // 화면이 보내는 모양
+    let parsed: BlameOptions =
+        serde_json::from_str(r#"{"ignoreWhitespace":true,"moves":"files"}"#).unwrap();
+    assert_eq!(parsed, all);
+    let partial: BlameOptions = serde_json::from_str(r#"{"moves":"file"}"#).unwrap();
+    assert_eq!(
+        partial,
+        BlameOptions {
+            ignore_whitespace: false,
+            moves: Moves::File
+        }
+    );
 }
 
 #[test]
@@ -1073,4 +1223,38 @@ fn repo_relative_paths_stay_inside() {
             "{bad}: {events:?}"
         );
     }
+}
+
+/// blame 선택(-w, -M, -C)마다 캐시 열쇠가 다르다: 선택을 바꾸면 다른 결과를 읽고, 같은 선택은 캐시에서 읽는다.
+#[test]
+fn blame_options_change_the_cache_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions = cache_in(dir.path());
+    let repos = RepoCache::new();
+    let file = history().join("src/lib.rs");
+    let run = |options: BlameOptions| {
+        let id = sessions.register();
+        let mut cached = None;
+        sessions.run_with(id, &repos, file.clone(), Some("HEAD"), options, |event| {
+            if let SessionEvent::Done { stats, .. } = event {
+                cached = Some(stats.cached);
+            }
+            true
+        });
+        cached.expect("done")
+    };
+    let w = BlameOptions {
+        ignore_whitespace: true,
+        moves: Moves::Off,
+    };
+    let wm = BlameOptions {
+        ignore_whitespace: true,
+        moves: Moves::File,
+    };
+    assert!(!run(BlameOptions::default()));
+    assert!(!run(w), "-w는 기본과 다른 열쇠");
+    assert!(!run(wm), "-w -M은 -w와 다른 열쇠");
+    assert!(run(w));
+    assert!(run(wm));
+    assert!(run(BlameOptions::default()));
 }

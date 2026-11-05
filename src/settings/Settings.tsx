@@ -1,4 +1,4 @@
-// 설정 화면(M9): 모양(테마·코드 글자 크기), blame 거터, diff 보기, 에디터로 열기의 에디터, 새 버전 알림.
+// 설정 화면(M9): 모양(테마·코드 글자 크기), blame 거터·옵션(M11), diff 보기, 에디터로 열기의 에디터, 새 버전 알림.
 // 명령 팔레트·메뉴·첫 화면·Mod+,로 열고(App이 그린다) 고르는 즉시 반영해 이 컴퓨터에 남긴다.
 // 열려 있는 동안 화면 키를 막는다(라이선스 창과 같다): 화면들은 window에서 키를 받는다.
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
@@ -197,6 +197,41 @@ export function Settings({ onClose }: { onClose(): void }) {
               />
               거터에 줄마다 커밋 보이기 <span className="muted">(끄면 커서 줄 끝에 한 줄 · b)</span>
             </label>
+          </div>
+          <div className="settings-row">
+            <span className="settings-label">공백</span>
+            <label className="settings-choices">
+              <input
+                type="checkbox"
+                checked={settings.blameIgnoreWhitespace}
+                onChange={(e) => updateSettings({ blameIgnoreWhitespace: e.target.checked })}
+              />
+              공백만 바꾼 변경은 앞 커밋으로 <span className="muted">(-w, 들여쓰기·포매터)</span>
+            </label>
+          </div>
+          <div className="settings-row">
+            <span className="settings-label">옮긴 줄</span>
+            <div className="settings-choices" role="radiogroup" aria-label="옮긴 줄">
+              {(
+                [
+                  ["off", "따라가지 않음"],
+                  ["file", "파일 안 (-M)"],
+                  ["files", "다른 파일까지 (-M -C)"],
+                ] as const
+              ).map(([value, label]) => (
+                <label key={value}>
+                  <input
+                    type="radio"
+                    name="blame-moves"
+                    value={value}
+                    checked={settings.blameMoves === value}
+                    onChange={() => updateSettings({ blameMoves: value })}
+                  />
+                  {label}
+                </label>
+              ))}
+              <span className="muted">옮기거나 복사한 줄은 처음 쓴 커밋으로 · 열린 blame도 다시 읽는다</span>
+            </div>
           </div>
           <div className="settings-row">
             <span className="settings-label">diff 보기</span>

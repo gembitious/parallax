@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use plx_core::ai_notes::{AiAttribution, AiItem, AiNotes};
+use plx_core::blame::BlameOptions;
 use plx_core::blame_session::{SessionEvent, Sessions};
 use plx_core::cache::DiskCache;
 use plx_core::changes::{self, Comparison, RefName, Side};
@@ -126,15 +127,17 @@ pub async fn blame_open(
     repo: Option<String>,
     path: String,
     rev: Option<String>,
+    options: Option<BlameOptions>,
     on_event: Channel<SessionEvent>,
 ) -> Result<u64, String> {
     let git = git.inner().clone();
     let id = git.blames.register();
+    let options = options.unwrap_or_default();
     // `repo`가 있으면 `path`는 그 저장소 기준 경로(git이 준 경로라 그대로 쓴다), 없으면 터미널에서 준 절대 경로다.
     let file = FilePath::from_request(repo.as_deref(), &path);
     tauri::async_runtime::spawn_blocking(move || {
         git.blames
-            .run(id, &git.repos, file, rev.as_deref(), |event| {
+            .run_with(id, &git.repos, file, rev.as_deref(), options, |event| {
                 on_event.send(event).is_ok()
             });
     });
