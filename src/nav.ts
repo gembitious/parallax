@@ -21,8 +21,11 @@ export type Navigation = (
   | { kind: "file"; target: BlameTarget; line: number | null; pinned?: boolean; side?: boolean }
   /** blame → 파일 히스토리(`H`), `lines`가 있으면 라인 히스토리(`L`) */
   | { kind: "history"; target: HistoryTarget; lines?: LineRange }
-  /** 어느 화면에서든 → 커밋 그래프(`G`). `rev`가 있으면 그 커밋을 골라 둔다. */
-  | { kind: "graph"; repo: string; rev: string | null }
+  /**
+   * 어느 화면에서든 → 커밋 그래프(`G`). `rev`가 있으면 그 커밋을 골라 둔다. `search`는 다 읽은 뒤 찾을 검색 입력
+   * (blame에서 고른 글의 `code:…`, M12)
+   */
+  | { kind: "graph"; repo: string; rev: string | null; search?: string }
   /** 저장소 검색(`Mod+Shift+F`, M7-3). `rev`가 있으면 그 리비전의 파일, 없으면 작업트리. `query`는 처음 찾을 글 */
   | { kind: "search"; repo: string; rev: string | null; query?: string }
   /** reflog·stash 목록(M10): HEAD의 reflog(이 워크트리) 또는 stash */
@@ -137,6 +140,8 @@ export type GraphEntry = {
   repo: string;
   /** 처음 고를 커밋 */
   focus: string | null;
+  /** 다 읽은 뒤 찾을 검색 입력(남기지 않는다) */
+  search?: string;
   via: "request" | "graph";
   request?: number;
 };

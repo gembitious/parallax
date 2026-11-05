@@ -12,7 +12,7 @@ use plx_core::cli::Request;
 use plx_core::commit::{self, CommitDetail, FileStat, FileVersions, StatRequest};
 use plx_core::commit_graph::{self, GraphStatus, Progress};
 use plx_core::files::{DirListing, FileLists, FileSearch};
-use plx_core::graph::{GraphEvent, GraphOptions, GraphSessions, GraphWindow};
+use plx_core::graph::{GraphEvent, GraphOptions, GraphSessions, GraphWindow, LogFilter};
 use plx_core::grep::{GrepEvent, GrepQuery, GrepSessions};
 use plx_core::history::{HistoryEvent, HistorySessions, LineRange};
 use plx_core::navigate::{self, Direction, Version};
@@ -303,17 +303,31 @@ pub async fn graph_search(
         .map_err(|e| e.to_string())?
 }
 
-/// 경로(파일·디렉터리, git pathspec)를 바꾼 커밋의 행들(오름차순).
+/// 코드(`git log -S`·`-G`)·경로에 맞는 커밋의 행들(오름차순). 찾는 동안 찾은 행을 `on_rows`로 묶어(50ms) 보낸다
+/// (그래프 순서가 아니다). 코드 찾기는 커밋마다 diff를 해 오래 걸릴 수 있다.
 #[tauri::command]
-pub async fn graph_search_path(
+pub async fn graph_search_log(
     git: State<'_, Arc<GitState>>,
     id: u64,
-    path: String,
+    filter: LogFilter,
+    on_rows: Channel<Vec<usize>>,
 ) -> Result<Vec<usize>, String> {
     let git = git.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || git.graphs.search_path(id, &path))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut batch: Vec<usize> = Vec::new();
+        let mut sent: Option<std::time::Instant> = None;
+        // 첫 묶음은 바로 보내고, 남은 묶음은 결과가 함께 가져간다(결과는 모든 행이다).
+        git.graphs.search_log(id, &filter, |rows| {
+            batch.extend_from_slice(rows);
+            if sent.is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(50)) {
+                return true;
+            }
+            sent = Some(std::time::Instant::now());
+            on_rows.send(std::mem::take(&mut batch)).is_ok()
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[derive(Serialize)]

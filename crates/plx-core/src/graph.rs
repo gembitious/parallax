@@ -702,6 +702,57 @@ type Loaded = (
 /// 검색을 새 검색이 멈췄을 때의 오류(화면은 무시한다)
 pub const CANCELLED: &str = "취소했다";
 
+/// 그래프 행 거르기([`GraphSessions::search_log`]): 경로를 바꾼 커밋, 코드가 생기거나 사라진 커밋, 또는 둘 다
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogFilter {
+    /// 이 경로(파일·디렉터리, git pathspec)를 바꾼 커밋
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub pickaxe: Option<Pickaxe>,
+}
+
+/// 코드 찾기(git의 pickaxe)
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Pickaxe {
+    pub text: String,
+    /// `false`: 글이 든 횟수가 바뀐 커밋(`-S`, 그 글을 넣거나 지운 커밋. 옮기기만 한 커밋은 아니다).
+    /// `true`: 바뀐 줄(더하거나 지운 줄)이 정규식(POSIX 확장)에 맞는 커밋(`-G`)
+    #[serde(default)]
+    pub regex: bool,
+}
+
+impl LogFilter {
+    fn check(&self) -> Result<(), String> {
+        if self.path.as_deref().is_some_and(|p| p.trim().is_empty()) {
+            return Err("빈 경로다".to_owned());
+        }
+        match &self.pickaxe {
+            Some(p) if p.text.is_empty() => Err("찾을 코드가 비었다".to_owned()),
+            Some(p) if p.text.contains('\0') || p.text.contains('\n') => {
+                Err("찾을 코드는 한 줄이어야 한다".to_owned())
+            }
+            None if self.path.is_none() => Err("찾을 것이 없다".to_owned()),
+            _ => Ok(()),
+        }
+    }
+
+    /// `git log`에 줄 인자(경로 뺀 것)
+    pub fn args(&self) -> Vec<String> {
+        match &self.pickaxe {
+            Some(Pickaxe { text, regex: false }) => vec![format!("-S{text}")],
+            Some(Pickaxe { text, regex: true }) => vec![format!("-G{text}")],
+            None => Vec::new(),
+        }
+    }
+
+    fn add_args(&self, command: &mut std::process::Command) {
+        command.args(self.args());
+    }
+}
+
 /// 커밋 메시지(모든 줄, 커밋 인코딩대로)·작성자 이름·메일에 `query`(소문자)가 들어 있는가.
 fn commit_matches(repo: &gix::Repository, id: ObjectId, query: &str, buf: &mut Vec<u8>) -> bool {
     let Ok(Some(data)) = repo.objects.try_find(&id, buf) else {
@@ -1432,28 +1483,46 @@ impl GraphSessions {
         Ok(None)
     }
 
-    /// `path`(파일·디렉터리, git pathspec)를 바꾼 커밋의 행들(오름차순). 그래프와 같은 시작점으로
-    /// `git log --full-history --no-merges -- <path>`를 돌린다(Bloom 필터가 있으면 빠르다). merge는 넣지 않는다:
-    /// 양쪽 가지가 바꾼 경로면 merge마다 걸려 정작 바꾼 커밋이 묻힌다. 새 검색을 시작하면 git을 끝내고 취소한다.
+    /// `path`(파일·디렉터리, git pathspec)를 바꾼 커밋의 행들(오름차순). [`GraphSessions::search_log`]의 경로만 쓴 것.
     pub fn search_path(&self, id: u64, path: &str) -> Result<Vec<usize>, String> {
+        let filter = LogFilter {
+            path: Some(path.to_owned()),
+            pickaxe: None,
+        };
+        self.search_log(id, &filter, |_| true)
+    }
+
+    /// `filter`에 맞는 커밋의 행들(오름차순). 그래프와 같은 시작점으로 `git log --full-history --no-merges`에
+    /// 코드(`-S`·`-G`)와 경로(`-- <path>`, Bloom 필터가 있으면 빠르다)를 준다. merge는 넣지 않는다: 양쪽 가지가 바꾼
+    /// 경로면 merge마다 걸려 정작 바꾼 커밋이 묻힌다(코드 찾기는 git도 merge의 diff를 보지 않는다).
+    /// git이 내는 대로 찾은 행을 `on_rows`에 넘긴다(묶음마다, 그래프 순서가 아니다. `false`면 멈춘다): 코드 찾기는
+    /// 커밋마다 diff를 해 큰 저장소에서 수십 초가 걸리므로 먼저 찾은 것부터 보인다. 새 검색을 시작하면 git을 끝내고 취소한다.
+    pub fn search_log(
+        &self,
+        id: u64,
+        filter: &LogFilter,
+        mut on_rows: impl FnMut(&[usize]) -> bool,
+    ) -> Result<Vec<usize>, String> {
         let session = self.session(id)?;
         let generation = session.start_search();
         let built = session.built()?;
+        filter.check()?;
         if built.order.is_empty() || session.revs.is_empty() {
             return Ok(Vec::new());
         }
         let mut command = git::command(session.repo.workdir());
-        command
-            .args([
-                "log",
-                "--format=%H",
-                "--full-history",
-                "--no-merges",
-                "--no-color",
-            ])
-            .args(&session.revs)
-            .arg("--")
-            .arg(path);
+        command.args([
+            "log",
+            "--format=%H",
+            "--full-history",
+            "--no-merges",
+            "--no-color",
+        ]);
+        filter.add_args(&mut command);
+        command.args(&session.revs).arg("--");
+        if let Some(path) = &filter.path {
+            command.arg(path);
+        }
         let mut git = Streaming::spawn(command, "git log").map_err(|e| e.to_string())?;
         {
             let mut current = session.search_git.lock().unwrap();
@@ -1467,6 +1536,7 @@ impl GraphSessions {
         let mut rows = Vec::new();
         let mut pending: Vec<u8> = Vec::new();
         let mut buf = vec![0u8; 64 * 1024];
+        let mut stopped = false;
         loop {
             let n = git.read(&mut buf).map_err(|e| e.to_string())?;
             if n == 0 {
@@ -1477,6 +1547,7 @@ impl GraphSessions {
                 .iter()
                 .rposition(|&b| b == b'\n')
                 .map_or(0, |i| i + 1);
+            let before = rows.len();
             for line in pending[..complete].split(|&b| b == b'\n') {
                 if let Ok(id) = ObjectId::from_hex(line.trim_ascii())
                     && let Some(row) = built.row_of_id(id)
@@ -1485,13 +1556,29 @@ impl GraphSessions {
                 }
             }
             pending.drain(..complete);
+            if rows.len() > before && !on_rows(&rows[before..]) {
+                stopped = true;
+                git.abort();
+                break;
+            }
         }
-        git.finish().map_err(|e| e.to_string())?;
+        if !stopped {
+            git.finish().map_err(|e| {
+                if session.search_stale(generation) {
+                    CANCELLED.to_owned()
+                } else {
+                    e.to_string()
+                }
+            })?;
+        }
         let mut current = session.search_git.lock().unwrap();
         if current.as_ref().is_some_and(|(g, _)| *g == generation) {
             current.take();
         }
         drop(current);
+        if stopped {
+            return Err(CANCELLED.to_owned());
+        }
         rows.sort_unstable();
         rows.dedup();
         Ok(rows)

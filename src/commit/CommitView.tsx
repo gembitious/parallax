@@ -39,6 +39,7 @@ import {
   withStats,
 } from "./detail";
 import { createDiffView, type DiffMode, type DiffPoint, type DiffView } from "./diff";
+import { codeQuery } from "../graph/search";
 import { readDiffMode, writeDiffMode } from "./diffMode";
 import {
   STATUS_LETTER,
@@ -629,6 +630,7 @@ export function CommitView({
     const target = { repo, path: before ? (f.oldPath ?? f.path) : f.path, rev };
     const lossy = f.pathLossy;
     const from = before ? "바꾸기 전 리비전부터" : rev === null ? "HEAD부터" : "이 리비전부터";
+    const code = codeQuery(at.text.trim() ? at.text : at.lineText);
     const version = before ? `바꾸기 전 ${shortSha(rev ?? "")}` : rev === null ? "작업트리" : d.info ? `이 커밋 ${shortSha(rev)}` : `바뀐 뒤 ${shortSha(rev)}`;
     return [
       { header: `${version} · ${at.line}번째 줄` },
@@ -645,6 +647,12 @@ export function CommitView({
         run: () => onNavigate({ kind: "history", target, lines: at.lines }),
       },
       { label: "파일 히스토리", detail: from, disabled: lossy, run: () => onNavigate({ kind: "history", target }) },
+      {
+        label: "이 코드를 넣거나 지운 커밋",
+        detail: `${at.text.trim() ? "고른 글" : "이 줄"} · 그래프에서 찾기`,
+        disabled: code === null,
+        run: () => code && onNavigate({ kind: "graph", repo, rev: null, search: code }),
+      },
       "separator",
       copyItem(at.text),
       { label: "커밋 sha 복사", keys: "y", run: copySha },
