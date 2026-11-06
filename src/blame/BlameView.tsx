@@ -30,6 +30,7 @@ import { blameSwitch } from "../worktree/switch";
 import { openBlame, type BlameTarget } from "./session";
 import type { BlameBlock, BlameMeta, BlameStats, CommitInfo, Neighbor, Version } from "./types";
 import { useMounted } from "../mounted";
+import { codeQuery } from "../graph/search";
 import {
   blameOptions,
   blameOptionsLabel,
@@ -108,6 +109,7 @@ type Actions = {
   history(): boolean;
   lineHistory(): boolean;
   graph(): boolean;
+  codeHistory(): boolean;
   worktrees(): boolean;
   files(): boolean;
   card(): boolean;
@@ -215,6 +217,12 @@ export function BlameView({
     { id: "history", label: "파일 히스토리", keys: "H", run: run("history") },
     { id: "lineHistory", label: "라인 히스토리 (선택한 줄)", keys: "L", run: run("lineHistory") },
     { id: "graph", label: "커밋 그래프 (이 줄의 커밋)", keys: "G", run: run("graph") },
+    {
+      label: "이 코드를 넣거나 지운 커밋 (그래프에서 찾기)",
+      keys: "S",
+      detail: "고른 글, 없으면 이 줄 · git log -S",
+      run: run("codeHistory"),
+    },
     ...(meta?.rev
       ? [
           {
@@ -521,6 +529,20 @@ export function BlameView({
       onNavigate({ kind: "graph", repo: m.repo, rev });
       return true;
     },
+    codeHistory() {
+      const m = latest.current.meta;
+      const view = editor.current?.view;
+      if (!m || !view) {
+        notOpened();
+        return true;
+      }
+      // 고른 글(여러 줄이면 첫 줄), 없으면 커서 줄. 다른 파일에서 옮겨 온 코드도 찾게 경로는 두지 않는다.
+      const { from, to, head } = view.state.selection.main;
+      const query = codeQuery(from < to ? view.state.sliceDoc(from, to) : view.state.doc.lineAt(head).text);
+      if (!query) showToast("찾을 코드가 없다(빈 줄)");
+      else onNavigate({ kind: "graph", repo: m.repo, rev: null, search: query });
+      return true;
+    },
     worktrees() {
       setWorktrees(true);
       return true;
@@ -702,6 +724,7 @@ export function BlameView({
                 history: () => actions.current.history(),
                 lineHistory: () => actions.current.lineHistory(),
                 graph: () => actions.current.graph(),
+                codeHistory: () => actions.current.codeHistory(),
                 worktrees: () => actions.current.worktrees(),
                 files: () => actions.current.files(),
                 card: () => actions.current.card(),
@@ -865,6 +888,12 @@ export function BlameView({
         { label: "이 줄 커밋의 상세", keys: "Enter", disabled: !committed, run: act("enter") },
         { label: "부모 리비전 blame", keys: ",", detail: "이 줄을 바꾸기 전", disabled: !block?.previous, run: act("parent") },
         { label: "라인 히스토리", keys: "L", detail: from < to ? "고른 줄" : "이 줄", run: act("lineHistory") },
+        {
+          label: "이 코드를 넣거나 지운 커밋",
+          keys: "S",
+          detail: from < to ? "고른 글" : "이 줄",
+          run: act("codeHistory"),
+        },
         { label: "커밋 카드", keys: "i", disabled: block === undefined, run: act("card") },
         "separator",
         ...fileItems,

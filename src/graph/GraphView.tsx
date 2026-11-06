@@ -14,7 +14,7 @@ import { subscribeDark } from "../settings/store";
 import { drawRows, graphWidth, readPalette, ROW_HEIGHT, type Palette, type Visible } from "./draw";
 import { reloadFocus, type Focus } from "./focus";
 import { CHUNK, RowCache, rowWidth } from "./rows";
-import { nextRow, parseQuery, rowMatches, type Query } from "./search";
+import { filterLabel, nextRow, parseQuery, rowMatches, sameFilter, type LogFilter, type Query } from "./search";
 import { CANCELLED, openGraph, type GraphHandle } from "./session";
 import { watchRepo } from "../watch";
 import { WorktreePicker } from "../worktree/WorktreePicker";
@@ -34,6 +34,8 @@ type Props = {
   repo: string;
   /** 처음 고를 커밋(리비전). 없으면 첫 행. */
   focus?: string | null;
+  /** 그래프를 다 읽으면 찾을 검색 입력(`code:…`, blame에서 고른 글) */
+  search?: string;
   /** 보이는 화면인가(열린 패널이나 그룹에 보이는 탭의 스택 맨 위) */
   visible: boolean;
   /** 키를 받는 화면인가(보이고, 그 칸에 포커스가 있다) */
@@ -133,12 +135,23 @@ const CANVAS_SETTINGS: CanvasRenderingContext2DSettings | undefined = /\bChrome\
   ? undefined
   : { willReadFrequently: true };
 
-/** 마지막으로 한 검색(n/N이 되풀이한다). 경로 검색은 일치 행들을 한 번 구해 둔다. */
-type Found = { kind: "text"; text: string } | { kind: "path"; path: string; rows: number[]; set: ReadonlySet<number> };
+/**
+ * 마지막으로 한 검색(n/N이 되풀이한다). 경로·코드 검색은 일치 행들을 한 번 구해 둔다(찾는 동안은 찾은 데까지,
+ * `done`이면 모두).
+ */
+type Found =
+  | { kind: "text"; text: string }
+  | { kind: "log"; filter: LogFilter; rows: number[]; set: ReadonlySet<number>; done: boolean };
+
+/** 오름차순 `rows`에 `batch`를 더한 것 */
+function addRows(rows: readonly number[], batch: readonly number[]): number[] {
+  return [...new Set([...rows, ...batch])].sort((a, b) => a - b);
+}
 
 function GraphPane({
   repo,
   focus = null,
+  search: initialSearch,
   scope,
   onScope,
   visible,
@@ -178,7 +191,9 @@ function GraphPane({
   const [help, setHelp] = useState(false);
   const [worktrees, setWorktrees] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  const [search, setSearch] = useState({ open: false, input: "" });
+  const [search, setSearch] = useState({ open: initialSearch !== undefined, input: initialSearch ?? "" });
+  /** 처음 찾을 검색(그래프를 다 읽으면 한 번) */
+  const pendingSearch = useRef(initialSearch);
   const [found, setFound] = useState<Found | null>(null);
   const [searching, setSearching] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -244,7 +259,15 @@ function GraphPane({
         run: () => changeScope(s.scope),
       }),
     ),
-    { label: "검색 (메시지·작성자·sha, path:경로)", keys: "/", run: () => openSearch() },
+    { label: "검색 (메시지·작성자·sha, path:경로, code:코드)", keys: "/", run: () => openSearch() },
+    {
+      label: "코드를 넣거나 지운 커밋 찾기…",
+      detail: "검색 칸에 code: (git log -S) · regex:는 -G",
+      run: () => {
+        setSearch({ open: true, input: "code:" });
+        searchRef.current?.focus();
+      },
+    },
     { label: "다음 검색 결과", keys: "n", run: () => runSearch(true) },
     { label: "이전 검색 결과", keys: "N", run: () => runSearch(false) },
     { label: "맨 위(최근) 커밋으로", keys: "Home", run: () => select(0) },
@@ -690,17 +713,18 @@ function GraphPane({
   const openEditor = () => openInEditor({ repo: meta?.repo ?? repo, path: null, rev: null, line: null }).then(showToast);
 
   /**
-   * 세션을 바꿔 끼웠다: 하던 검색은 버리고(앞 세션의 행 번호다), 경로 일치는 새 세션에서 다시 구한다(위에 커밋이
+   * 세션을 바꿔 끼웠다: 하던 검색은 버리고(앞 세션의 행 번호다), 경로·코드 일치는 새 세션에서 다시 구한다(위에 커밋이
    * 생기면 행 번호가 밀린다). 메시지 검색은 행마다 다시 맞춰 보므로 그대로 둔다.
    */
   const refreshSearch = (graph: GraphHandle) => {
     const seq = ++searchSeq.current;
     setSearching(false);
     const last = latest.current.found;
-    if (last?.kind !== "path") return;
-    graph.searchPath(last.path).then(
+    if (last?.kind !== "log") return;
+    const filter = last.filter;
+    graph.searchLog(filter).then(
       (matched) => {
-        if (seq === searchSeq.current) setFound({ kind: "path", path: last.path, rows: matched, set: new Set(matched) });
+        if (seq === searchSeq.current) setFound({ kind: "log", filter, rows: matched, set: new Set(matched), done: true });
       },
       () => {
         if (seq === searchSeq.current) setFound(null);
@@ -710,7 +734,8 @@ function GraphPane({
 
   /**
    * 고른 행 다음(`forward`가 아니면 앞)의 일치로 간다. `input`을 주면 그 입력으로 찾고, 없으면 마지막 검색을 되풀이한다.
-   * 메시지·작성자·sha는 백엔드가 행 순서대로 커밋을 풀어 보고, 경로는 일치 행을 한 번 구해 그 사이를 오간다.
+   * 메시지·작성자·sha는 백엔드가 행 순서대로 커밋을 풀어 보고, 경로·코드는 일치 행을 한 번 구해 그 사이를 오간다.
+   * 코드 찾기는 커밋마다 diff를 해 오래 걸릴 수 있어 찾는 동안 온 행부터 칠하고, 다음 행이 오면 바로 그리로 간다.
    */
   const runSearch = (forward: boolean, input?: string) => {
     const graph = handle.current;
@@ -719,8 +744,8 @@ function GraphPane({
     const query: Query | null =
       input !== undefined
         ? parseQuery(input)
-        : last?.kind === "path"
-          ? { kind: "path", path: last.path }
+        : last?.kind === "log"
+          ? { kind: "log", filter: last.filter }
           : last
             ? { kind: "text", text: last.text }
             : null;
@@ -732,21 +757,39 @@ function GraphPane({
     const finished = () => {
       if (seq === searchSeq.current) setSearching(false);
     };
-    if (query.kind === "path") {
-      if (last?.kind === "path" && last.path === query.path) {
+    if (query.kind === "log") {
+      const filter = query.filter;
+      const none = () => showToast(`${filterLabel(filter)}: ${filter.pickaxe ? "넣거나 지운" : "바꾼"} 커밋이 없다`);
+      if (last?.kind === "log" && last.done && sameFilter(last.filter, filter)) {
         const row = nextRow(last.rows, from, forward);
-        if (row === null) showToast(`이 경로를 바꾼 커밋이 없다: ${query.path}`);
+        if (row === null) none();
         else select(row, true);
         return;
       }
       setSearching(true);
+      let found: number[] = [];
+      let moved = false;
+      setFound({ kind: "log", filter, rows: found, set: new Set(), done: false });
       graph
-        .searchPath(query.path)
+        .searchLog(filter, (batch) => {
+          if (seq !== searchSeq.current) return;
+          found = addRows(found, batch);
+          setFound({ kind: "log", filter, rows: found, set: new Set(found), done: false });
+          // 아래로 찾을 때는 고른 행 아래의 첫 일치가 오면 바로 간다(끝을 기다리지 않는다).
+          if (forward && !moved) {
+            const below = found.find((row) => row > from);
+            if (below !== undefined) {
+              moved = true;
+              select(below, true);
+            }
+          }
+        })
         .then((matched) => {
           if (seq !== searchSeq.current) return;
-          setFound({ kind: "path", path: query.path, rows: matched, set: new Set(matched) });
+          setFound({ kind: "log", filter, rows: matched, set: new Set(matched), done: true });
+          if (moved) return;
           const row = nextRow(matched, latest.current.selected, forward);
-          if (row === null) showToast(`이 경로를 바꾼 커밋이 없다: ${query.path}`);
+          if (row === null) none();
           else select(row, true);
         }, failed)
         .finally(finished);
@@ -763,6 +806,15 @@ function GraphPane({
         .finally(finished);
     }
   };
+
+  // 처음 찾을 검색(blame의 S): 그래프를 다 읽고 행 수를 화면이 안 뒤에 한 번. 작은 저장소는 첫 화면과 끝이 함께 온다.
+  useEffect(() => {
+    const first = pendingSearch.current;
+    if (!first || progress.kind !== "done" || total === null) return;
+    pendingSearch.current = undefined;
+    runSearch(true, first);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [progress.kind, total]);
 
   useEffect(() => {
     if (search.open) searchRef.current?.focus();
@@ -828,7 +880,7 @@ function GraphPane({
           }),
         ),
         "separator",
-        { label: "검색 (메시지·작성자·sha, path:경로)", keys: "/", run: openSearch },
+        { label: "검색 (메시지·작성자·sha, path:경로, code:코드)", keys: "/", run: openSearch },
         { label: "가속 설정 (commit-graph·Bloom 필터)", detail: "그래프·히스토리를 빠르게", run: () => setAccelRequest((n) => n + 1) },
         { label: "에디터로 열기", keys: "o", detail: "작업트리 폴더", run: () => void openEditor() },
       ],
@@ -918,7 +970,12 @@ function GraphPane({
         case "Escape":
           // 도움말을 닫고, 없으면 검색 강조를 지운다.
           if (helpOpen) setHelp(false);
-          else if (latest.current.found) setFound(null);
+          else if (latest.current.found) {
+            // 찾는 중인 코드 검색의 남은 결과도 버린다.
+            searchSeq.current += 1;
+            setSearching(false);
+            setFound(null);
+          }
           else if (latest.current.mark) setMark(null);
           else handled = false;
           break;
@@ -1000,7 +1057,7 @@ function GraphPane({
     const classes = ["graph-row"];
     if (i === selected) classes.push("selected");
     if (mark !== null && row?.sha === mark) classes.push("marked");
-    if (found?.kind === "path" ? found.set.has(i) : matchText !== null && row && rowMatches(row, matchText)) {
+    if (found?.kind === "log" ? found.set.has(i) : matchText !== null && row && rowMatches(row, matchText)) {
       classes.push("match");
     }
     return classes.join(" ");
@@ -1079,7 +1136,7 @@ function GraphPane({
             ref={searchRef}
             type="search"
             value={search.input}
-            placeholder="메시지·작성자·sha, 경로는 path:경로 (Enter 다음, Shift+Enter 이전, Esc 닫기)"
+            placeholder="메시지·작성자·sha · path:경로 · code:넣거나 지운 글 · regex:바뀐 줄 (Enter 다음, Shift+Enter 이전, Esc 닫기)"
             aria-label="그래프 검색"
             onChange={(e) => setSearch({ open: true, input: e.target.value })}
             onKeyDown={(e) => {
@@ -1095,7 +1152,11 @@ function GraphPane({
             }}
           />
           <span className="search-status" role="status">
-            {searching ? "찾는 중…" : found?.kind === "path" ? `경로 일치 ${formatCount(found.rows.length)}개` : null}
+            {found?.kind === "log"
+              ? `${found.filter.pickaxe ? "코드" : "경로"} 일치 ${formatCount(found.rows.length)}개${found.done ? "" : " · 찾는 중…"}`
+              : searching
+                ? "찾는 중…"
+                : null}
           </span>
         </div>
       )}

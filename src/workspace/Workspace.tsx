@@ -983,7 +983,7 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
             onLocated={(repo, path) => dispatch({ type: "located", key: entry.key, repo, path })}
           />
         ) : entry.view === "graph" ? (
-          <GraphView {...common} repo={entry.repo} focus={entry.focus} cold={cold} />
+          <GraphView {...common} repo={entry.repo} focus={entry.focus} search={entry.search} cold={cold} />
         ) : entry.view === "search" ? (
           <SearchView {...common} repo={entry.repo} rev={entry.rev} query={entry.query} />
         ) : entry.view === "reflog" ? (

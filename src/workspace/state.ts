@@ -330,7 +330,15 @@ function panelEntry(
     case "history":
       return { key, view: "history", target: navigation.target, lines: navigation.lines ?? null, via: "history", from };
     case "graph":
-      return { key, view: "graph", repo: navigation.repo, focus: navigation.rev, via: "graph", from };
+      return {
+        key,
+        view: "graph",
+        repo: navigation.repo,
+        focus: navigation.rev,
+        ...(navigation.search ? { search: navigation.search } : {}),
+        via: "graph",
+        from,
+      };
     case "search":
       return { key, view: "search", repo: navigation.repo, rev: navigation.rev, query: navigation.query ?? "", via: "search", from };
     case "reflog":

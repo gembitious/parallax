@@ -20,6 +20,8 @@ export type DiffPoint = {
   lines: { start: number; end: number };
   /** 고른 글(복사) */
   text: string;
+  /** 그 줄의 글(코드 찾기) */
+  lineText: string;
 };
 
 export type DiffView = {
@@ -150,7 +152,8 @@ function lineAt(view: EditorView, side: DiffSide, e: MouseEvent): DiffPoint | nu
   pointCursor(view, e);
   const { state } = view;
   const { from, to } = state.selection.main;
-  return { side, line: state.doc.lineAt(block.from).number, lines: selectedLines(state), text: state.sliceDoc(from, to) };
+  const line = state.doc.lineAt(block.from);
+  return { side, line: line.number, lines: selectedLines(state), text: state.sliceDoc(from, to), lineText: line.text };
 }
 
 /**
@@ -167,8 +170,15 @@ function deletedLineAt(view: EditorView, e: MouseEvent): DiffPoint | null {
       const at = view.posAtDOM(chunkDom);
       const chunk = getChunks(view.state)?.chunks.find((c) => c.fromB <= at && c.endB >= at);
       if (!chunk) return null;
-      const line = getOriginalDoc(view.state).lineAt(chunk.fromA).number + i;
-      return { side: "old", line, lines: { start: line, end: line }, text: window.getSelection()?.toString() ?? "" };
+      const original = getOriginalDoc(view.state);
+      const line = original.lineAt(chunk.fromA).number + i;
+      return {
+        side: "old",
+        line,
+        lines: { start: line, end: line },
+        text: window.getSelection()?.toString() ?? "",
+        lineText: line <= original.lines ? original.line(line).text : "",
+      };
     }
   }
   return null;

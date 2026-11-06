@@ -11,7 +11,7 @@ use common::{commit_at, encoding, git, git_text, history, scratch_repo};
 use plx_core::cache::DiskCache;
 use plx_core::graph::{
     CHECKPOINT, GraphEvent, GraphMeta, GraphOptions, GraphRow, GraphScope, GraphSessions,
-    GraphStats, LabelKind,
+    GraphStats, LabelKind, LogFilter, Pickaxe,
 };
 use plx_core::repo::RepoCache;
 
@@ -610,6 +610,134 @@ fn search_paths_like_git_log() {
             expected.sort_unstable();
             assert_eq!(sessions.search_path(id, path).unwrap(), expected, "{path}");
         }
+        sessions.close(id);
+    }
+}
+
+/// 이력의 diff에서 더한 줄의 낱말 몇 개(코드 찾기의 검색어)
+fn added_words(repo: &Path, count: usize) -> Vec<String> {
+    // EUC-KR 파일도 든 diff라 깨진 글자는 낱말을 가른다.
+    let patch = git(
+        repo,
+        &["log", "-p", "--format=", "--no-color", "HEAD", "--branches"],
+    );
+    let patch = String::from_utf8_lossy(&patch);
+    let mut words: Vec<String> = Vec::new();
+    for line in patch.lines() {
+        let Some(added) = line.strip_prefix('+') else {
+            continue;
+        };
+        if added.starts_with("++") {
+            continue;
+        }
+        for word in added.split(|c: char| !c.is_alphanumeric() && c != '_') {
+            if word.chars().count() >= 3 && !words.iter().any(|w| w == word) {
+                words.push(word.to_owned());
+            }
+        }
+        if words.len() >= count {
+            break;
+        }
+    }
+    words
+}
+
+#[test]
+fn search_code_like_git_log() {
+    for repo in [history(), encoding()] {
+        let sessions = GraphSessions::new();
+        let (id, opened) = open_with(&sessions, &repo, GraphOptions::default());
+        let row_of: HashMap<&str, usize> = opened
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (r.sha.as_str(), i))
+            .collect();
+        let mut filters: Vec<LogFilter> = Vec::new();
+        for word in added_words(&repo, 6) {
+            for regex in [false, true] {
+                filters.push(LogFilter {
+                    path: None,
+                    pickaxe: Some(Pickaxe {
+                        text: word.clone(),
+                        regex,
+                    }),
+                });
+            }
+            let path = git_text(&repo, &["ls-files"])
+                .lines()
+                .next()
+                .unwrap()
+                .to_owned();
+            filters.push(LogFilter {
+                path: Some(path),
+                pickaxe: Some(Pickaxe {
+                    text: word,
+                    regex: false,
+                }),
+            });
+        }
+        for (text, regex) in [("^[a-z]+", true), ("없는 코드 xyz", false), ("a.b", false)] {
+            filters.push(LogFilter {
+                path: None,
+                pickaxe: Some(Pickaxe {
+                    text: text.to_owned(),
+                    regex,
+                }),
+            });
+        }
+        for filter in filters {
+            let mut args = vec![
+                "log".to_owned(),
+                "--format=%H".to_owned(),
+                "--full-history".to_owned(),
+                "--no-merges".to_owned(),
+            ];
+            args.extend(filter.args());
+            args.extend(["HEAD", "--branches", "--"].map(str::to_owned));
+            args.extend(filter.path.clone());
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            let mut expected: Vec<usize> = git_text(&repo, &args)
+                .lines()
+                .map(|sha| row_of[sha])
+                .collect();
+            expected.sort_unstable();
+            let mut streamed = Vec::new();
+            let found = sessions
+                .search_log(id, &filter, |rows| {
+                    streamed.extend_from_slice(rows);
+                    true
+                })
+                .unwrap();
+            assert_eq!(found, expected, "{filter:?}");
+            streamed.sort_unstable();
+            streamed.dedup();
+            assert_eq!(streamed, expected, "흘려보낸 행 {filter:?}");
+        }
+
+        // 고칠 수 없는 입력은 git을 띄우기 전에, 틀린 정규식은 git의 오류로 끝난다.
+        let pickaxe = |text: &str, regex| LogFilter {
+            path: None,
+            pickaxe: Some(Pickaxe {
+                text: text.to_owned(),
+                regex,
+            }),
+        };
+        for bad in [
+            pickaxe("", false),
+            pickaxe("두\n줄", false),
+            LogFilter::default(),
+        ] {
+            assert!(sessions.search_log(id, &bad, |_| true).is_err(), "{bad:?}");
+        }
+        assert!(
+            sessions
+                .search_log(id, &pickaxe("(", true), |_| true)
+                .is_err()
+        );
+        // 받는 쪽이 멈추면 취소로 끝난다.
+        let some = pickaxe("^", true);
+        assert!(sessions.search_log(id, &some, |_| false).is_err());
         sessions.close(id);
     }
 }

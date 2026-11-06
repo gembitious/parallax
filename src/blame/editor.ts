@@ -44,6 +44,8 @@ export type EditorKeys = {
   lineHistory(): boolean;
   /** `G` 커밋 그래프(커서 줄의 커밋을 골라서) */
   graph(): boolean;
+  /** `S` 고른 글(없으면 커서 줄)을 넣거나 지운 커밋(그래프의 코드 찾기, `git log -S`) */
+  codeHistory(): boolean;
   /** `W` 워크트리 고르기 */
   worktrees(): boolean;
   /** `f`·Ctrl+P(⌘P) 파일 찾기 */
@@ -129,6 +131,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
           { key: "H", run: run(keys.history) },
           { key: "L", run: run(keys.lineHistory) },
           { key: "G", run: run(keys.graph) },
+          { key: "S", run: run(keys.codeHistory) },
           { key: "W", run: run(keys.worktrees) },
           { key: "f", run: run(keys.files) },
           // 브라우저의 인쇄(Ctrl+P) 대신
