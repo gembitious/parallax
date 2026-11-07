@@ -15,6 +15,7 @@ use serde::Serialize;
 
 use crate::blame::{Blame, BlameBlock, BlameCommit, BlameError, BlameOptions, Chunk, Stats};
 use crate::cache::{CacheKey, DiskCache};
+use crate::line_changes::{LineChange, line_changes};
 use crate::repo::{FilePath, Repo, RepoCache};
 use crate::requests::{self, Requests};
 use crate::text::{self, Decoded};
@@ -34,6 +35,8 @@ pub struct BlameMeta {
     /// 바이너리 파일이면 없다.
     pub content: Option<Decoded>,
     pub binary: bool,
+    /// 작업트리 blame의 HEAD 뒤로 바뀐 줄(M13). 리비전 blame, 바이너리, 너무 큰 파일이면 없다.
+    pub changes: Option<Vec<LineChange>>,
 }
 
 /// 화면으로 보내는 이벤트. `meta` → `chunk`* → 끝 이벤트(`done`·`error`·`cancelled`) 하나 순서다.
@@ -153,6 +156,7 @@ fn start(
         head: None,
         content,
         binary,
+        changes: None,
     };
     Ok((meta, source))
 }
@@ -173,27 +177,41 @@ fn start_worktree(
     let binary = text::is_binary(&bytes);
     let content = (!binary).then(|| text::decode(&bytes));
     let head = repo.head().map_err(|e| e.to_string())?;
-    let meta = |content| BlameMeta {
+    let meta = |content, changes| BlameMeta {
         repo: repo.workdir().to_string_lossy().into_owned(),
         path: rel.clone(),
         rev: None,
         head: head.map(|id| id.to_string()),
         content,
         binary,
+        changes,
     };
     let Some(decoded) = content else {
-        return Ok((meta(None), Source::Nothing));
+        return Ok((meta(None, None), Source::Nothing));
     };
     let in_head = match head {
         Some(head) => repo.has_file(head, &rel).map_err(|e| e.to_string())?,
         None => false,
+    };
+    // 바뀐 줄 표시: HEAD 버전(없으면 새 파일)과 git에 넣을 모양(clean)으로 견준다. git을 띄운 뒤에 센다.
+    let clean = repo.to_git(&rel, &bytes).into_owned();
+    let changes = |clean: &[u8]| {
+        let before = match head {
+            Some(head) if in_head => match repo.blob_at(head, &rel) {
+                Ok(Some(blob)) => Some(blob),
+                _ => return None,
+            },
+            _ => None,
+        };
+        line_changes(before.as_deref(), clean)
     };
     // 인덱스에만 있는 파일(새로 add했거나 `git mv`로 옮겼다)도 git이 blame한다: 옮긴 파일은 원래 이력을 찾는다.
     // 커밋이 하나도 없으면 git blame은 실패한다.
     let tracked = in_head || (head.is_some() && repo.in_index(&rel).map_err(|e| e.to_string())?);
     if !tracked {
         let chunk = uncommitted(&rel, decoded.line_count);
-        return Ok((meta(Some(decoded)), Source::Uncommitted(chunk)));
+        let changes = changes(&clean);
+        return Ok((meta(Some(decoded), changes), Source::Uncommitted(chunk)));
     }
     // 인덱스에만 있는 파일의 결과는 인덱스에 따라서도 바뀌므로 넣지 않는다.
     let key = match head {
@@ -203,7 +221,7 @@ fn start_worktree(
             &rel,
             settings,
             &bytes,
-            &repo.to_git(&rel, &bytes),
+            &clean,
         )),
         _ => None,
     };
@@ -212,11 +230,13 @@ fn start_worktree(
         .zip(cache)
         .and_then(|(key, cache)| cache.get(key))
     {
-        return Ok((meta(Some(decoded)), Source::Cached(chunk)));
+        let changes = changes(&clean);
+        return Ok((meta(Some(decoded), changes), Source::Cached(chunk)));
     }
     let (dir, path) = (repo.workdir().to_owned(), rel.clone());
     let blame = Spawning::new(move || Blame::spawn_with(&dir, &path, None, Some(bytes), &options));
-    Ok((meta(Some(decoded)), Source::Git(blame, key)))
+    let changes = changes(&clean);
+    Ok((meta(Some(decoded), changes), Source::Git(blame, key)))
 }
 
 /// 모든 줄이 커밋 안 됨인 묶음. git이 미커밋 줄에 쓰는 값을 따른다.

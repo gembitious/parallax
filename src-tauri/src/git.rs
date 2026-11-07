@@ -7,7 +7,7 @@ use plx_core::ai_notes::{AiAttribution, AiItem, AiNotes};
 use plx_core::blame::BlameOptions;
 use plx_core::blame_session::{SessionEvent, Sessions};
 use plx_core::cache::DiskCache;
-use plx_core::changes::{self, Comparison, RefName, Side};
+use plx_core::changes::{self, Comparison, RefName, Side, WorktreeStatus};
 use plx_core::cli::Request;
 use plx_core::commit::{self, CommitDetail, FileStat, FileVersions, StatRequest};
 use plx_core::commit_graph::{self, GraphStatus, Progress};
@@ -664,6 +664,20 @@ pub async fn compare(
             None => Side::Worktree,
         };
         changes::compare(&repo, base, target, merge_base.unwrap_or(false))
+    })
+    .await
+}
+
+/// 파일 트리·탭의 변경 표시(M13): HEAD ↔ 작업트리에서 바뀐 파일과 상태. 작업트리 변경과 같은 기준이고 줄 수·rename은
+/// 세지 않는다.
+#[tauri::command]
+pub async fn worktree_status(
+    git: State<'_, Arc<GitState>>,
+    repo: String,
+) -> Result<WorktreeStatus, String> {
+    blocking(git, move |git| {
+        let repo = git.repos.for_path(Path::new(&repo))?;
+        changes::worktree_status(&repo)
     })
     .await
 }

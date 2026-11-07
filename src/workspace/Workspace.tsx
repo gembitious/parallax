@@ -2,6 +2,7 @@
 // 무엇을 어디에 여는지는 state.ts(순수 함수)가 정하고 여기서는 그리기·키·마우스만 한다. 화면(BlameView 등)은 화면마다의
 // 자리(hosts.ts)에 portal로 그린다: 탭을 다른 그룹·패널로 옮겨도 화면을 새로 만들지 않고 자리만 옮긴다. 숨긴 화면도 살려
 // 둬 다시 보이면 커서·스크롤이 그대로다.
+import { useWorktreeStatus } from "./useWorktreeStatus";
 import {
   Fragment,
   useEffect,
@@ -426,6 +427,8 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
   const centerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLDivElement>(null);
 
+  // 파일 트리·탭의 변경 표시(M13)
+  const worktreeStatus = useWorktreeStatus(state.repo);
   const activeGroup = activeGroupOf(state);
   const activeTab = activeTabOf(state);
   const activeTop = activeTab ? topOf(activeTab) : null;
@@ -1276,7 +1279,17 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
               onContextMenu={repoMenu}
             >
               <div className="sidebar-header" title={state.repo}>
-                {repoName}
+                <span className="sidebar-repo">{repoName}</span>
+                {!treeRev && worktreeStatus.count > 0 && (
+                  <button
+                    type="button"
+                    className="sidebar-changes"
+                    title={"커밋하지 않은 변경 (추적하지 않는 파일 포함)\n누르면 작업트리 변경 (D)"}
+                    onClick={() => openChanges()}
+                  >
+                    변경 {worktreeStatus.count}
+                  </button>
+                )}
               </div>
               {treeRev && (
                 <div className="sidebar-revision" title={`${treeRev.sha}\n${treeRev.summary}`}>
@@ -1293,6 +1306,7 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
                 rev={treeRev?.sha ?? null}
                 focused={state.focus === "tree"}
                 focusTick={focusTick}
+                status={treeRev ? null : worktreeStatus}
                 activeFile={activeFile}
                 onOpen={(path, missing, preview) =>
                   dispatch({ type: "open", repo: state.repo!, path, missing, preview, rev: treeRev?.sha ?? null })
@@ -1328,6 +1342,7 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
                     {group.tabs.length > 0 && (
                       <TabBar
                         group={group}
+                        status={worktreeStatus}
                         onActivate={(tab) => dispatch({ type: "activate", tab })}
                         onPin={(tab) => dispatch({ type: "pin", tab })}
                         onClose={(tab) => dispatch({ type: "close", tab })}

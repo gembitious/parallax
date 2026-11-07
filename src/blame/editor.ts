@@ -25,7 +25,9 @@ import {
   lineNumbers,
 } from "@codemirror/view";
 import { codeSupport } from "../code";
+import { changeGutter } from "./changeGutter";
 import { blameGutter, type GutterContext } from "./gutter";
+import type { LineChange } from "./lineChanges";
 import { inlineBlame } from "./inline";
 
 /** 화면 단축키. true를 돌려주면 처리한 것이다. CLAUDE.md 키맵을 따른다. */
@@ -56,6 +58,9 @@ export type EditorKeys = {
   openEditor(): boolean;
   /** `b` blame 거터 보이기·숨기기 */
   toggleGutter(): boolean;
+  /** `]`·`[` 다음·이전 바뀐 곳(작업트리 blame, M13) */
+  nextChange(): boolean;
+  previousChange(): boolean;
   /** `:`·Ctrl+Shift+P(⌘⇧P) 명령 팔레트 */
   palette(): boolean;
   back(): boolean;
@@ -72,6 +77,8 @@ export type EditorOptions = {
   /** blame 거터를 보인다. 아니면 커서 줄 끝에 blame 한 줄을 쓴다. */
   showGutter: boolean;
   keys: EditorKeys;
+  /** 작업트리 blame의 HEAD 뒤로 바뀐 줄(M13). 있으면 줄 번호 오른쪽에 표시한다. 누르면 `onClick(line)` */
+  changes?: { list: readonly LineChange[]; lineCount: number; onClick(line: number): void } | null;
   /** 검색 패널(`/`)을 열거나 닫았다 */
   onSearchPanel?(open: boolean): void;
   /** 커서가 옮겨 갔다(처음에도 부른다). 줄·열은 1부터 */
@@ -107,6 +114,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
       support.extensions,
       blame.of(blameDisplay(options.showGutter)),
       lineNumbers(),
+      options.changes ? changeGutter(options.changes.list, options.changes.lineCount, options.changes.onClick) : [],
       highlightActiveLineGutter(),
       highlightActiveLine(),
       highlightSpecialChars(),
@@ -139,6 +147,8 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
           { key: "i", run: run(keys.card) },
           { key: "o", run: run(keys.openEditor) },
           { key: "b", run: run(keys.toggleGutter) },
+          { key: "]", run: run(keys.nextChange) },
+          { key: "[", run: run(keys.previousChange) },
           // 줄 이동(VS Code와 같은 Ctrl+G, macOS도). 검색 키맵의 Mod-g(다음 찾기)보다 먼저 받는다.
           { key: "Ctrl-g", run: gotoLine, preventDefault: true },
           { key: ":", run: run(keys.palette) },

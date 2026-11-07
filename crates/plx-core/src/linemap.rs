@@ -35,6 +35,11 @@ impl LineMap {
         }
     }
 
+    /// 바뀐 부분: (before 범위, after 범위), 0부터 세는 반열린 구간. 순서대로다.
+    pub fn hunks(&self) -> &[(std::ops::Range<u32>, std::ops::Range<u32>)] {
+        &self.hunks
+    }
+
     /// `after`의 `line`(1부터)에 해당하는 `before`의 줄(1부터).
     /// `after`에서 생기거나 바뀐 줄이면 그 hunk가 시작하는 `before`의 줄이다.
     pub fn to_before(&self, line: u32) -> u32 {

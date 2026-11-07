@@ -73,6 +73,7 @@ pub fn run() {
             git::commit_info,
             git::commit_detail,
             git::compare,
+            git::worktree_status,
             git::ref_names,
             git::reflog,
             git::grep_open,
