@@ -26,6 +26,7 @@ pub mod line_log;
 pub mod linemap;
 pub mod log;
 pub mod navigate;
+pub mod progress;
 pub mod recent;
 pub mod reflog;
 pub mod refs;

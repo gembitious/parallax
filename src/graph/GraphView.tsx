@@ -16,7 +16,7 @@ import { reloadFocus, type Focus } from "./focus";
 import { CHUNK, RowCache, rowWidth } from "./rows";
 import { filterLabel, nextRow, parseQuery, rowMatches, sameFilter, type LogFilter, type Query } from "./search";
 import { CANCELLED, openGraph, type GraphHandle } from "./session";
-import { watchRepo } from "../watch";
+import { refsMoved, watchRepo } from "../watch";
 import { WorktreePicker } from "../worktree/WorktreePicker";
 import { useQuickOpen } from "../quickopen/QuickOpen";
 import { commonCommands, usePalette, type Command } from "../palette/Palette";
@@ -489,7 +489,8 @@ function GraphPane({
   // 스크롤 위치를 읽을 수 없다) 표시만 해 두고 다시 보일 때 읽는다.
   const stale = useRef(false);
   useEffect(() => {
-    return watchRepo(repo, () => {
+    return watchRepo(repo, (change) => {
+      if (!refsMoved(change)) return;
       if (latest.current.visible) reload();
       else stale.current = true;
     });

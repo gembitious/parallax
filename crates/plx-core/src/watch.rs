@@ -51,6 +51,8 @@ pub struct RepoChange {
     pub head_changed: bool,
     /// HEAD 말고 다른 참조(브랜치·태그·원격)가 바뀌었다
     pub refs_changed: bool,
+    /// 멈춰 있는 작업(merge·rebase …, `plx_core::progress`)이 생기거나 바뀌거나 끝났다(M15)
+    pub progress_changed: bool,
 }
 
 /// 파일 내용이 바뀌었다(크기나 수정 시각, 지워지거나 다시 생김)
@@ -86,6 +88,45 @@ struct Fingerprint {
     refs: u64,
     /// 다른 워크트리들(id와 HEAD 파일 내용)
     others: u64,
+    /// 멈춰 있는 작업의 파일들(M15: 있는지와 내용)
+    progress: u64,
+}
+
+/// 워크트리별 git 디렉터리에서 멈춰 있는 작업(merge·rebase …)을 알리는 파일·디렉터리(`plx_core::progress`). 생기고
+/// 없어지는 것만 본다: rebase가 다음 커밋으로 가면 HEAD가 바뀐다. 작업이 멈춰 있는 동안에만 `index` 쓰기도 본다(충돌을
+/// 푼 `git add`).
+const PROGRESS_FILES: [&str; 8] = [
+    "MERGE_HEAD",
+    "CHERRY_PICK_HEAD",
+    "REVERT_HEAD",
+    "REBASE_HEAD",
+    "BISECT_LOG",
+    "rebase-merge",
+    "rebase-apply",
+    "sequencer",
+];
+
+/// 멈춰 있는 작업의 지문. 작업이 없으면 0이다. 있으면 충돌 경로도 넣는다: 충돌을 `git add`로 풀면 인덱스만 바뀐다.
+fn progress_fingerprint(repo: &Repo, git_dir: &Path) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    let mut any = false;
+    for name in PROGRESS_FILES {
+        let path = git_dir.join(name);
+        if path.is_dir() {
+            (name, true).hash(&mut hasher);
+            any = true;
+        } else if let Ok(bytes) = std::fs::read(&path) {
+            (name, bytes).hash(&mut hasher);
+            any = true;
+        }
+    }
+    if !any {
+        return 0;
+    }
+    crate::progress::conflicts(repo)
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    hasher.finish() | 1
 }
 
 fn fingerprint(repo: &Repo) -> Fingerprint {
@@ -113,6 +154,7 @@ fn fingerprint(repo: &Repo) -> Fingerprint {
         head_ref,
         refs: hasher.finish(),
         others: other_worktrees(local.git_dir(), local.common_dir()),
+        progress: progress_fingerprint(repo, local.git_dir()),
     }
 }
 
@@ -190,7 +232,12 @@ impl Watched {
             return false;
         }
         let name = path.file_name().and_then(|n| n.to_str());
-        (path.parent() == Some(self.git_dir.as_path()) && name == Some("HEAD"))
+        (path.parent() == Some(self.git_dir.as_path())
+            && name.is_some_and(|name| {
+                name == "HEAD"
+                    || PROGRESS_FILES.contains(&name)
+                    || (name == "index" && self.last.progress != 0)
+            }))
             || (path.parent() == Some(self.common_dir.as_path())
                 && matches!(name, Some("HEAD" | "packed-refs")))
             || path.starts_with(self.common_dir.join("refs"))
@@ -564,7 +611,8 @@ fn repo_change(state: &Mutex<Inner>, workdir: &Path) -> Option<RepoChange> {
     let head_changed = now.head != watched.last.head || now.head_ref != watched.last.head_ref;
     // 다른 워크트리의 HEAD는 그래프 이름표(체크아웃한 워크트리)만 바꾼다: 참조 변화로 알린다.
     let refs_changed = now.refs != watched.last.refs || now.others != watched.last.others;
-    if !head_changed && !refs_changed {
+    let progress_changed = now.progress != watched.last.progress;
+    if !head_changed && !refs_changed && !progress_changed {
         return None;
     }
     watched.last = now.clone();
@@ -573,6 +621,7 @@ fn repo_change(state: &Mutex<Inner>, workdir: &Path) -> Option<RepoChange> {
         head: now.head,
         head_changed,
         refs_changed,
+        progress_changed,
     })
 }
 

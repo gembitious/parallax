@@ -25,7 +25,7 @@ impl std::error::Error for Error {}
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-fn err(context: &str, e: impl fmt::Display) -> Error {
+pub(crate) fn err(context: &str, e: impl fmt::Display) -> Error {
     Error(format!("{context}: {e}"))
 }
 

@@ -312,6 +312,8 @@ pub enum StatusKind {
     Deleted,
     /// 추적하지 않는 파일(무시한 파일은 빼고)
     Untracked,
+    /// merge·rebase 등이 멈춰 인덱스에 충돌 단계가 남은 파일(M15). 작업트리 내용이 HEAD와 같아도 친다
+    Conflicted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -365,6 +367,16 @@ pub fn worktree_status(repo: &Repo) -> Result<WorktreeStatus> {
             Some(StatusEntry { path, kind })
         })
         .collect();
+    // 충돌 중인 경로는 내용과 상관없이 충돌이다(`git status`의 Unmerged paths).
+    for path in crate::progress::conflicts(repo)? {
+        match files.iter_mut().find(|entry| entry.path == path) {
+            Some(entry) => entry.kind = StatusKind::Conflicted,
+            None => files.push(StatusEntry {
+                path,
+                kind: StatusKind::Conflicted,
+            }),
+        }
+    }
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(WorktreeStatus {
         head: head.map(|id| id.to_string()),
