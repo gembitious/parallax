@@ -40,5 +40,7 @@ export function tabLabel(entry: StackEntry): TabLabel {
       return { name: "검색", detail: entry.rev ? shortSha(entry.rev) : null, title };
     case "reflog":
       return { name: "reflog", detail: null, title };
+    case "refs":
+      return { name: "브랜치", detail: null, title };
   }
 }

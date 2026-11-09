@@ -112,6 +112,16 @@ describe("배치 남기기·되살리기", () => {
     expect(readLayout(JSON.parse(JSON.stringify(broken)))?.panel).toEqual([layout.panel[1]]);
   });
 
+  it("브랜치·태그 목록도 패널에 남기고 되살린다", () => {
+    const s = run(emptyWorkspace("/repo"), nav({ kind: "refs", repo: "/repo", show: "tag" }, { pane: "editor", tab: -1 }));
+    const layout = readLayout(JSON.parse(JSON.stringify(toLayout(s))))!;
+    expect(layout.panel).toEqual([{ view: "refs", repo: "/repo", show: "tag", from: "editor" }]);
+    const restored = restoreWorkspace("/repo", layout);
+    expect(restored.panel.map((e) => e.view === "refs" && e.show)).toEqual(["tag"]);
+    const broken = { ...layout, panel: [{ view: "refs", repo: "/repo", show: "stash", from: "panel" }] };
+    expect(readLayout(JSON.parse(JSON.stringify(broken)))?.panel ?? []).toEqual([]);
+  });
+
   it("남길 것이 없으면 null", () => {
     expect(toLayout(emptyWorkspace("/repo"))).toBeNull();
     expect(toLayout(emptyWorkspace())).toBeNull();

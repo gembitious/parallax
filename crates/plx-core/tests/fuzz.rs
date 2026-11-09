@@ -514,6 +514,22 @@ fn reflog_file() {
 }
 
 #[test]
+fn ref_tracking_output() {
+    use plx_core::refs;
+    // `git for-each-ref`의 upstream·track 출력(M14). 모르는 모양의 줄은 건너뛰고 패닉하지 않는다.
+    let seeds = vec![
+        b"refs/heads/main\0refs/remotes/origin/main\0ahead 1, behind 2\nrefs/heads/solo\0\0\n".to_vec(),
+        b"refs/heads/old\0refs/remotes/origin/old\0gone\nrefs/heads/x\0refs/heads/main\0behind 30\n".to_vec(),
+    ];
+    fuzz("ref-tracking", &seeds, |input, _| {
+        for t in refs::parse_tracking(input) {
+            assert!(!t.full.is_empty() && !t.upstream.is_empty());
+            assert!(!t.gone || (t.ahead == 0 && t.behind == 0));
+        }
+    });
+}
+
+#[test]
 fn cli_install_files() {
     use plx_core::cli_install::{
         first_in_path, path_has_dir, path_with_dir, path_with_dir_before, shim_script, shim_target,

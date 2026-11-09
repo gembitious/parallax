@@ -33,13 +33,14 @@ const WORKSPACE: Key[] = [
   { keys: `${MOD}1~4`, what: "에디터 그룹으로", note: "왼쪽부터" },
   { keys: "D", what: "작업트리 변경", note: "커밋하지 않은 것을 HEAD와 견준다 · 파일을 고치면 바로 다시 견준다" },
   { keys: "HEAD reflog · stash 목록", what: "HEAD가 거쳐 간 커밋과 stash", note: "명령 팔레트·보기 메뉴 · 리셋으로 잃은 커밋도 찾는다" },
+  { keys: "브랜치·태그", what: "브랜치·원격·태그 목록", note: "명령 팔레트·보기 메뉴 · upstream 대비 앞섬↑·뒤처짐↓, 체크아웃한 워크트리" },
   { keys: "두 리비전 비교…", what: "브랜치·태그·커밋 둘을 견준다", note: "명령 팔레트·보기 메뉴 · 그래프에서는 m으로 표시하고 d" },
 ];
 
 /** 파일 트리에는 없는 화면 키(에디터로 열기, 워크트리, 뒤로) */
 const TREE_SKIPS = new Set(["o", "W", "q"]);
 
-export type HelpView = "workspace" | "blame" | "commit" | "history" | "graph" | "search" | "reflog";
+export type HelpView = "workspace" | "blame" | "commit" | "history" | "graph" | "search" | "reflog" | "refs";
 
 const TITLES: Record<HelpView, string> = {
   workspace: "파일 트리",
@@ -49,6 +50,7 @@ const TITLES: Record<HelpView, string> = {
   graph: "커밋 그래프",
   search: "저장소 검색",
   reflog: "reflog · stash",
+  refs: "브랜치 · 태그",
 };
 
 const KEYS: Record<HelpView, Key[]> = {
@@ -145,6 +147,19 @@ const KEYS: Record<HelpView, Key[]> = {
     { keys: "y", what: "커밋 sha 복사", note: "우클릭에 HEAD@{n} 이름 복사" },
     { keys: "s", what: "HEAD reflog ↔ stash" },
     { keys: "/", what: "거르기", note: "이름·sha·종류·메시지 · Esc로 지운다" },
+  ],
+  refs: [
+    { keys: "j / k", what: "다음·이전 참조", note: "지금 브랜치(●)가 맨 위, 나머지는 최근 커밋부터" },
+    { keys: "Enter", what: "끝 커밋 상세" },
+    { keys: "G", what: "그래프에서 보기" },
+    { keys: "d", what: "HEAD에서 갈라진 뒤 바꾼 것", note: "HEAD...이름 · 에이전트 브랜치가 무엇을 바꿨나" },
+    { keys: "u", what: "upstream에서 갈라진 뒤 바꾼 것", note: "로컬 브랜치 · ↑앞섬 ↓뒤처짐, gone은 원격에서 지웠다" },
+    { keys: "w", what: "작업트리와 비교" },
+    { keys: "T", what: "이 커밋의 파일 트리", note: "리비전 둘러보기" },
+    { keys: "F", what: "이 커밋의 파일에서 찾기" },
+    { keys: "y", what: "커밋 sha 복사", note: "우클릭에 이름 복사, 다른 워크트리로 옮기기" },
+    { keys: "s", what: "브랜치 → 원격 → 태그" },
+    { keys: "/", what: "거르기", note: "이름·sha·요약·작성자·upstream · Esc로 지운다" },
   ],
 };
 
