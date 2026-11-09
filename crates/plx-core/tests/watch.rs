@@ -285,3 +285,56 @@ fn worktree_files_are_reported_but_not_git_internals() {
     assert!(watchers.unwatch(id));
     assert_eq!(watchers.watching(), 0);
 }
+
+#[test]
+fn stopped_merge_is_reported() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("merge");
+    std::fs::create_dir(&repo).unwrap();
+    git(&repo, &["init", "--quiet", "--initial-branch=main"]);
+    std::fs::write(repo.join("a.txt"), "처음\n").unwrap();
+    git(&repo, &["add", "a.txt"]);
+    commit(&repo, "밑");
+    git(&repo, &["checkout", "--quiet", "-b", "feat"]);
+    std::fs::write(repo.join("a.txt"), "곁\n").unwrap();
+    git_as_user(&repo, &["commit", "--quiet", "-am", "곁"]);
+    git(&repo, &["checkout", "--quiet", "main"]);
+    std::fs::write(repo.join("a.txt"), "본\n").unwrap();
+    git_as_user(&repo, &["commit", "--quiet", "-am", "본"]);
+
+    let (tx, rx) = mpsc::channel();
+    let watchers = Watchers::new(move |change| {
+        if let Change::Repo(change) = change {
+            let _ = tx.send(change);
+        }
+    });
+    let repos = RepoCache::new();
+    let (_id, _workdir) = watchers.watch(&repos, &repo).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+
+    // 충돌로 멈춘 merge: HEAD·참조는 그대로이고 MERGE_HEAD가 생긴다.
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["-c", "user.name=plx", "-c", "user.email=plx@example.com"])
+        .args(["merge", "--quiet", "feat"])
+        .env("GIT_CONFIG_GLOBAL", common::NULL_DEVICE)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap()
+        .status;
+    assert!(!status.success(), "충돌로 멈춘다");
+    let change = next(&rx, Duration::from_secs(10)).expect("멈춘 merge를 알린다");
+    assert!(change.progress_changed);
+    assert!(!change.head_changed && !change.refs_changed);
+
+    // 멈춰 있는 동안에는 충돌을 푼 `git add`(인덱스만 바뀐다)도 알린다.
+    std::fs::write(repo.join("a.txt"), "합침\n").unwrap();
+    git(&repo, &["add", "a.txt"]);
+    let change = next(&rx, Duration::from_secs(10)).expect("충돌을 푼 것을 알린다");
+    assert!(change.progress_changed);
+
+    git(&repo, &["merge", "--abort"]);
+    let change = next(&rx, Duration::from_secs(10)).expect("merge를 그만둔 것을 알린다");
+    assert!(change.progress_changed);
+}

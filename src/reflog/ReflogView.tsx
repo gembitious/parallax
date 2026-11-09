@@ -18,7 +18,7 @@ import { getPerfInfo, nowMs, record } from "../perf";
 import { useQuickOpen } from "../quickopen/QuickOpen";
 import { drawWindow, insideDrawn, type DrawnRange } from "../scrollWindow";
 import { toast } from "../Toasts";
-import { watchRepo } from "../watch";
+import { refsMoved, watchRepo } from "../watch";
 import { keepSelection, matchesQuery, refName, type Reflog, type ReflogItem } from "./types";
 
 type Props = {
@@ -93,7 +93,8 @@ export function ReflogView({ repo, which: initial, visible, active, slot, depth,
   // HEAD·참조가 바뀌면(커밋, 체크아웃, stash push·drop) 다시 읽는다. 숨어 있으면 보일 때.
   useEffect(
     () =>
-      watchRepo(repo, () => {
+      watchRepo(repo, (change) => {
+        if (!refsMoved(change)) return;
         if (latest.current.visible) setVersion((v) => v + 1);
         else setStale(true);
       }),

@@ -19,7 +19,7 @@ import { getPerfInfo, nowMs, record } from "../perf";
 import { useQuickOpen } from "../quickopen/QuickOpen";
 import { drawWindow, insideDrawn, type DrawnRange } from "../scrollWindow";
 import { toast } from "../Toasts";
-import { watchRepo } from "../watch";
+import { refsMoved, watchRepo } from "../watch";
 import {
   KIND_LABEL,
   KINDS,
@@ -134,7 +134,8 @@ export function RefsView({ repo, show, visible, active, slot, depth, onShown, on
   // HEAD·참조가 바뀌면(커밋, 체크아웃, fetch, 브랜치·태그 만들기) 다시 읽는다. 숨어 있으면 보일 때.
   useEffect(
     () =>
-      watchRepo(repo, () => {
+      watchRepo(repo, (change) => {
+        if (!refsMoved(change)) return;
         if (latest.current.visible) setVersion((v) => v + 1);
         else setStale(true);
       }),

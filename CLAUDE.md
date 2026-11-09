@@ -13,6 +13,7 @@ GitLens의 핵심 흐름(줄 → 커밋 → 부모 리비전 blame → 파일·�
 - 한다: blame, 파일·라인 히스토리, 커밋 상세와 diff, 커밋 그래프, 저장소 변경 실시간 반영, 작업트리 변경 보기(M7-1),
   두 리비전 비교(M7-2), 저장소 검색(M7-3), 리비전 둘러보기(M7-4), 작업 공간 복원(M7-5), reflog·stash 보기(M10),
   blame 옵션(M11), 코드 변천 찾기(M12), 트리·탭·줄의 변경 표시(M13), 브랜치·태그 목록(M14),
+  멈춰 있는 merge·rebase 등과 충돌 파일 표시(M15),
   앱 안에서 저장소 열기(첫 화면·최근 저장소·끌어 놓기)와 코드 읽기(M6의 파일 트리·탭, 고치기·저장은 없다)
 - 안 한다: 편집, LSP, 내장 터미널, 스테이징·커밋·푸시 등 저장소를 바꾸는 작업 (Claude Code와 lazygit의 몫)
 - 범위를 넓히려면 아래 "결정 기록"에 이유를 먼저 남긴다.
@@ -232,6 +233,9 @@ blame은 작업트리에 있는 파일만 받고(컴파일러·grep 형식 `<fil
 - 변경 표시(M13): 파일 트리·탭에 커밋하지 않은 변경의 상태 글자(`M` 바꿈, `A` 올린 새 파일, `U` 추적하지 않는 파일)와
   바뀐 파일이 든 폴더의 점, 트리 머리의 `변경 n`(누르면 `D`). 작업트리 blame의 줄 번호 옆에 HEAD 뒤로 더한 줄(초록)·바꾼
   줄(파랑) 막대와 지운 자리(빨강 삼각형)가 있고, `]`/`[`는 다음·이전 바뀐 곳, 표시를 누르면 작업트리 변경에서 그 파일이다.
+- 진행 중인 작업(M15): merge·rebase·cherry-pick·revert·am·bisect가 멈춰 있으면 상태 막대의 브랜치 옆에 `rebase 2/3 ·
+  충돌 1`이 보이고 누르면 메뉴(적용 중인 커밋 상세·그래프, onto 커밋, 충돌 파일마다 작업트리 변경)다. 충돌 파일은 트리·탭에
+  `!`다. 따로 켜는 키는 없다(이어 가기·그만두기는 터미널의 몫이라 풍선 도움말에 그 명령을 보인다).
 - blame의 `i`: 커서 줄의 커밋 카드를 고정해 보이고 다시 누르면 닫는다(마우스의 거터 클릭과 같다).
 - AI 출처: 저장소에 git-ai 노트(`refs/notes/ai`)가 있으면 blame 거터의 AI가 쓴 줄에 보라 줄과 `✦ 도구` 이름이 붙고,
   카드에 에이전트·모델·시킨 사람, 머리줄에 `✦ AI n줄`이 보인다. 따로 켜는 키는 없다.
@@ -702,3 +706,14 @@ blame은 작업트리에 있는 파일만 받고(컴파일러·grep 형식 `<fil
   브랜치마다 `git rev-list`를 띄우는 것보다 한 번이 싸다. for-each-ref는 track 글을 번역하지 않는다(`ahead 1, behind 2`,
   `gone`). 비교(`d`, `u`, `w`)는 sha가 아니라 이름으로 연다(M7-2의 고르기 창과 같다: 탭 이름이 `HEAD...feature`로 읽히고,
   브랜치가 움직이면 다시 열 때 따라간다). 원격 HEAD 같은 기호 참조와 UTF-8이 아닌 이름은 뺀다. 참조는 2만 개까지(최근 것).
+- 2026-11-09: 진행 중인 merge·rebase 보기(M15). 사용자와 정한 다음 작업이다(카드에서 고름). 어느 작업이 멈췄는지는 gix의
+  `Repository::state`(git의 `wt_status_get_state`와 같은 차례: rebase-apply → rebase-merge → CHERRY_PICK_HEAD → MERGE_HEAD →
+  BISECT_LOG, REVERT_HEAD)로 고르고, 단계(`msgnum`/`end`, `next`/`last`)·브랜치(`head-name`)·onto·멈춘 커밋(`REBASE_HEAD`,
+  없으면 `stopped-sha`)·`CHERRY_PICK_HEAD`·`REVERT_HEAD`·`MERGE_HEAD`·`BISECT_START`는 그 파일을 직접 읽는다
+  (`plx_core::progress`, git을 띄우지 않는다). merge 백엔드 rebase는 `-i`가 아니어도 `rebase-merge/interactive`를 쓰므로
+  대화형인지는 나누지 않는다. 충돌 파일은 인덱스의 단계 1~3이고(`worktree_status`의 `Conflicted`가 다른 상태를 이긴다: 우리
+  쪽으로 되돌려 내용이 HEAD와 같아도 `git add` 전까지 충돌이다) 트리·탭에 VS Code처럼 `!`다. 상태는 `repo_state`에 싣고(새
+  IPC 없음) 감시는 워크트리별 git 디렉터리의 그 파일들이 생기고 없어지는 것을 본다(`RepoChange.progress_changed`, HEAD·참조는
+  그대로라 그래프·참조 목록·reflog는 다시 읽지 않는다). 멈춰 있는 동안에만 `index` 쓰기도 지문(충돌 경로)으로 본다: 충돌을 푼
+  `git add`는 인덱스만 바꾸고, 평소에는 에이전트의 `git status`마다 인덱스가 다시 쓰이므로 보지 않는다(2026-10-15 결정).
+  이어 가기·그만두기 단추는 두지 않는다(저장소를 바꾸는 명령이다). 풍선 도움말에 그 git 명령을 보인다.

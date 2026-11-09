@@ -1,4 +1,4 @@
-// 저장소·파일 변화 구독. 백엔드(plx-core/src/watch.rs)가 HEAD·참조가 바뀌면 "repo-changed",
+// 저장소·파일 변화 구독. 백엔드(plx-core/src/watch.rs)가 HEAD·참조·멈춰 있는 작업(M15)이 바뀌면 "repo-changed",
 // 지켜보는 파일이 바뀌면 "file-changed", 지켜보는 작업트리(.git 밖)의 파일이 바뀌면 "tree-changed" 이벤트를 보낸다.
 import { listen } from "@tauri-apps/api/event";
 import { call } from "./ipc";
@@ -10,7 +10,12 @@ export type RepoChange = {
   head: string | null;
   headChanged: boolean;
   refsChanged: boolean;
+  /** 멈춰 있는 merge·rebase 등이 생기거나 끝났다(M15). 이것만 바뀌었으면 HEAD·참조는 그대로다 */
+  progressChanged: boolean;
 };
+
+/** HEAD나 참조가 움직였나(멈춰 있는 작업만 바뀐 알림이 아닌가) */
+export const refsMoved = (change: RepoChange) => change.headChanged || change.refsChanged;
 
 /** plx-core/src/watch.rs FileChange */
 export type FileChange = { path: string };

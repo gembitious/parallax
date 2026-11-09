@@ -7,6 +7,7 @@ import {
   Fragment,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -33,7 +34,7 @@ import { HistoryView } from "../history/HistoryView";
 import { toggleHud } from "../Hud";
 import { call } from "../ipc";
 import { isComposing } from "../keys";
-import { openContextMenu, type MenuEntry } from "../menu/Menu";
+import { openContextMenu, openMenu, type MenuEntry } from "../menu/Menu";
 import { setTarget, usePublish, type ViewSlot } from "../menu/registry";
 import { WORKTREE_CHANGES, backDirectionAt, lastName, type Compare, type Navigation, type ReflogWhich, type StackEntry } from "../nav";
 import { commonCommands, usePalette, type Command, type CommandId } from "../palette/Palette";
@@ -73,9 +74,11 @@ import {
 import { TabBar } from "./TabBar";
 import { tabLabel } from "./tabs";
 import { Toolbar } from "./Toolbar";
+import { applyingLine, progressLabel, progressTitle, type Progress } from "./progress";
+import type { StatusIndex } from "./status";
 
 /** src-tauri/src/git.rs RepoState */
-type RepoState = { repo: string; name: string; branch: string | null; head: string | null };
+type RepoState = { repo: string; name: string; branch: string | null; head: string | null; progress: Progress | null };
 
 type Props = {
   state: Workspace;
@@ -318,19 +321,30 @@ function StatusBar({
   cursors,
   statusKey,
   repoState,
+  worktreeStatus,
   onGraph,
+  onProgress,
   onGotoLine,
 }: {
   cursors: CursorStore;
   /** 커서 자리를 보이는 blame 화면 */
   statusKey: number | null;
   repoState: RepoState | null;
+  /** 충돌 파일 수(M15) */
+  worktreeStatus: StatusIndex;
   /** 브랜치를 눌렀다: 저장소 그래프 */
   onGraph(): void;
+  /** 멈춰 있는 작업을 눌렀다: 그 자리의 메뉴(M15) */
+  onProgress(e: ReactMouseEvent, progress: Progress, conflicts: string[]): void;
   /** 줄·열을 눌렀다: 그 화면에서 줄로 이동 */
   onGotoLine(): void;
 }) {
   const status = useSyncExternalStore(cursors.subscribe, () => cursors.get(statusKey));
+  const conflicts = useMemo(
+    () => [...worktreeStatus.files].filter(([, kind]) => kind === "conflicted").map(([path]) => path).sort(),
+    [worktreeStatus],
+  );
+  const progress = repoState?.progress ?? null;
   const showGutter = useBlameGutter();
   const update = useUpdate();
   return (
@@ -343,6 +357,16 @@ function StatusBar({
           title={`${repoState.repo}\n${repoState.head ?? "커밋 없음"}\n누르면 커밋 그래프`}
         >
           {repoState.branch ? `⎇ ${repoState.branch}` : repoState.head ? `HEAD ${shortSha(repoState.head)} (detached)` : "커밋 없음"}
+        </button>
+      )}
+      {(progress || conflicts.length > 0) && (
+        <button
+          type="button"
+          className={`status-item status-progress${conflicts.length > 0 ? " conflicted" : ""}`}
+          onClick={(e) => onProgress(e, progress ?? NO_PROGRESS, conflicts)}
+          title={progress ? progressTitle(progress, conflicts.length) : `충돌 파일 ${conflicts.length}개\n누르면 메뉴`}
+        >
+          {progress ? progressLabel(progress, conflicts.length) : `충돌 ${conflicts.length}`}
         </button>
       )}
       <span className="status-spacer" />
@@ -377,6 +401,20 @@ function StatusBar({
     </footer>
   );
 }
+
+/** 진행 중인 작업 없이 충돌만 남았다(merge를 끝내지 않고 MERGE_HEAD만 지운 것 등): 메뉴는 충돌 파일만 보인다. */
+const NO_PROGRESS: Progress = {
+  operation: "merge",
+  step: null,
+  total: null,
+  branch: null,
+  onto: null,
+  applying: [],
+  sequence: false,
+};
+
+/** 상태 막대의 멈춰 있는 작업 메뉴(M15)에 보일 충돌 파일 수 */
+const CONFLICT_MENU_LIMIT = 12;
 
 /** 그룹 너비 몫의 합. flex-grow의 합이 1보다 작으면 남는 자리를 다 채우지 않아 몫을 합으로 나눠 준다. */
 function total(groups: readonly Group[]): number {
@@ -508,6 +546,38 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
       navigation: { kind: "commit", repo, rev: WORKTREE_CHANGES.base, path, compare: WORKTREE_CHANGES },
       from: { pane: "editor", tab: -1 },
     });
+  };
+  /** 상태 막대의 멈춰 있는 작업(M15): 적용 중인 커밋·onto·충돌 파일로 가는 메뉴. 이어 가기·그만두기는 하지 않는다. */
+  const openProgressMenu = (e: ReactMouseEvent, progress: Progress, conflicts: string[]) => {
+    const { repo } = latest.current.state;
+    if (!repo) return;
+    const commit = (sha: string) =>
+      dispatch({ type: "navigate", navigation: { kind: "commit", repo, rev: sha, path: null }, from: { pane: "editor", tab: -1 } });
+    const graph = (sha: string) =>
+      dispatch({ type: "navigate", navigation: { kind: "graph", repo, rev: sha }, from: { pane: "editor", tab: -1 } });
+    const entries: MenuEntry[] = [];
+    if (progress.applying.length > 0) {
+      entries.push({ header: progress.operation === "merge" ? "합치는 커밋" : "적용 중인 커밋" });
+      for (const applying of progress.applying) {
+        entries.push({ label: "커밋 상세", detail: applyingLine(applying), disabled: applying.summary === null, run: () => commit(applying.sha) });
+        entries.push({ label: "그래프에서 보기", detail: shortSha(applying.sha), disabled: applying.summary === null, run: () => graph(applying.sha) });
+      }
+    }
+    if (progress.onto) {
+      entries.push({ header: "새 밑(onto)" });
+      entries.push({ label: "커밋 상세", detail: shortSha(progress.onto), run: () => commit(progress.onto!) });
+    }
+    if (conflicts.length > 0) {
+      entries.push({ header: `충돌 파일 ${conflicts.length}개` });
+      entries.push({ label: "작업트리 변경에서 보기", keys: "D", run: () => openChanges(conflicts[0]) });
+      for (const path of conflicts.slice(0, CONFLICT_MENU_LIMIT)) {
+        entries.push({ label: lastName(path), detail: path, run: () => openChanges(path) });
+      }
+    }
+    entries.push("separator");
+    entries.push({ label: "커밋 그래프", keys: "G", run: openGraph });
+    const box = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    openMenu({ left: box.left, top: box.top, right: box.right, bottom: box.bottom }, entries, { label: "진행 중인 작업" });
   };
   /** 저장소 검색(아래 패널). 한 줄만 고른 글이 있으면 그것을 찾는다. */
   const openSearch = (rev: string | null = null) => {
@@ -1499,7 +1569,9 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
         cursors={cursors}
         statusKey={statusEntry?.key ?? null}
         repoState={repoState}
+        worktreeStatus={worktreeStatus}
         onGraph={openGraph}
+        onProgress={openProgressMenu}
         onGotoLine={gotoLine}
       />
       <HostPlacer hosts={hosts} placements={placements} containers={containers} cursors={cursors} />

@@ -40,6 +40,7 @@
   --change-modified: #0969da;
   --change-deleted: #cf222e;
   --change-untracked: #1a7f37;
+  --change-conflicted: #bc4c00;
 
   /* 그래프 레인 색(plx-core graph::COLORS = 8) */
   --lane-0: #0969da;
@@ -105,6 +106,7 @@
   --change-modified: #4493f8;
   --change-deleted: #f85149;
   --change-untracked: #3fb950;
+  --change-conflicted: #f0883e;
 
   --lane-0: #4493f8;
   --lane-1: #3fb950;
@@ -2713,7 +2715,7 @@ mark.quick-open-hit {
   top: -4px;
 }
 
-/* 파일 트리·탭의 상태 글자(M13): M 수정, A 추가, D 지움, U 추적하지 않음 */
+/* 파일 트리·탭의 상태 글자(M13): M 수정, A 추가, D 지움, U 추적하지 않음, ! 충돌(M15) */
 .change-letter {
   flex: none;
   margin-left: auto;
@@ -2727,10 +2729,12 @@ mark.quick-open-hit {
 .change-letter.added { color: var(--change-added); }
 .change-letter.deleted { color: var(--change-deleted); }
 .change-letter.untracked { color: var(--change-untracked); }
+.change-letter.conflicted { color: var(--change-conflicted); }
 
 .tree-row.change-modified .tree-name { color: var(--change-modified); }
 .tree-row.change-added .tree-name,
 .tree-row.change-untracked .tree-name { color: var(--change-added); }
+.tree-row.change-conflicted .tree-name { color: var(--change-conflicted); }
 
 /* 바뀐 파일이 든 폴더: 이름 뒤의 점 */
 .tree-row.dir.change-inside .tree-name::after {
@@ -2812,4 +2816,14 @@ mark.quick-open-hit {
 .refs-row.gone .history-summary,
 .refs-row.gone .history-sha {
   opacity: 0.55;
+}
+
+/* 멈춰 있는 merge·rebase 등(M15): 상태 막대의 이름표. 충돌이 남았으면 충돌 색 */
+button.status-item.status-progress {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+button.status-item.status-progress.conflicted {
+  color: var(--change-conflicted);
 }

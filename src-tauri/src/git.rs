@@ -469,9 +469,11 @@ pub struct RepoState {
     branch: Option<String>,
     /// HEAD 커밋. 커밋이 하나도 없으면 `null`
     head: Option<String>,
+    /// 멈춰 있는 merge·rebase·cherry-pick·revert·am·bisect(M15). 없으면 `null`
+    progress: Option<plx_core::progress::Progress>,
 }
 
-/// 작업 공간의 머리줄·상태 막대: `path`를 담은 저장소의 작업트리와 HEAD(브랜치, 커밋).
+/// 작업 공간의 머리줄·상태 막대: `path`를 담은 저장소의 작업트리와 HEAD(브랜치, 커밋), 멈춰 있는 작업(M15).
 #[tauri::command]
 pub async fn repo_state(git: State<'_, Arc<GitState>>, path: String) -> Result<RepoState, String> {
     blocking(git, move |git| {
@@ -485,6 +487,7 @@ pub async fn repo_state(git: State<'_, Arc<GitState>>, path: String) -> Result<R
             ),
             branch: repo.head_branch()?,
             head: repo.head()?.map(|id| id.to_string()),
+            progress: plx_core::progress::read(&repo)?,
         })
     })
     .await

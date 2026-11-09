@@ -3,7 +3,7 @@
 // 구독(작업트리·저장소 감시, 창 포커스)은 useWorktreeStatus.ts가 한다.
 import { parentOf, sortListing, type DirListing } from "./tree";
 
-export type ChangeKind = "modified" | "added" | "deleted" | "untracked";
+export type ChangeKind = "modified" | "added" | "deleted" | "untracked" | "conflicted";
 
 /** plx-core/src/changes.rs WorktreeStatus */
 export type WorktreeStatus = {
@@ -61,13 +61,20 @@ export function withUntracked(listing: DirListing, index: StatusIndex): DirListi
   return sortListing({ ...listing, dirs: [...listing.dirs, ...dirs], files: [...listing.files, ...files] });
 }
 
-/** 상태 글자(VS Code와 같다) */
-export const CHANGE_LETTER: Record<ChangeKind, string> = { modified: "M", added: "A", deleted: "D", untracked: "U" };
+/** 상태 글자(VS Code와 같다. 충돌은 VS Code의 `!`) */
+export const CHANGE_LETTER: Record<ChangeKind, string> = {
+  modified: "M",
+  added: "A",
+  deleted: "D",
+  untracked: "U",
+  conflicted: "!",
+};
 
 export const CHANGE_TITLE: Record<ChangeKind, string> = {
   modified: "HEAD 뒤로 바꿨다",
   added: "새 파일 (인덱스에 올렸다)",
   deleted: "작업트리에서 지웠다",
   untracked: "추적하지 않는 새 파일",
+  conflicted: "충돌: 고친 뒤 git add로 해결했다고 알린다",
 };
 
