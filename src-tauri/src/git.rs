@@ -17,6 +17,7 @@ use plx_core::grep::{GrepEvent, GrepQuery, GrepSessions};
 use plx_core::history::{HistoryEvent, HistorySessions, LineRange};
 use plx_core::navigate::{self, Direction, Version};
 use plx_core::reflog::{self, Reflog, Which};
+use plx_core::refs::{self, RefList, Tracking};
 use plx_core::repo::{CommitInfo, FilePath, RepoCache};
 use plx_core::watch::{Change, Watchers};
 use serde::Serialize;
@@ -705,6 +706,29 @@ pub async fn reflog(
     blocking(git, move |git| {
         let repo = git.repos.for_path(Path::new(&repo))?;
         reflog::read(&repo, which)
+    })
+    .await
+}
+
+/// 브랜치·태그 목록(M14). gix로 읽고 git을 띄우지 않는다. upstream·앞섬/뒤처짐은 `ref_tracking`이 따로 준다.
+#[tauri::command]
+pub async fn refs_list(git: State<'_, Arc<GitState>>, repo: String) -> Result<RefList, String> {
+    blocking(git, move |git| {
+        let repo = git.repos.for_path(Path::new(&repo))?;
+        refs::list(&repo)
+    })
+    .await
+}
+
+/// 로컬 브랜치마다 upstream과 앞섬·뒤처짐(`git for-each-ref` 한 번). 목록을 그린 뒤에 받는다.
+#[tauri::command]
+pub async fn ref_tracking(
+    git: State<'_, Arc<GitState>>,
+    repo: String,
+) -> Result<Vec<Tracking>, String> {
+    blocking(git, move |git| {
+        let repo = git.repos.for_path(Path::new(&repo))?;
+        refs::tracking(&repo)
     })
     .await
 }

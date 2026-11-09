@@ -26,6 +26,7 @@ import { RevisionPicker } from "../compare/RevisionPicker";
 import { openInEditor } from "../editor";
 import { GraphView } from "../graph/GraphView";
 import { ReflogView } from "../reflog/ReflogView";
+import { RefsView } from "../refs/RefsView";
 import { SearchView } from "../search/SearchView";
 import { Help } from "../Help";
 import { HistoryView } from "../history/HistoryView";
@@ -526,6 +527,12 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
     if (!repo) return;
     dispatch({ type: "navigate", navigation: { kind: "reflog", repo, which }, from: { pane: "editor", tab: -1 } });
   };
+  /** 브랜치·태그 목록(아래 패널) */
+  const openRefs = () => {
+    const { repo } = latest.current.state;
+    if (!repo) return;
+    dispatch({ type: "navigate", navigation: { kind: "refs", repo, show: "branch" }, from: { pane: "editor", tab: -1 } });
+  };
   /** 두 리비전 비교(고르기 창에서 고른 것, 아래 패널) */
   const openCompare = (compare: Compare) => {
     const { repo } = latest.current.state;
@@ -623,6 +630,13 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
       detail: "아래 패널",
       app: true,
       run: () => openReflog("stash"),
+    },
+    {
+      id: "refs",
+      label: "브랜치·태그",
+      detail: "upstream 대비 앞섬·뒤처짐 (아래 패널)",
+      app: true,
+      run: openRefs,
     },
     {
       id: "browse",
@@ -991,6 +1005,8 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
           <SearchView {...common} repo={entry.repo} rev={entry.rev} query={entry.query} />
         ) : entry.view === "reflog" ? (
           <ReflogView {...common} repo={entry.repo} which={entry.which} />
+        ) : entry.view === "refs" ? (
+          <RefsView {...common} repo={entry.repo} show={entry.show} />
         ) : (
           <CommitView
             {...common}
@@ -1218,6 +1234,7 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
         { label: "파일 찾기", keys: `f · ${MOD}P`, run: quickOpen.open },
         { label: "커밋 그래프", keys: "G", run: openGraph },
         { label: "작업트리 변경", keys: "D", detail: "커밋하지 않은 것", run: () => openChanges() },
+        { label: "브랜치·태그", detail: "앞섬·뒤처짐", run: openRefs },
         { label: "폴더 히스토리", detail: "저장소 전체", run: () => openHistory(repo, ".", null, fromActive()) },
         "separator",
         { label: "리비전 둘러보기…", detail: "파일 트리를 그 커밋 시점으로", run: () => setPickingRev(true) },

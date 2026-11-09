@@ -76,6 +76,8 @@ pub fn run() {
             git::worktree_status,
             git::ref_names,
             git::reflog,
+            git::refs_list,
+            git::ref_tracking,
             git::grep_open,
             git::grep_cancel,
             git::file_versions,

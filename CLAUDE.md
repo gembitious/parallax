@@ -12,7 +12,7 @@ GitLens의 핵심 흐름(줄 → 커밋 → 부모 리비전 blame → 파일·�
 ## 범위
 - 한다: blame, 파일·라인 히스토리, 커밋 상세와 diff, 커밋 그래프, 저장소 변경 실시간 반영, 작업트리 변경 보기(M7-1),
   두 리비전 비교(M7-2), 저장소 검색(M7-3), 리비전 둘러보기(M7-4), 작업 공간 복원(M7-5), reflog·stash 보기(M10),
-  blame 옵션(M11), 코드 변천 찾기(M12), 트리·탭·줄의 변경 표시(M13),
+  blame 옵션(M11), 코드 변천 찾기(M12), 트리·탭·줄의 변경 표시(M13), 브랜치·태그 목록(M14),
   앱 안에서 저장소 열기(첫 화면·최근 저장소·끌어 놓기)와 코드 읽기(M6의 파일 트리·탭, 고치기·저장은 없다)
 - 안 한다: 편집, LSP, 내장 터미널, 스테이징·커밋·푸시 등 저장소를 바꾸는 작업 (Claude Code와 lazygit의 몫)
 - 범위를 넓히려면 아래 "결정 기록"에 이유를 먼저 남긴다.
@@ -70,7 +70,7 @@ scripts/           설치·확인 스크립트 (macOS shim, 앱 자동 확인 ch
 .github/workflows/ CI: Windows·macOS·Linux에서 검사(포맷·clippy·테스트)와 앱 확인(릴리스 빌드 + check-app.sh),
                    확인을 통과한 설치 파일을 실행 결과(Artifacts)에 올리고 `v<버전>` 태그면 릴리스 초안을 만든다
                    (릴리스 설명의 설치 안내: .github/release-notes.md)
-src/               React UI (첫 화면은 start/, 설정 화면은 settings/, reflog·stash 목록은 reflog/)
+src/               React UI (첫 화면은 start/, 설정 화면은 settings/, reflog·stash 목록은 reflog/, 브랜치·태그 목록은 refs/)
 bench/             참조 저장소 준비 스크립트, git 측정 하네스(plx-bench), 앱 지연 측정, 측정 결과(results.md)
 fixtures/          테스트 저장소 생성 스크립트 (rename, 이동, merge, CRLF, 한글 경로·내용),
                    git-ai가 노트를 쓴 저장소 번들과 `git-ai blame` 기대값(git-ai/)
@@ -250,6 +250,10 @@ blame은 작업트리에 있는 파일만 받고(컴파일러·grep 형식 `<fil
 - reflog·stash(M10): 명령 팔레트·보기 메뉴의 "HEAD reflog"·"stash 목록"은 아래 패널에 HEAD가 거쳐 간 커밋(이
   워크트리)·stash를 최근 것부터 보인다. `s` 둘 사이 바꾸기, `Enter` 커밋 상세(stash는 넣은 변경), `u` stash의 추적하지
   않던 파일(`stash -u`), `d` 작업트리와 비교, `G` 그래프, `T` 파일 트리, `F` 찾기, `y` sha 복사, `/` 거르기.
+- 브랜치·태그(M14): 명령 팔레트·보기 메뉴·트리 머리 우클릭의 "브랜치·태그"는 아래 패널에 로컬 브랜치(지금 브랜치 ●가
+  맨 위, upstream 대비 `↑앞섬 ↓뒤처짐`·`gone`, 체크아웃한 워크트리 `⌂ 이름`)·원격 브랜치·태그를 최근 커밋부터 보인다.
+  `s` 종류 바꾸기, `Enter` 끝 커밋 상세, `G` 그래프, `d` HEAD에서 갈라진 뒤 바꾼 것(`HEAD...이름`), `u` upstream에서 갈라진
+  뒤 바꾼 것, `w` 작업트리와 비교, `T` 파일 트리, `F` 찾기, `y` sha 복사, `/` 거르기.
 - 새 버전 알림(M8-2): 더 새 릴리스가 있으면 상태 막대(첫 화면)에 `새 버전 v…`가 보이고 누르면 그 릴리스 페이지를
   브라우저로 연다. 명령 팔레트의 "새 버전 확인"은 바로 묻고, "새 버전 알림 끄기·켜기"로 묻기를 끄고 켠다.
 - 파일 찾기(Quick Open): 어느 화면에서든 `f`(입력란 밖이면)·Ctrl+P(macOS ⌘P). 추적 파일을 퍼지 검색한다
@@ -690,3 +694,11 @@ blame은 작업트리에 있는 파일만 받고(컴파일러·grep 형식 `<fil
   파일을 읽어 git에 주므로 같은 내용(clean)과 HEAD blob의 줄 diff(`,`의 줄 옮기기와 같은 `LineMap`, `git diff -U0`과 같은
   hunk)만 더하고, git blame을 띄운 뒤에 세 첫 화면을 늦추지 않는다. 두 쪽 합 4MB가 넘으면 보내지 않는다. 표시는 VS Code와
   같다(양쪽이 있는 hunk는 모두 바꿈). 작업트리 blame은 파일이 바뀌면 화면을 새로 만들므로 표시도 함께 새로 온다.
+- 2026-11-09: 브랜치·태그 목록(M14). 사용자와 정한 다음 작업이다. 참조 목록과 끝 커밋(요약·시각, 태그는 벗긴 커밋)·
+  워크트리는 gix로 읽고(`plx_core::refs::list`, git을 띄우지 않는다) 목록을 먼저 그린다. upstream과 앞섬·뒤처짐만
+  `git for-each-ref --format=%(upstream)%(upstream:track)`을 한 번 띄워 이어 받는다(`refs::tracking`): upstream은
+  `branch.<이름>.remote`·`merge`와 `remote.<이름>.fetch` 매핑을 풀어야 하고 수는 두 끝의 공통 조상을 세야 하는데, 이것을
+  gix로 다시 짜면 git(`git status`·`git branch -vv`)과 어긋날 수 있고(시각이 어긋난 커밋, `git replace`·grafts·얕은 클론),
+  브랜치마다 `git rev-list`를 띄우는 것보다 한 번이 싸다. for-each-ref는 track 글을 번역하지 않는다(`ahead 1, behind 2`,
+  `gone`). 비교(`d`, `u`, `w`)는 sha가 아니라 이름으로 연다(M7-2의 고르기 창과 같다: 탭 이름이 `HEAD...feature`로 읽히고,
+  브랜치가 움직이면 다시 열 때 따라간다). 원격 HEAD 같은 기호 참조와 UTF-8이 아닌 이름은 뺀다. 참조는 2만 개까지(최근 것).

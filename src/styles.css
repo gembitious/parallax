@@ -2760,3 +2760,56 @@ mark.quick-open-hit {
   line-height: inherit;
   cursor: pointer;
 }
+
+/* ---------------------------------------------------------------- 브랜치 · 태그 (M14) */
+.refs-current {
+  flex-shrink: 0;
+  width: 10px;
+  color: var(--accent);
+  font-size: 9px;
+  text-align: center;
+}
+
+.refs-name {
+  flex-shrink: 0;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.refs-row.current .refs-name {
+  font-weight: 600;
+}
+
+.refs-worktree {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-color: var(--syn-function);
+  color: var(--syn-function);
+}
+
+.refs-track {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.refs-track.diverged {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.refs-track.gone {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.refs-annotated {
+  color: var(--muted);
+}
+
+.refs-row.gone .history-summary,
+.refs-row.gone .history-sha {
+  opacity: 0.55;
+}

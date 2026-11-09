@@ -28,6 +28,7 @@ pub mod log;
 pub mod navigate;
 pub mod recent;
 pub mod reflog;
+pub mod refs;
 pub mod release;
 pub mod renames;
 pub mod repo;
