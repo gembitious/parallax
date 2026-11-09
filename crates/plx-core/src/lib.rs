@@ -21,6 +21,7 @@ pub mod graph;
 pub mod grep;
 pub mod history;
 pub mod instance;
+pub mod line_changes;
 pub mod line_log;
 pub mod linemap;
 pub mod log;

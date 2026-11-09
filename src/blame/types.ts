@@ -1,4 +1,5 @@
 // 백엔드(crates/plx-core)가 보내는 blame 데이터. serde 직렬화 모양과 같아야 한다.
+import type { LineChange } from "./lineChanges";
 
 /** plx-core/src/blame.rs BlameCommit */
 export type BlameCommit = {
@@ -61,6 +62,8 @@ export type BlameMeta = {
   head: string | null;
   content: Decoded | null;
   binary: boolean;
+  /** 작업트리 blame의 HEAD 뒤로 바뀐 줄(M13). 리비전 blame·바이너리·너무 큰 파일이면 null */
+  changes: LineChange[] | null;
 };
 
 /** plx-core/src/blame_session.rs SessionEvent: meta → chunk* → done | error | cancelled */

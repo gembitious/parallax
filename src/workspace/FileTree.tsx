@@ -1,4 +1,5 @@
-// 파일 트리(왼쪽): 저장소의 추적 파일을 폴더별로 보인다(인덱스, 백엔드 files_dir. Quick Open과 같은 목록). 파일을
+// 파일 트리(왼쪽): 저장소의 추적 파일을 폴더별로 보인다(인덱스, 백엔드 files_dir. Quick Open과 같은 목록). 작업트리면 변경 표시(M13)와
+// 추적하지 않는 파일(무시한 것은 빼고)도 보인다(status.ts). 파일을
 // 누르면 미리보기 탭, 두 번 누르거나 Enter면 보통 탭, Mod+Enter면 옆(오른쪽) 에디터 그룹에 연다. 우클릭은 열기·옆에
 // 열기·히스토리·에디터로 열기·경로 복사.
 // 보이는 탭의 파일은 펼쳐서 고른다. 저장소가 바뀌거나(HEAD·참조) 창으로 돌아오면 펼친 폴더를 다시 읽는다(git add로
@@ -14,6 +15,7 @@ import { toast } from "../Toasts";
 import { watchRepo } from "../watch";
 import { MOD } from "./keys";
 import { absolutePath, copyPath } from "./paths";
+import { CHANGE_LETTER, CHANGE_TITLE, withUntracked, type StatusIndex } from "./status";
 import { ancestorsOf, sortListing, treeKey, treeRows, type DirListing, type TreeMove, type TreeRow } from "./tree";
 
 /** 행 높이(px). styles.css의 .tree-row와 같다. */
@@ -29,6 +31,8 @@ type Props = {
   focused: boolean;
   /** 바뀌면 (키를 받는 칸일 때) 포커스를 다시 가져온다: 그 위에 뜬 창(Quick Open 등)이 닫혔다 */
   focusTick: number;
+  /** 작업트리 변경 표시(M13). 리비전 둘러보기면 null. 추적하지 않는 파일도 이것으로 트리에 더한다. */
+  status: StatusIndex | null;
   /** 보이는 탭의 작업트리 파일(저장소 기준). 펼쳐서 고른다. */
   activeFile: string | null;
   onOpen(path: string, missing: boolean, preview: boolean): void;
@@ -40,7 +44,7 @@ type Props = {
   onLeave(): void;
 };
 
-export function FileTree({ repo, rev, focused, focusTick, activeFile, onOpen, onOpenSide, onHistory, onLeave }: Props) {
+export function FileTree({ repo, rev, focused, focusTick, status, activeFile, onOpen, onOpenSide, onHistory, onLeave }: Props) {
   const [listings, setListings] = useState<ReadonlyMap<string, DirListing>>(() => new Map());
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const [selected, setSelected] = useState<string | null>(null);
@@ -48,7 +52,14 @@ export function FileTree({ repo, rev, focused, focusTick, activeFile, onOpen, on
   const [viewport, setViewport] = useState({ top: 0, height: 0 });
   const listRef = useRef<HTMLDivElement>(null);
   const drawnRange = useRef<DrawnRange>({ start: 0, end: 0, height: 0 });
-  const rows = useMemo(() => treeRows(listings, expanded), [listings, expanded]);
+  // 추적하지 않는 파일(인덱스에 없다)을 상태에서 더한다.
+  const shown = useMemo(() => {
+    if (!status || status.untracked.size === 0) return listings;
+    const merged = new Map<string, DirListing>();
+    for (const [dir, listing] of listings) merged.set(dir, withUntracked(listing, status));
+    return merged;
+  }, [listings, status]);
+  const rows = useMemo(() => treeRows(shown, expanded), [shown, expanded]);
   const latest = useRef({ rows, listings, expanded, selected });
   latest.current = { rows, listings, expanded, selected };
 
@@ -227,6 +238,9 @@ export function FileTree({ repo, rev, focused, focusTick, activeFile, onOpen, on
           if (row.dir) classes.push("dir");
           if (row.missing) classes.push("missing");
           if (row.path === selected) classes.push("selected");
+          const change = row.dir ? undefined : status?.files.get(row.path);
+          if (change) classes.push(`change-${change}`);
+          else if (row.dir && status?.dirs.has(row.path)) classes.push("change-inside");
           return (
             <div
               key={row.path}
@@ -237,7 +251,15 @@ export function FileTree({ repo, rev, focused, focusTick, activeFile, onOpen, on
               aria-selected={row.path === selected}
               className={classes.join(" ")}
               style={{ top: i * ROW_HEIGHT, height: ROW_HEIGHT, paddingLeft: 8 + row.depth * INDENT_PX }}
-              title={row.missing ? `${row.path} (작업트리에서 지움: HEAD 버전을 연다)` : row.path}
+              title={
+                row.missing
+                  ? `${row.path} (작업트리에서 지움: HEAD 버전을 연다)`
+                  : change
+                    ? `${row.path}\n${CHANGE_TITLE[change]}`
+                    : row.dir && status?.dirs.has(row.path)
+                      ? `${row.path}\n안에 바뀐 파일이 있다`
+                      : row.path
+              }
               onClick={() =>
                 apply(row.dir ? { kind: "toggle", path: row.path } : { kind: "open", path: row.path, missing: row.missing, preview: true })
               }
@@ -253,6 +275,7 @@ export function FileTree({ repo, rev, focused, focusTick, activeFile, onOpen, on
               <span className="tree-name">{row.name}</span>
               {row.loading && <span className="tree-note">읽는 중…</span>}
               {row.missing && <span className="tree-note">지움</span>}
+              {change && !row.missing && <span className={`change-letter ${change}`}>{CHANGE_LETTER[change]}</span>}
             </div>
           );
         })}

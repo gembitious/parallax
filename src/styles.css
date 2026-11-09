@@ -35,6 +35,11 @@
   --uncommitted: #1a7f37;
   /* AI가 쓴 줄(git-ai 노트) */
   --ai: #8250df;
+  /* 작업트리 변경 표시(M13): 트리·탭의 상태 글자, blame의 바뀐 줄 거터 */
+  --change-added: #1a7f37;
+  --change-modified: #0969da;
+  --change-deleted: #cf222e;
+  --change-untracked: #1a7f37;
 
   /* 그래프 레인 색(plx-core graph::COLORS = 8) */
   --lane-0: #0969da;
@@ -96,6 +101,10 @@
   --heat-7: #f0883e;
   --uncommitted: #3fb950;
   --ai: #a371f7;
+  --change-added: #3fb950;
+  --change-modified: #4493f8;
+  --change-deleted: #f85149;
+  --change-untracked: #3fb950;
 
   --lane-0: #4493f8;
   --lane-1: #3fb950;
@@ -185,16 +194,39 @@ kbd,
 
 /* 탭 막대와 같은 높이라 아래 선이 이어진다 */
 .sidebar-header {
+  display: flex;
   flex-shrink: 0;
+  gap: 8px;
+  align-items: center;
   height: 32px;
   padding: 0 12px;
   overflow: hidden;
   border-bottom: 1px solid var(--border);
   font-size: 12px;
   font-weight: 600;
-  line-height: 31px;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sidebar-repo {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 커밋하지 않은 변경 수(M13): 누르면 작업트리 변경 */
+.sidebar-changes {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 0 6px;
+  border: 1px solid var(--change-modified);
+  border-radius: 10px;
+  background: none;
+  color: var(--change-modified);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 16px;
+  cursor: pointer;
 }
 
 /* 리비전 둘러보기(M7-4): 트리가 보이는 커밋 */
@@ -2632,4 +2664,99 @@ mark.quick-open-hit {
 .reflog-row.gone .history-summary,
 .reflog-row.gone .history-sha {
   opacity: 0.55;
+}
+
+/* 작업트리 blame의 바뀐 줄 거터(M13, blame/changeGutter.ts): 줄 번호 오른쪽의 좁은 막대 */
+.cm-change-gutter {
+  width: 6px;
+}
+
+.cm-change-gutter .cm-gutterElement {
+  padding: 0;
+}
+
+.cm-change {
+  position: relative;
+  height: 100%;
+  cursor: pointer;
+}
+
+.cm-change.added,
+.cm-change.modified {
+  margin-left: 1px;
+  width: 3px;
+}
+
+.cm-change.added {
+  background: var(--change-added);
+}
+
+.cm-change.modified {
+  background: var(--change-modified);
+}
+
+.cm-change.deleted-below::after,
+.cm-change.deleted-above::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  border-left: 5px solid var(--change-deleted);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+}
+
+.cm-change.deleted-below::after {
+  bottom: -4px;
+}
+
+.cm-change.deleted-above::after {
+  top: -4px;
+}
+
+/* 파일 트리·탭의 상태 글자(M13): M 수정, A 추가, D 지움, U 추적하지 않음 */
+.change-letter {
+  flex: none;
+  margin-left: auto;
+  padding: 0 6px 0 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.change-letter.modified { color: var(--change-modified); }
+.change-letter.added { color: var(--change-added); }
+.change-letter.deleted { color: var(--change-deleted); }
+.change-letter.untracked { color: var(--change-untracked); }
+
+.tree-row.change-modified .tree-name { color: var(--change-modified); }
+.tree-row.change-added .tree-name,
+.tree-row.change-untracked .tree-name { color: var(--change-added); }
+
+/* 바뀐 파일이 든 폴더: 이름 뒤의 점 */
+.tree-row.dir.change-inside .tree-name::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 6px;
+  border-radius: 50%;
+  vertical-align: middle;
+  background: var(--change-modified);
+  opacity: 0.8;
+}
+
+.tab.change-modified .tab-name { color: var(--change-modified); }
+.tab.change-added .tab-name,
+.tab.change-untracked .tab-name { color: var(--change-added); }
+.tab.change-deleted .tab-name { color: var(--change-deleted); }
+
+/* blame 머리줄의 "바뀐 곳 n"(M13): 누르면 작업트리 변경 */
+.badge.change-badge {
+  border-color: var(--change-modified);
+  background: none;
+  color: var(--change-modified);
+  font: inherit;
+  font-size: 11px;
+  line-height: inherit;
+  cursor: pointer;
 }

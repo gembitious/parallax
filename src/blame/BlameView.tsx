@@ -12,7 +12,8 @@ import { blameChanged } from "./gutter";
 import { blameGutterShown, toggleBlameGutter, useBlameGutter } from "./gutterSetting";
 import { BlameModel } from "./model";
 import { aiSummary, type AiAttribution, type AiItem } from "./ai";
-import type { Navigation } from "../nav";
+import { WORKTREE_CHANGES, type Navigation } from "../nav";
+import { nextChange } from "./lineChanges";
 import { headMoved, watchFile, watchRepo } from "../watch";
 import { WorktreePicker } from "../worktree/WorktreePicker";
 import { useQuickOpen } from "../quickopen/QuickOpen";
@@ -23,7 +24,7 @@ import { toggleHud } from "../Hud";
 import { pointCursor, selectedLines } from "../code";
 import { absolutePath, copyPath } from "../workspace/paths";
 import { gotoLine, openSearchPanel } from "@codemirror/search";
-import { runScopeHandlers } from "@codemirror/view";
+import { EditorView, runScopeHandlers } from "@codemirror/view";
 import { copyItem, openContextMenu, selectedText, type MenuEntry } from "../menu/Menu";
 import { usePublish, type ViewSlot } from "../menu/registry";
 import { blameSwitch } from "../worktree/switch";
@@ -120,6 +121,11 @@ type Actions = {
   help(): boolean;
   escape(): boolean;
   toggleGutter(): boolean;
+  /** `]`·`[` 다음·이전 바뀐 곳(작업트리 blame, M13) */
+  nextChange(): boolean;
+  previousChange(): boolean;
+  /** 작업트리 변경에서 이 파일(바뀐 줄 거터를 눌렀다) */
+  changes(): boolean;
 };
 
 type NoEditorAction = "back" | "help" | "history" | "worktrees" | "graph" | "openEditor" | "older" | "newer" | "escape";
@@ -254,6 +260,13 @@ export function BlameView({
         detail: MOVES_DETAIL[moves],
         run: () => updateSettings({ blameMoves: moves }),
       })),
+    ...(meta?.changes
+      ? [
+          { label: "다음 바뀐 곳", keys: "]", detail: "HEAD 뒤로 바꾼 줄", run: run("nextChange") },
+          { label: "이전 바뀐 곳", keys: "[", detail: "HEAD 뒤로 바꾼 줄", run: run("previousChange") },
+          { label: "작업트리 변경에서 이 파일 보기", detail: "HEAD ↔ 작업트리 diff", run: run("changes") },
+        ]
+      : []),
     { label: "줄로 이동", keys: "Ctrl+G", run: () => void (editor.current && gotoLine(editor.current.view)) },
     ...commonCommands({
       files: run("files"),
@@ -311,6 +324,21 @@ export function BlameView({
     if (inline && view.state.doc.lineAt(view.state.selection.main.head).number === n) return inline;
     const end = view.coordsAtPos(line.to) ?? coords;
     return new DOMRect(end.right, coords.top, 1, coords.bottom - coords.top);
+  };
+
+  /** `]`·`[`: 바뀐 곳으로 커서를 옮긴다(M13). 작업트리 blame이 아니면 키를 넘긴다. */
+  const jumpToChange = (direction: 1 | -1) => {
+    const view = editor.current?.view;
+    const changes = latest.current.meta?.changes;
+    if (!view || !changes) return false;
+    const target = nextChange(changes, cursorLine(), direction);
+    if (target === null) {
+      showToast("HEAD 뒤로 바꾼 줄이 없다");
+      return true;
+    }
+    const from = view.state.doc.line(Math.min(target, view.state.doc.lines)).from;
+    view.dispatch({ selection: { anchor: from }, effects: EditorView.scrollIntoView(from, { y: "center" }) });
+    return true;
   };
 
   const cursorLine = () => {
@@ -587,6 +615,14 @@ export function BlameView({
       toggleBlameGutter();
       return true;
     },
+    nextChange: () => jumpToChange(1),
+    previousChange: () => jumpToChange(-1),
+    changes() {
+      const m = latest.current.meta;
+      if (!m || m.rev !== null) return false;
+      onNavigate({ kind: "commit", repo: m.repo, rev: WORKTREE_CHANGES.base, path: m.path, compare: WORKTREE_CHANGES });
+      return true;
+    },
     escape() {
       if (latest.current.help) {
         setHelp(false);
@@ -708,6 +744,9 @@ export function BlameView({
               path: m.path,
               line,
               showGutter: blameGutterShown(),
+              changes: m.changes && m.rev === null
+                ? { list: m.changes, lineCount: m.content.lineCount, onClick: () => actions.current.changes() }
+                : null,
               onCursor: report,
               gutter: {
                 model: blame,
@@ -730,6 +769,8 @@ export function BlameView({
                 card: () => actions.current.card(),
                 openEditor: () => actions.current.openEditor(),
                 toggleGutter: () => actions.current.toggleGutter(),
+                nextChange: () => actions.current.nextChange(),
+                previousChange: () => actions.current.previousChange(),
                 palette: () => actions.current.palette(),
                 back: () => actions.current.back(),
                 help: () => actions.current.help(),
@@ -930,6 +971,7 @@ export function BlameView({
 
   const blame = model.current;
   const lineCount = meta?.content?.lineCount ?? 0;
+  const changeCount = meta?.rev === null ? (meta.changes?.length ?? 0) : 0;
   // AI가 쓴 줄 수(git-ai 노트). 응답이 오거나 blame이 끝나면 다시 센다.
   const ai = useMemo(() => {
     const m = model.current;
@@ -955,6 +997,16 @@ export function BlameView({
           </span>
         )}
         {crlf && <span className="badge">CRLF</span>}
+        {changeCount > 0 && (
+          <button
+            type="button"
+            className="badge change-badge"
+            title={"HEAD 뒤로 바꾼 곳 (]·[로 옮겨 간다)\n누르면 작업트리 변경에서 이 파일을 본다"}
+            onClick={() => actions.current.changes()}
+          >
+            바뀐 곳 {formatCount(changeCount)}
+          </button>
+        )}
         {ai && ai.lines > 0 && (
           <span
             className="badge ai"

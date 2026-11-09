@@ -7,7 +7,7 @@ mod common;
 use std::path::Path;
 
 use common::{commit_all, git, git_text, scratch_repo};
-use plx_core::changes::{self, Comparison, Side};
+use plx_core::changes::{self, Comparison, Side, StatusKind};
 use plx_core::commit::{self, FileStatus};
 use plx_core::repo::Repo;
 
@@ -323,6 +323,99 @@ fn ref_names_list_branches_remotes_and_tags() {
             ("origin/main".to_owned(), Remote, false),
             ("v1.0".to_owned(), Tag, false),
             ("v2.0".to_owned(), Tag, false),
+        ]
+    );
+}
+
+// ---------------------------------------------------------------- 트리·탭의 변경 표시(M13)
+
+/// `git diff HEAD --name-status --no-renames`(추적 파일)과 `git ls-files --others --exclude-standard`(추적하지 않는
+/// 파일)로 만든 기대값
+fn git_status_rows(dir: &Path) -> Vec<(String, StatusKind)> {
+    let text = |b: &[u8]| String::from_utf8(b.to_vec()).expect("UTF-8 경로");
+    let out = git(
+        dir,
+        &["diff", "HEAD", "--name-status", "--no-renames", "-z"],
+    );
+    let mut tokens = out.split(|&b| b == 0).filter(|t| !t.is_empty());
+    let mut rows = Vec::new();
+    while let Some(status) = tokens.next() {
+        let kind = match status[0] {
+            b'A' => StatusKind::Added,
+            b'D' => StatusKind::Deleted,
+            b'M' | b'T' => StatusKind::Modified,
+            other => panic!("모르는 상태 {}", other as char),
+        };
+        rows.push((text(tokens.next().unwrap()), kind));
+    }
+    let out = git(dir, &["ls-files", "--others", "--exclude-standard", "-z"]);
+    for path in out.split(|&b| b == 0).filter(|t| !t.is_empty()) {
+        rows.push((text(path), StatusKind::Untracked));
+    }
+    rows.sort();
+    rows
+}
+
+#[test]
+fn worktree_status_matches_git() {
+    let dir = base_repo("changes-status");
+    write(&dir, "a.txt", &common::ten_lines(&[3]));
+    std::fs::remove_file(dir.join("b.txt")).unwrap();
+    write(&dir, "new/untracked.txt", "fresh\n");
+    write(&dir, "new/deeper/also.txt", "fresh\n");
+    write(&dir, "ignored.log", "nope\n");
+    write(&dir, "staged.txt", "s\n");
+    git(&dir, &["add", "staged.txt"]);
+    // git mv: 옛 이름은 지움, 새 이름은 추가(짝짓지 않는다)
+    git(&dir, &["mv", "dir/c.txt", "dir/d.txt"]);
+    write(&dir, "한글 경로/파일.txt", "가\n다\n");
+    // 올렸다가 되돌린 파일은 바뀌지 않은 것이다.
+    write(&dir, "moved.txt", "staged\n");
+    git(&dir, &["add", "moved.txt"]);
+    write(&dir, "moved.txt", &"moving line of text\n".repeat(20));
+
+    let repo = Repo::discover(&dir).unwrap();
+    let index = std::fs::read(dir.join(".git/index")).unwrap();
+    let status = changes::worktree_status(&repo).unwrap();
+    // 읽기 전용: 인덱스(stat)를 고쳐 쓰지 않는다.
+    assert_eq!(std::fs::read(dir.join(".git/index")).unwrap(), index);
+    assert_eq!(
+        status.head.as_deref(),
+        Some(git_text(&dir, &["rev-parse", "HEAD"]).as_str())
+    );
+    let mut ours: Vec<(String, StatusKind)> =
+        status.files.into_iter().map(|f| (f.path, f.kind)).collect();
+    ours.sort();
+    assert_eq!(ours, git_status_rows(&dir));
+    assert!(
+        ours.iter()
+            .any(|(p, k)| p == "new/deeper/also.txt" && *k == StatusKind::Untracked)
+    );
+    assert!(
+        ours.iter()
+            .all(|(p, _)| p != "moved.txt" && p != "ignored.log")
+    );
+}
+
+#[test]
+fn worktree_status_without_commits() {
+    let dir = scratch_repo("changes-status-empty");
+    write(&dir, "first.txt", "1\n");
+    write(&dir, "staged.txt", "2\n");
+    git(&dir, &["add", "staged.txt"]);
+    let repo = Repo::discover(&dir).unwrap();
+    let status = changes::worktree_status(&repo).unwrap();
+    assert_eq!(status.head, None);
+    let ours: Vec<(&str, StatusKind)> = status
+        .files
+        .iter()
+        .map(|f| (f.path.as_str(), f.kind))
+        .collect();
+    assert_eq!(
+        ours,
+        vec![
+            ("first.txt", StatusKind::Untracked),
+            ("staged.txt", StatusKind::Added)
         ]
     );
 }

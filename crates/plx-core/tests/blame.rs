@@ -7,6 +7,7 @@ use std::path::Path;
 
 use common::{commit_all, encoding, git, git_text, history, scratch_repo, ten_lines};
 use plx_core::blame::{Blame, BlameCommit, BlameOptions, Moves, is_uncommitted};
+use plx_core::line_changes::{LineChange, LineChangeKind};
 use plx_core::linemap::LineMap;
 use plx_core::repo::Repo;
 
@@ -1257,4 +1258,107 @@ fn blame_options_change_the_cache_key() {
     assert!(run(w));
     assert!(run(wm));
     assert!(run(BlameOptions::default()));
+}
+
+// ---------------------------------------------------------------- 바뀐 줄 표시(M13)
+
+/// `git diff -U0 HEAD -- <path>`(작업트리)의 hunk로 만든 기대값. 화면 줄은 작업트리 줄이다.
+fn git_line_changes(dir: &Path, path: &str) -> Vec<LineChange> {
+    let out = git_text(
+        dir,
+        &[
+            "diff",
+            "-U0",
+            "--no-color",
+            "--no-ext-diff",
+            "--diff-algorithm=myers",
+            "HEAD",
+            "--",
+            path,
+        ],
+    );
+    let range = |spec: &str| -> (u32, u32) {
+        match spec.split_once(',') {
+            Some((s, c)) => (s.parse().unwrap(), c.parse().unwrap()),
+            None => (spec.parse().unwrap(), 1),
+        }
+    };
+    out.lines()
+        .filter_map(|l| l.strip_prefix("@@ -"))
+        .map(|l| {
+            let mut parts = l.split(' ');
+            let (_, removed) = range(parts.next().unwrap());
+            let (start, count) = range(parts.next().unwrap().trim_start_matches('+'));
+            if count == 0 {
+                // 개수가 0이면 시작 값은 "그 앞 줄"이다.
+                LineChange {
+                    kind: LineChangeKind::Deleted,
+                    start,
+                    end: start,
+                    removed,
+                }
+            } else {
+                LineChange {
+                    kind: if removed == 0 {
+                        LineChangeKind::Added
+                    } else {
+                        LineChangeKind::Modified
+                    },
+                    start,
+                    end: start + count - 1,
+                    removed,
+                }
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn worktree_blame_reports_changed_lines_like_git_diff() {
+    let dir = scratch_repo("blame-line-changes");
+    let lines =
+        |n: usize| -> Vec<String> { (1..=n).map(|i| format!("fn line_{i}() {{}}\n")).collect() };
+    let mut text = lines(40);
+    text[2] = "}\n".into();
+    text[3] = "\n".into();
+    text[4] = "}\n".into();
+    std::fs::write(dir.join("code.rs"), text.concat()).unwrap();
+    std::fs::write(dir.join("crlf.txt"), "a\r\nb\r\nc\r\n").unwrap();
+    commit_all(&dir, "base");
+    // 맨 앞을 지우고, 더하고, 바꾸고, 같은 모양의 줄 사이(slider)에 끼우고, 끝을 지운다.
+    let mut edited = text.clone();
+    edited.remove(0);
+    edited.insert(5, "}\n\n}\n".into());
+    edited[10] = "fn changed() {}\n".into();
+    edited.insert(20, "// new\n// lines\n".into());
+    edited.truncate(edited.len() - 3);
+    std::fs::write(dir.join("code.rs"), edited.concat()).unwrap();
+    // CRLF 작업트리의 바뀐 줄 하나(clean 뒤에 견준다)
+    std::fs::write(dir.join("crlf.txt"), "a\r\nB\r\nc\r\n").unwrap();
+    for path in ["code.rs", "crlf.txt"] {
+        let (meta, _) = session(&dir.join(path), None);
+        let ours = meta.changes.expect("작업트리 blame은 바뀐 줄을 보낸다");
+        assert!(!ours.is_empty(), "{path}");
+        assert_eq!(ours, git_line_changes(&dir, path), "{path}");
+    }
+
+    // 고정 리비전 blame에는 없고, 바뀌지 않은 파일은 빈 목록이다.
+    let (meta, _) = session(&dir.join("code.rs"), Some("HEAD"));
+    assert_eq!(meta.changes, None);
+    git(&dir, &["checkout", "-q", "--", "code.rs"]);
+    let (meta, _) = session(&dir.join("code.rs"), None);
+    assert_eq!(meta.changes, Some(vec![]));
+
+    // 추적하지 않는 파일은 모두 더한 줄이다.
+    std::fs::write(dir.join("new.txt"), "x\ny\n").unwrap();
+    let (meta, _) = session(&dir.join("new.txt"), None);
+    assert_eq!(
+        meta.changes,
+        Some(vec![LineChange {
+            kind: LineChangeKind::Added,
+            start: 1,
+            end: 2,
+            removed: 0
+        }])
+    );
 }

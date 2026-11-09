@@ -4,10 +4,13 @@
 import { useEffect, useRef, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { MOD } from "./keys";
 import { topOf, type Group, type Tab } from "./state";
+import { CHANGE_LETTER, CHANGE_TITLE, type StatusIndex } from "./status";
 import { tabLabel } from "./tabs";
 
 type Props = {
   group: Group;
+  /** 작업트리 변경 표시(M13): 작업트리 blame 탭의 파일 상태 */
+  status: StatusIndex;
   onActivate(tab: number): void;
   onPin(tab: number): void;
   onClose(tab: number): void;
@@ -17,7 +20,7 @@ type Props = {
   onDragStart(tab: Tab, e: ReactPointerEvent<HTMLElement>): void;
 };
 
-export function TabBar({ group, onActivate, onPin, onClose, onMenu, onDragStart }: Props) {
+export function TabBar({ group, status, onActivate, onPin, onClose, onMenu, onDragStart }: Props) {
   const activeRef = useRef<HTMLDivElement>(null);
   // 아무것도 돌려주지 않는다: 새 Chromium(Windows CI의 WebView2)은 scrollIntoView가 Promise를 돌려줘, 그것을 정리
   // 함수로 받은 React가 탭이 바뀔 때 부르다 실패하고 화면을 모두 내렸다.
@@ -27,11 +30,15 @@ export function TabBar({ group, onActivate, onPin, onClose, onMenu, onDragStart 
   return (
     <div className="tab-bar" role="tablist" aria-label="열린 탭" data-tabbar={group.key}>
       {group.tabs.map((tab) => {
-        const { name, detail, title } = tabLabel(topOf(tab));
+        const top = topOf(tab);
+        const { name, detail, title } = tabLabel(top);
+        const change =
+          top.view === "blame" && top.target.repo !== null && top.target.rev === null ? status.files.get(top.target.path) : undefined;
         const active = tab.key === group.active;
         const classes = ["tab"];
         if (active) classes.push("active");
         if (tab.preview) classes.push("preview");
+        if (change) classes.push(`change-${change}`);
         return (
           <div
             key={tab.key}
@@ -40,7 +47,7 @@ export function TabBar({ group, onActivate, onPin, onClose, onMenu, onDragStart 
             role="tab"
             aria-selected={active}
             className={classes.join(" ")}
-            title={`${title}${tab.preview ? "\n미리보기: 두 번 누르면 고정한다" : ""}\n끌어서 옮긴다(옆에 놓으면 나눠 본다)`}
+            title={`${title}${change ? `\n${CHANGE_TITLE[change]}` : ""}${tab.preview ? "\n미리보기: 두 번 누르면 고정한다" : ""}\n끌어서 옮긴다(옆에 놓으면 나눠 본다)`}
             onPointerDown={(e) => {
               if (e.button === 0 && !(e.target as Element).closest(".tab-close")) onDragStart(tab, e);
             }}
@@ -57,6 +64,7 @@ export function TabBar({ group, onActivate, onPin, onClose, onMenu, onDragStart 
           >
             <span className="tab-name">{name}</span>
             {detail && <span className="tab-rev">{detail}</span>}
+            {change && <span className={`change-letter ${change}`}>{CHANGE_LETTER[change]}</span>}
             <button
               type="button"
               className="tab-close"

@@ -106,7 +106,7 @@ pub fn compare(
             )
         }
         Side::Worktree => {
-            let found = worktree_changes(repo, &local, base_tree.as_ref())?;
+            let found = worktree_changes(repo, &local, base_tree.as_ref(), true)?;
             let changes = crate::repo::pair_renames(
                 &local,
                 found.list,
@@ -174,6 +174,8 @@ struct Found {
     list: Vec<TreeChange>,
     /// 작업트리 파일의 내용(해시한 id → clean 내용). rename을 견줄 때 쓴다.
     contents: HashMap<ObjectId, Vec<u8>>,
+    /// 추적하지 않는 파일(보인 것)
+    untracked: BTreeSet<BString>,
     untracked_omitted: usize,
 }
 
@@ -181,6 +183,7 @@ fn worktree_changes(
     repo: &Repo,
     local: &gix::Repository,
     base: Option<&gix::Tree<'_>>,
+    keep_contents: bool,
 ) -> Result<Found> {
     use gix::status::index_worktree::Item as Worktree;
     use gix::status::{Item, UntrackedFiles};
@@ -224,9 +227,10 @@ fn worktree_changes(
         }
     }
     let untracked_omitted = untracked.len().saturating_sub(UNTRACKED_LIMIT);
+    let untracked: BTreeSet<BString> = untracked.into_iter().take(UNTRACKED_LIMIT).collect();
     let paths = tracked
         .into_iter()
-        .chain(untracked.into_iter().take(UNTRACKED_LIMIT))
+        .chain(untracked.iter().cloned())
         .collect::<BTreeSet<_>>();
 
     let file_mode = local
@@ -254,7 +258,9 @@ fn worktree_changes(
                 Content::Read(bytes) => blob_id(local, bytes),
                 Content::Large(stamp) => blob_id(local, stamp.as_bytes()),
             };
-            if let Content::Read(bytes) = data {
+            if let Content::Read(bytes) = data
+                && keep_contents
+            {
                 contents.insert(id, bytes);
             }
             (mode, id)
@@ -289,7 +295,81 @@ fn worktree_changes(
     Ok(Found {
         list,
         contents,
+        untracked,
         untracked_omitted,
+    })
+}
+
+/// 파일 트리·탭의 변경 표시(M13): HEAD ↔ 작업트리에서 바뀐 파일의 상태
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StatusKind {
+    /// 내용·모드가 바뀌었다
+    Modified,
+    /// HEAD에 없고 인덱스에 올렸다(`git add`, `git mv`의 새 이름)
+    Added,
+    /// HEAD에 있고 작업트리에 없다
+    Deleted,
+    /// 추적하지 않는 파일(무시한 파일은 빼고)
+    Untracked,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusEntry {
+    /// 저장소 기준 경로(`/` 구분)
+    pub path: String,
+    pub kind: StatusKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeStatus {
+    /// HEAD 커밋(커밋이 없는 저장소면 없다)
+    pub head: Option<String>,
+    /// 경로 순
+    pub files: Vec<StatusEntry>,
+    /// 보이지 않은 추적하지 않는 파일 수([`UNTRACKED_LIMIT`]를 넘은 것)
+    pub untracked_omitted: usize,
+}
+
+/// HEAD ↔ 작업트리에서 바뀐 파일과 그 상태. 작업트리 변경([`compare`])과 같은 기준으로 견주되 rename은 짝짓지
+/// 않는다(옮긴 파일은 옛 이름이 지움, 새 이름이 추가·추적하지 않음이다: 트리에 보이는 것은 경로마다의 상태다).
+/// 줄 수도 세지 않는다.
+pub fn worktree_status(repo: &Repo) -> Result<WorktreeStatus> {
+    let local = repo.local();
+    let head = repo.head()?;
+    let base_tree = match head {
+        Some(id) => Some(tree_of(&local, id)?),
+        None => None,
+    };
+    let found = worktree_changes(repo, &local, base_tree.as_ref(), false)?;
+    let mut files: Vec<StatusEntry> = found
+        .list
+        .into_iter()
+        .filter_map(|change| {
+            let (location, kind) = match change {
+                TreeChange::Modification { location, .. } => (location, StatusKind::Modified),
+                TreeChange::Deletion { location, .. } => (location, StatusKind::Deleted),
+                TreeChange::Addition { location, .. } => {
+                    let kind = if found.untracked.contains(&location) {
+                        StatusKind::Untracked
+                    } else {
+                        StatusKind::Added
+                    };
+                    (location, kind)
+                }
+                TreeChange::Rewrite { .. } => return None,
+            };
+            let path = location.to_str().ok()?.to_owned();
+            Some(StatusEntry { path, kind })
+        })
+        .collect();
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(WorktreeStatus {
+        head: head.map(|id| id.to_string()),
+        files,
+        untracked_omitted: found.untracked_omitted,
     })
 }
 
