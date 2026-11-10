@@ -77,6 +77,7 @@ const KEYS: Record<HelpView, Key[]> = {
     { keys: "✦ 보라 줄", what: "AI가 쓴 줄 (git-ai 노트)", note: "카드에 에이전트·모델·시킨 사람" },
     { keys: "H", what: "파일 히스토리 (이 리비전부터)" },
     { keys: "L", what: "라인 히스토리 (선택한 줄, 없으면 커서 줄)" },
+    { keys: "M", what: "함수 히스토리 (커서가 든 함수·메서드·클래스)", note: "구문 트리로 그 정의의 줄을 골라 라인 히스토리로" },
     { keys: "G", what: "커밋 그래프 (이 줄의 커밋을 골라서)" },
     { keys: "S", what: "이 코드를 넣거나 지운 커밋", note: "고른 글, 없으면 이 줄 · 그래프에서 code:로 찾는다" },
     { keys: "b", what: "blame 거터 보이기·숨기기", note: "끄면 커서 줄 끝에만 blame 한 줄" },

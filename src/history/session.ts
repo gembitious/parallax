@@ -12,6 +12,6 @@ export function openHistory(
   onEvent: (event: HistoryEvent) => void,
 ): StreamHandle {
   return lines
-    ? openStream<HistoryEvent>("line_history_open", "history_cancel", { ...target, ...lines }, onEvent)
+    ? openStream<HistoryEvent>("line_history_open", "history_cancel", { ...target, start: lines.start, end: lines.end }, onEvent)
     : openStream<HistoryEvent>("history_open", "history_cancel", { ...target }, onEvent);
 }

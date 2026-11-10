@@ -122,6 +122,28 @@ describe("배치 남기기·되살리기", () => {
     expect(readLayout(JSON.parse(JSON.stringify(broken)))?.panel ?? []).toEqual([]);
   });
 
+  it("함수 히스토리의 이름표도 남긴다(틀린 이름표는 버리고 범위는 둔다)", () => {
+    const history = (symbol: unknown) => ({
+      groups: [
+        {
+          tabs: [{ stack: [{ view: "history", target: { repo: "/r", path: "a.ts", rev: null }, lines: { start: 3, end: 9, symbol } }] }],
+          active: 0,
+          weight: 1,
+        },
+      ],
+      activeGroup: 0,
+      panel: [],
+      panelOpen: false,
+      panelMax: false,
+    });
+    const lines = (layout: Layout | null) => {
+      const entry = layout?.groups[0].tabs[0].stack[0];
+      return entry?.view === "history" ? entry.lines : undefined;
+    };
+    expect(lines(readLayout(history("함수 foo")))).toEqual({ start: 3, end: 9, symbol: "함수 foo" });
+    expect(lines(readLayout(history(7)))).toEqual({ start: 3, end: 9 });
+  });
+
   it("남길 것이 없으면 null", () => {
     expect(toLayout(emptyWorkspace("/repo"))).toBeNull();
     expect(toLayout(emptyWorkspace())).toBeNull();

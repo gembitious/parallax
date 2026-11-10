@@ -212,7 +212,9 @@ export function titleOf(entry: StackEntry): string {
   const at = target.rev ? ` @${shortSha(target.rev)}` : "";
   if (entry.view === "blame") return `blame ${target.path}${at}`;
   return entry.lines
-    ? `라인 히스토리 ${target.path}:${entry.lines.start}-${entry.lines.end}${at}`
+    ? entry.lines.symbol
+      ? `함수 히스토리 ${entry.lines.symbol} ${target.path}${at}`
+      : `라인 히스토리 ${target.path}:${entry.lines.start}-${entry.lines.end}${at}`
     : `히스토리 ${target.path}${at}`;
 }
 

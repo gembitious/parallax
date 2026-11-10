@@ -12,7 +12,11 @@ export type SavedEntry =
       line: number | null;
       via: "parent" | "older" | "newer" | "file";
     }
-  | { view: "history"; target: { repo: string; path: string; rev: string | null }; lines: { start: number; end: number } | null }
+  | {
+      view: "history";
+      target: { repo: string; path: string; rev: string | null };
+      lines: { start: number; end: number; symbol?: string } | null;
+    }
   | { view: "commit"; repo: string; rev: string; path: string | null; only: boolean; compare?: Compare }
   | { view: "graph"; repo: string; focus: string | null }
   | { view: "search"; repo: string; rev: string | null; query: string }
@@ -163,7 +167,8 @@ export function readEntry(v: Json): SavedEntry | null {
       if (!target) return null;
       if (v.lines === null) return { view: "history", target, lines: null };
       if (!isObject(v.lines) || !isLine(v.lines.start) || !isLine(v.lines.end) || v.lines.start > v.lines.end) return null;
-      return { view: "history", target, lines: { start: v.lines.start, end: v.lines.end } };
+      const symbol = isString(v.lines.symbol) && v.lines.symbol.length <= 200 ? v.lines.symbol : undefined;
+      return { view: "history", target, lines: { start: v.lines.start, end: v.lines.end, ...(symbol ? { symbol } : {}) } };
     }
     case "commit": {
       if (!isString(v.repo) || !isString(v.rev) || !isStringOrNull(v.path) || typeof v.only !== "boolean") return null;

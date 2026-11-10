@@ -22,6 +22,8 @@ import { routeKey } from "../keys";
 import { openInEditor } from "../editor";
 import { toggleHud } from "../Hud";
 import { pointCursor, selectedLines } from "../code";
+import { syntaxTree } from "@codemirror/language";
+import { enclosingSymbol, SYMBOL_KIND_LABEL } from "./symbol";
 import { absolutePath, copyPath } from "../workspace/paths";
 import { gotoLine, openSearchPanel } from "@codemirror/search";
 import { EditorView, runScopeHandlers } from "@codemirror/view";
@@ -109,6 +111,8 @@ type Actions = {
   newer(): boolean;
   history(): boolean;
   lineHistory(): boolean;
+  /** `M` 커서가 든 함수·클래스의 라인 히스토리(M16) */
+  functionHistory(): boolean;
   graph(): boolean;
   codeHistory(): boolean;
   worktrees(): boolean;
@@ -222,6 +226,12 @@ export function BlameView({
     { id: "newer", label: "다음 리비전", keys: ">", run: run("newer") },
     { id: "history", label: "파일 히스토리", keys: "H", run: run("history") },
     { id: "lineHistory", label: "라인 히스토리 (선택한 줄)", keys: "L", run: run("lineHistory") },
+    {
+      label: "함수 히스토리 (커서가 든 함수)",
+      keys: "M",
+      detail: "그 함수·메서드·클래스를 바꾼 커밋 · git log -L",
+      run: run("functionHistory"),
+    },
     { id: "graph", label: "커밋 그래프 (이 줄의 커밋)", keys: "G", run: run("graph") },
     {
       label: "이 코드를 넣거나 지운 커밋 (그래프에서 찾기)",
@@ -545,6 +555,30 @@ export function BlameView({
       onNavigate({ kind: "history", target: { repo: m.repo, path: m.path, rev: m.rev }, lines: selectedLines(view.state) });
       return true;
     },
+    functionHistory() {
+      const m = latest.current.meta;
+      const view = editor.current?.view;
+      if (!m || !view) {
+        if (m?.binary) showToast("바이너리 파일은 함수 히스토리를 보지 않는다");
+        else notOpened();
+        return true;
+      }
+      const symbol = enclosingSymbol(view.state, view.state.selection.main.head);
+      if (!symbol) {
+        showToast(
+          syntaxTree(view.state).length === 0
+            ? "이 파일은 구문을 읽지 못해 함수를 찾지 못한다 · 줄을 골라(J/K) L로 라인 히스토리를 본다"
+            : "이 줄을 감싼 함수·클래스가 없다 · 줄을 골라(J/K) L로 라인 히스토리를 본다",
+        );
+        return true;
+      }
+      onNavigate({
+        kind: "history",
+        target: { repo: m.repo, path: m.path, rev: m.rev },
+        lines: { start: symbol.start, end: symbol.end, symbol: `${SYMBOL_KIND_LABEL[symbol.kind]} ${symbol.name}` },
+      });
+      return true;
+    },
     graph() {
       const m = latest.current.meta;
       if (!m) {
@@ -762,6 +796,7 @@ export function BlameView({
                 newer: () => actions.current.newer(),
                 history: () => actions.current.history(),
                 lineHistory: () => actions.current.lineHistory(),
+                functionHistory: () => actions.current.functionHistory(),
                 graph: () => actions.current.graph(),
                 codeHistory: () => actions.current.codeHistory(),
                 worktrees: () => actions.current.worktrees(),
@@ -923,12 +958,21 @@ export function BlameView({
     const { from, to } = view.state.selection.main;
     const block = model.current?.block(cursorLine());
     const committed = block !== undefined && !isUncommitted(block.sha);
+    // 메뉴는 바로 떠야 해 분석을 오래 기다리지 않는다(못 끝내면 지금까지의 트리)
+    const symbolHere = enclosingSymbol(view.state, view.state.selection.main.head, 30);
     openContextMenu(
       e,
       [
         { label: "이 줄 커밋의 상세", keys: "Enter", disabled: !committed, run: act("enter") },
         { label: "부모 리비전 blame", keys: ",", detail: "이 줄을 바꾸기 전", disabled: !block?.previous, run: act("parent") },
         { label: "라인 히스토리", keys: "L", detail: from < to ? "고른 줄" : "이 줄", run: act("lineHistory") },
+        {
+          label: "함수 히스토리",
+          keys: "M",
+          detail: symbolHere ? `${SYMBOL_KIND_LABEL[symbolHere.kind]} ${symbolHere.name}` : "감싼 함수 없음",
+          disabled: !symbolHere,
+          run: act("functionHistory"),
+        },
         {
           label: "이 코드를 넣거나 지운 커밋",
           keys: "S",
