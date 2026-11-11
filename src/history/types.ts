@@ -33,7 +33,12 @@ export type Hunk = {
 };
 
 /** plx-core/src/history.rs LineRange: 1부터, 양쪽 포함 */
-export type LineRange = { start: number; end: number };
+export type LineRange = {
+  start: number;
+  end: number;
+  /** 함수 히스토리(M16)면 그 정의의 이름표(`함수 foo`). git에는 넘기지 않는다: 범위만으로 따라간다. */
+  symbol?: string;
+};
 
 /** plx-core/src/history.rs HistoryMeta */
 export type HistoryMeta = {

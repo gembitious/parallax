@@ -604,7 +604,7 @@ function reloaded<T extends StackEntry>(entry: T, action: Extract<WorkspaceActio
     return { ...entry, key, line: action.line !== undefined ? action.line : entry.line, search: action.search };
   }
   if (entry.view === "history") {
-    return { ...entry, key, lines: entry.lines && action.lines ? action.lines : entry.lines, query: action.query };
+    return { ...entry, key, lines: entry.lines && action.lines ? { ...action.lines, symbol: entry.lines.symbol } : entry.lines, query: action.query };
   }
   return { ...entry, key };
 }

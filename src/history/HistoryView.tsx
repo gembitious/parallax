@@ -150,7 +150,7 @@ export function HistoryView({
   ];
   const palette = usePalette(commands, () => listRef.current?.focus({ preventScroll: true }));
   // 도구 막대·메뉴 막대(보이는 동안)
-  usePublish(slot, visible, lines ? "라인 히스토리" : "히스토리", commands, {
+  usePublish(slot, visible, viewName(lines), commands, {
     palette: palette.open,
     help: () => setHelp(true),
     files: quickOpen.open,
@@ -180,7 +180,7 @@ export function HistoryView({
   // 스크롤 프레임 측정(성능 HUD가 켜져 있을 때만)
   const scrollMeter = useRef<ScrollMeter | null>(null);
   scrollMeter.current ??= new ScrollMeter(
-    () => `${lines ? "라인 히스토리" : "히스토리"} ${lastName(latest.current.meta?.path ?? target.path)}`,
+    () => `${viewName(lines)} ${lastName(latest.current.meta?.path ?? target.path)}`,
     ROW_HEIGHT,
   );
   useEffect(() => () => scrollMeter.current?.dispose(), []);
@@ -637,7 +637,12 @@ export function HistoryView({
   return (
     <section className={lines ? "history line-history" : "history"}>
       <header className="blame-header" onContextMenu={headerMenu}>
-        <span className="badge">{lines ? "라인 히스토리" : "히스토리"}</span>
+        <span className="badge">{viewName(lines)}</span>
+        {lines?.symbol && (
+          <span className="badge mono" title="이 정의의 줄 범위를 바꾼 커밋 (git log -L)">
+            {lines.symbol}
+          </span>
+        )}
         <FilePath path={path} />
         {range && (
           <span className="badge mono" title={meta?.rev || !meta ? undefined : "작업트리 줄 번호를 HEAD 버전의 줄로 옮긴 범위"}>
@@ -923,4 +928,9 @@ function FilePath({ path }: { path: string }) {
       <span className="file-name">{path.slice(cut)}</span>
     </span>
   );
+}
+
+/** 화면 이름: 함수 히스토리(M16)는 줄 범위가 정의 하나인 라인 히스토리다 */
+function viewName(lines: LineRange | null): string {
+  return lines ? (lines.symbol ? "함수 히스토리" : "라인 히스토리") : "히스토리";
 }
