@@ -237,6 +237,45 @@ fn versions_and_stats_read_the_worktree() {
     assert_eq!((stats[0].additions, stats[0].deletions), (1, 1));
 }
 
+/// 작업트리의 그림(바뀐 뒤)은 작업트리 파일에서 읽는다.
+#[test]
+fn worktree_images_are_read_from_disk() {
+    let dir = base_repo("changes-image");
+    let png = |tag: u8| {
+        let mut b = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        b.push(tag);
+        b
+    };
+    std::fs::write(dir.join("logo.png"), png(1)).unwrap();
+    commit_all(&dir, "logo");
+    std::fs::write(dir.join("logo.png"), png(2)).unwrap();
+    let (repo, comparison) = worktree(&dir);
+    let file = comparison
+        .files
+        .iter()
+        .find(|f| f.path == "logo.png")
+        .unwrap();
+    let versions = commit::file_versions(
+        &repo,
+        file.old_id.as_deref(),
+        file.new_id.as_deref(),
+        Some(&file.path),
+        false,
+        true,
+    )
+    .unwrap();
+    let image = versions.image.unwrap();
+    assert_eq!(image.new.unwrap().mime, "image/png");
+    assert_eq!(
+        commit::file_image(&repo, None, "logo.png", true).unwrap(),
+        png(2)
+    );
+    assert_eq!(
+        commit::file_image(&repo, file.old_id.as_deref(), "logo.png", false).unwrap(),
+        png(1)
+    );
+}
+
 #[test]
 fn untracked_files_are_limited() {
     let dir = base_repo("changes-untracked");

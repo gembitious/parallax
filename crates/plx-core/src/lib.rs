@@ -20,6 +20,7 @@ pub mod git;
 pub mod graph;
 pub mod grep;
 pub mod history;
+pub mod image;
 pub mod instance;
 pub mod line_changes;
 pub mod line_log;

@@ -127,6 +127,7 @@ describe("remember", () => {
       binary: false,
       missing: false,
       tooLarge: null,
+      image: null,
       notes: [],
     };
     expect(versionsSize(versions)).toBe(5);

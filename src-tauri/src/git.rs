@@ -776,6 +776,24 @@ pub async fn file_versions(
     .await
 }
 
+/// 그림 한쪽의 바이트(이미지 diff). JSON이 아니라 바이트 그대로 보낸다(화면이 Blob으로 `<img>`에 넣는다).
+/// `worktree`면 작업트리의 `path`에서 읽는다.
+#[tauri::command]
+pub async fn file_image(
+    git: State<'_, Arc<GitState>>,
+    repo: String,
+    id: Option<String>,
+    path: String,
+    worktree: Option<bool>,
+) -> Result<tauri::ipc::Response, String> {
+    blocking(git, move |git| {
+        let repo = git.repos.for_path(Path::new(&repo))?;
+        commit::file_image(&repo, id.as_deref(), &path, worktree.unwrap_or(false))
+            .map(tauri::ipc::Response::new)
+    })
+    .await
+}
+
 /// `from`의 `line`번째 줄이 `to`에서 몇 번째 줄인가(`,` 부모 리비전 blame).
 #[tauri::command]
 pub async fn blame_map_line(
