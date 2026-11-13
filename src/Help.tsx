@@ -88,7 +88,9 @@ const KEYS: Record<HelpView, Key[]> = {
   commit: [
     { keys: "j / k", what: "다음·이전 파일" },
     { keys: "n / N", what: "다음·이전 바뀐 부분" },
-    { keys: "u", what: "분할 ↔ 통합 보기" },
+    { keys: "u", what: "분할 ↔ 통합 보기", note: "그림은 나란히 ↔ 겹쳐 밀어 보기" },
+    { keys: "z", what: "그림: 맞춤 ↔ 실제 크기" },
+    { keys: "i", what: "SVG: 그림 ↔ 글 diff" },
     { keys: "Enter", what: "이 리비전의 파일 blame" },
     { keys: "a", what: "이 파일만 ↔ 모든 파일", note: "히스토리에서 열었을 때" },
     { keys: "y", what: "커밋 sha 복사" },

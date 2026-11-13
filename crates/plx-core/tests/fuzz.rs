@@ -514,6 +514,32 @@ fn reflog_file() {
 }
 
 #[test]
+fn image_sniff() {
+    use plx_core::image;
+    // 저장소의 아무 blob이 그림인지 앞 바이트로 본다(M17). 짧거나 깨진 머리에도 패닉하지 않는다.
+    let mut bmp = b"BM\x46\0\0\0\0\0\0\0\x36\0\0\0\x28\0\0\0".to_vec();
+    bmp.extend([0; 40]);
+    let seeds = vec![
+        b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec(),
+        b"RIFF\x24\0\0\0WEBPVP8 ".to_vec(),
+        b"\0\0\0\x1cftypavif".to_vec(),
+        b"\0\0\x01\0\x01\0".to_vec(),
+        bmp,
+        b"\xef\xbb\xbf<?xml version=\"1.0\"?><svg/>".to_vec(),
+    ];
+    fuzz("image", &seeds, |input, _| {
+        for path in ["a.svg", "a.png", "a"] {
+            if let Some(mime) = image::sniff(path, input) {
+                assert!(mime.starts_with("image/"));
+                assert!(mime != "image/svg+xml" || path == "a.svg");
+            }
+        }
+        let v = image::versions("a.svg", Some(input), Some(input));
+        assert_eq!(v.is_some(), image::sniff("a.svg", input).is_some());
+    });
+}
+
+#[test]
 fn ref_tracking_output() {
     use plx_core::refs;
     // `git for-each-ref`의 upstream·track 출력(M14). 모르는 모양의 줄은 건너뛰고 패닉하지 않는다.

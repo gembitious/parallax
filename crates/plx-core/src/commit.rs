@@ -12,6 +12,7 @@ use gix::diff::blob::{Algorithm, Diff, InternedInput};
 use gix::object::tree::EntryKind;
 use serde::{Deserialize, Serialize};
 
+use crate::image::ImageVersions;
 use crate::repo::{CommitInfo, Error, Repo, Result, TreeChange};
 use crate::text::{self, Decoded};
 
@@ -476,6 +477,9 @@ pub struct FileVersions {
     pub too_large: Option<u64>,
     /// 줄 diff에는 보이지 않는 바뀜(줄 끝, 끝 개행, BOM, 인코딩)
     pub notes: Vec<String>,
+    /// 두 버전이 그림이다([`crate::image`]). 화면이 [`file_image`]로 내용을 받아 전·후 그림을 보인다.
+    /// 래스터 그림은 `binary`, SVG는 글이라 줄 diff(`old`·`new`)도 함께 온다.
+    pub image: Option<ImageVersions>,
 }
 
 /// blob 두 개(없으면 빈 파일)를 화면에 보일 문자열로 읽는다. `path`가 있으면 그 경로의 `diff` 속성을 본다.
@@ -506,7 +510,10 @@ pub fn file_versions(
         missing,
         too_large,
         notes: Vec::new(),
+        image: None,
     };
+    // 그림일 수 있는 경로는 그림 한도까지 읽어 본다(그림이면 줄로 견주지 않으니 줄 diff 한도가 상관없다).
+    let image_path = path.is_some_and(crate::image::image_path);
     if !full {
         let size = |id: Option<ObjectId>| {
             id.map_or(Some(0), |id| local.find_header(id).ok().map(|h| h.size()))
@@ -515,10 +522,15 @@ pub fn file_versions(
             Some(path) => crate::changes::worktree_size(repo, path),
             None => size(new_id),
         };
-        if let (Some(old), Some(new)) = (size(old_id), new_size)
-            && old + new > MAX_VERSIONS_BYTES
-        {
-            return Ok(empty(false, false, Some(old + new)));
+        if let (Some(old), Some(new)) = (size(old_id), new_size) {
+            let over = if image_path {
+                old.max(new) > crate::image::MAX_IMAGE_BYTES
+            } else {
+                old + new > MAX_VERSIONS_BYTES
+            };
+            if over {
+                return Ok(empty(false, false, Some(old + new)));
+            }
         }
     }
     let no_diff =
@@ -531,8 +543,38 @@ pub fn file_versions(
     let (Some(old_bytes), Some(new_bytes)) = (old, new) else {
         return Ok(empty(true, no_diff, None));
     };
-    if no_diff || text::is_binary(&old_bytes) || text::is_binary(&new_bytes) {
-        return Ok(empty(false, true, None));
+    let image = path.and_then(|path| {
+        crate::image::versions(
+            path,
+            old_id.map(|_| old_bytes.as_slice()),
+            new_id.map(|_| new_bytes.as_slice()),
+        )
+    });
+    let svg = image.as_ref().is_some_and(|i| {
+        [&i.old, &i.new]
+            .iter()
+            .all(|s| s.as_ref().is_none_or(|s| s.mime == "image/svg+xml"))
+    });
+    if no_diff
+        || text::is_binary(&old_bytes)
+        || text::is_binary(&new_bytes)
+        || (image.is_some() && !svg)
+    {
+        return Ok(FileVersions {
+            image,
+            ..empty(false, true, None)
+        });
+    }
+    if old_bytes.len() as u64 + new_bytes.len() as u64 > MAX_VERSIONS_BYTES && !full {
+        // 그림 한도로 읽었는데 글이었다(큰 SVG): 줄 diff는 "그래도 보기"로
+        return Ok(FileVersions {
+            image,
+            ..empty(
+                false,
+                false,
+                Some(old_bytes.len() as u64 + new_bytes.len() as u64),
+            )
+        });
     }
     let old = old_id.map(|_| text::decode(&old_bytes));
     let new = new_id.map(|_| text::decode(&new_bytes));
@@ -547,7 +589,39 @@ pub fn file_versions(
         missing: false,
         too_large: None,
         notes,
+        image,
     })
+}
+
+/// 그림 한쪽의 내용(이미지 diff). `worktree`면 작업트리의 `path`에서 읽는다(작업트리 변경의 바뀐 뒤).
+/// [`crate::image::MAX_IMAGE_BYTES`]보다 크거나 그림이 아니면 실패한다.
+pub fn file_image(repo: &Repo, id: Option<&str>, path: &str, worktree: bool) -> Result<Vec<u8>> {
+    let bytes = if worktree {
+        if crate::changes::worktree_size(repo, path)
+            .is_some_and(|n| n > crate::image::MAX_IMAGE_BYTES)
+        {
+            return Err(Error("그림이 너무 크다".into()));
+        }
+        crate::changes::worktree_content(repo, path)?
+    } else {
+        let id = parse_id(id.ok_or_else(|| Error("그림의 blob id가 없다".into()))?)?;
+        let local = repo.local();
+        if local
+            .find_header(id)
+            .is_ok_and(|h| h.size() > crate::image::MAX_IMAGE_BYTES)
+        {
+            return Err(Error("그림이 너무 크다".into()));
+        }
+        read_blob(&local, Some(id))?
+    };
+    let bytes = bytes.ok_or_else(|| Error("파일이 없다".into()))?;
+    if bytes.len() as u64 > crate::image::MAX_IMAGE_BYTES {
+        return Err(Error("그림이 너무 크다".into()));
+    }
+    if crate::image::sniff(path, &bytes).is_none() {
+        return Err(Error("그림 파일이 아니다".into()));
+    }
+    Ok(bytes)
 }
 
 /// 화면의 줄 diff에는 보이지 않는 바뀜. diff 화면은 줄 끝을 맞추고 끝 개행·BOM을 떼고 보여서, 이것만 바뀐

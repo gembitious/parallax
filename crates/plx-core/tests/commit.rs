@@ -634,3 +634,91 @@ fn large_files_are_sent_on_request() {
     .unwrap();
     assert_eq!(full.new.unwrap().text, big);
 }
+
+/// 아주 작은 PNG(1×1). 내용이 다르면 다른 그림이다(마지막 바이트를 바꾼다).
+fn png(tag: u8) -> Vec<u8> {
+    let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0".to_vec();
+    bytes.push(tag);
+    bytes
+}
+
+/// 그림은 줄 diff 대신 두 버전의 형식·크기를 알리고 `file_image`가 바이트를 그대로 준다.
+#[test]
+fn images_report_both_versions() {
+    let dir = scratch_repo("commit-image");
+    write(&dir, "logo.png", &png(1));
+    write(
+        &dir,
+        "icon.svg",
+        b"<svg xmlns=\"http://www.w3.org/2000/svg\"><rect/></svg>\n",
+    );
+    write(
+        &dir,
+        "fake.png",
+        b"version https://git-lfs.github.com/spec/v1\n",
+    );
+    commit_all(&dir, "base");
+    write(&dir, "logo.png", &png(2));
+    write(
+        &dir,
+        "icon.svg",
+        b"<svg xmlns=\"http://www.w3.org/2000/svg\"><circle/></svg>\n",
+    );
+    write(
+        &dir,
+        "fake.png",
+        b"version https://git-lfs.github.com/spec/v1\noid sha256:00\n",
+    );
+    write(&dir, "new.gif", b"GIF89a\x01\0\x01\0\x80\0\0");
+    let sha = commit_all(&dir, "images");
+    let repo = Repo::discover(&dir).unwrap();
+    let d = detail(&repo, &sha);
+    let file = |path: &str| d.files.iter().find(|f| f.path == path).unwrap();
+
+    let logo = versions(&repo, file("logo.png"));
+    assert!(logo.binary);
+    let image = logo.image.unwrap();
+    assert_eq!(image.old.as_ref().unwrap().mime, "image/png");
+    assert_eq!(image.new.as_ref().unwrap().bytes, png(2).len() as u64);
+    let f = file("logo.png");
+    assert_eq!(
+        commit::file_image(&repo, f.old_id.as_deref(), &f.path, false).unwrap(),
+        png(1)
+    );
+    assert_eq!(
+        commit::file_image(&repo, f.new_id.as_deref(), &f.path, false).unwrap(),
+        png(2)
+    );
+
+    // SVG는 글이라 줄 diff도 함께 온다.
+    let svg = versions(&repo, file("icon.svg"));
+    assert!(!svg.binary);
+    assert!(svg.new.unwrap().text.contains("circle"));
+    assert_eq!(svg.image.unwrap().new.unwrap().mime, "image/svg+xml");
+
+    // 추가한 그림은 바뀐 뒤만 있다.
+    let gif = versions(&repo, file("new.gif")).image.unwrap();
+    assert!(gif.old.is_none());
+    assert_eq!(gif.new.unwrap().mime, "image/gif");
+
+    // 이름만 그림인 글 파일(LFS 포인터)은 줄 diff다.
+    let fake = versions(&repo, file("fake.png"));
+    assert!(fake.image.is_none() && !fake.binary);
+    let f = file("fake.png");
+    assert!(commit::file_image(&repo, f.new_id.as_deref(), &f.path, false).is_err());
+}
+
+/// 줄 diff 한도(4MB)보다 큰 그림도 그림 한도까지는 보인다.
+#[test]
+fn large_images_are_shown() {
+    let dir = scratch_repo("commit-image-large");
+    let mut big = png(1);
+    big.resize(commit::MAX_VERSIONS_BYTES as usize + 10, 0);
+    write(&dir, "big.png", &big);
+    let sha = commit_all(&dir, "big image");
+    let repo = Repo::discover(&dir).unwrap();
+    let d = detail(&repo, &sha);
+    let v = versions(&repo, &d.files[0]);
+    assert_eq!(v.too_large, None);
+    assert_eq!(v.image.unwrap().new.unwrap().bytes, big.len() as u64);
+}

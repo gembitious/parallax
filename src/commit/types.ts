@@ -74,7 +74,19 @@ export type FileVersions = {
   tooLarge: number | null;
   /** 줄 diff에는 보이지 않는 바뀜(줄 끝, 끝 개행, BOM, 인코딩) */
   notes: string[];
+  /** 두 버전이 그림이다(M17). 래스터 그림은 `binary`, SVG는 글이라 `old`·`new`도 온다. 내용은 `file_image`로 받는다. */
+  image: ImageVersions | null;
 };
+
+/** 그림의 한쪽 버전. plx-core/src/image.rs와 같은 모양. */
+export type ImageSide = {
+  /** `image/png` 같은 MIME 형식 */
+  mime: string;
+  bytes: number;
+};
+
+/** 두 버전의 그림. 없는 쪽(추가·삭제)은 null. */
+export type ImageVersions = { old: ImageSide | null; new: ImageSide | null };
 
 /** git diff --name-status와 같은 글자 */
 export const STATUS_LETTER: Record<FileStatus, string> = {

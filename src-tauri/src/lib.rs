@@ -81,6 +81,7 @@ pub fn run() {
             git::grep_open,
             git::grep_cancel,
             git::file_versions,
+            git::file_image,
             git::file_stats,
             instance::current_request,
             open::open_path,

@@ -1503,6 +1503,114 @@ button.link {
   height: auto;
 }
 
+/* ---------------------------------------------------------------- 이미지 diff (M17) */
+
+.image-diff {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.image-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.image-label {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.image-scale {
+  margin-left: auto;
+}
+
+.image-swipe {
+  width: 160px;
+}
+
+.image-error {
+  color: var(--danger);
+  white-space: pre-wrap;
+}
+
+.image-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  overflow: hidden;
+}
+
+.image-stage.actual {
+  overflow: auto;
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+
+/* 투명한 자리가 보이게 바둑판 무늬. 나란히 보기는 두 칸이 자리를 반씩 나눈다. */
+.image-frame {
+  flex: 1 1 0;
+  min-width: 0;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  border: 1px solid var(--border);
+  margin: 0;
+}
+
+.image-stage.actual .image-frame {
+  flex: none;
+  align-self: auto;
+}
+
+.image-frame img {
+  display: block;
+  background-color: var(--bg);
+  background-image: conic-gradient(var(--border) 25%, transparent 0 50%, var(--border) 0 75%, transparent 0);
+  background-size: 16px 16px;
+  image-rendering: auto;
+}
+
+/* 밀어 보기: 두 그림을 같은 자리에 겹치고 바뀐 뒤를 손잡이 오른쪽만 보인다. */
+.image-frame.swipe {
+  position: relative;
+  flex: none;
+  align-self: auto;
+  box-sizing: content-box;
+  padding: 0;
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.image-layer {
+  position: absolute;
+  inset: 0;
+}
+
+.image-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
 /* ---------------------------------------------------------------- 파일 히스토리 */
 
 .history {

@@ -39,6 +39,7 @@ import {
   withStats,
 } from "./detail";
 import { createDiffView, type DiffMode, type DiffPoint, type DiffView } from "./diff";
+import { ImageDiff } from "./ImageDiff";
 import { codeQuery } from "../graph/search";
 import { readDiffMode, writeDiffMode } from "./diffMode";
 import {
@@ -158,6 +159,10 @@ export function CommitView({
   const [statsError, setStatsError] = useState<string | null>(null);
   const [selected, setSelected] = useState(0);
   const [mode, setMode] = useState<DiffMode>(readDiffMode);
+  /** SVG를 그림 대신 글 diff로 본다(i). 파일을 옮겨도 그대로다. */
+  const [svgText, setSvgText] = useState(false);
+  /** 그림을 실제 크기(1:1)로 본다(z) */
+  const [actualSize, setActualSize] = useState(false);
   const [versions, setVersions] = useState<ReadonlyMap<string, VersionsState>>(() => new Map());
   /** 바뀌면 고른 파일을 다시 받는다(받다 실패한 파일의 "다시 시도") */
   const [retries, setRetries] = useState(0);
@@ -193,19 +198,25 @@ export function CommitView({
   const fileKey = file ? versionsKey(file) : "";
   const current = versions.get(fileKey);
   const shown = loaded(current);
+  /** SVG: 그림이면서 글 diff도 있다 */
+  const svg = shown?.image != null && !shown.binary;
+  /** 줄 diff 대신 그림을 보인다(M17) */
+  const picture = shown?.image != null && !(svg && svgText);
   /** diff에 넣을 두 글(CRLF·끝 개행을 정리한 것) */
   const texts = useMemo(() => {
     const v = diffable(current);
-    if (!v) return null;
+    if (!v || picture) return null;
     return { old: v.old ? displayText(v.old.text).text : "", new: v.new ? displayText(v.new.text).text : "" };
-  }, [current]);
+  }, [current, picture]);
   // 명령 팔레트: 키로 하는 일 모두. 함수들은 아래에 있다(누를 때 부른다).
   const commands: Command[] = [
     { label: "다음 파일", keys: "j", run: () => select(latest.current.selected + 1) },
     { label: "이전 파일", keys: "k", run: () => select(latest.current.selected - 1) },
     { label: "다음 바뀐 부분", keys: "n", run: () => diff.current?.next() },
     { label: "이전 바뀐 부분", keys: "N", run: () => diff.current?.previous() },
-    { label: "분할 ↔ 통합 보기", keys: "u", run: () => toggleMode() },
+    { label: picture ? "나란히 ↔ 겹쳐 밀어 보기" : "분할 ↔ 통합 보기", keys: "u", run: () => toggleMode() },
+    ...(picture ? [{ label: actualSize ? "그림을 자리에 맞춰 보기" : "그림을 실제 크기로 보기", keys: "z", run: () => setActualSize((v) => !v) }] : []),
+    ...(svg ? [{ label: svgText ? "SVG를 그림으로 보기" : "SVG를 글 diff로 보기", keys: "i", run: () => setSvgText((v) => !v) }] : []),
     { id: "blame", label: "이 리비전의 파일 blame", keys: "Enter", run: () => openBlame() },
     ...(path !== null ? [{ label: "이 파일만 ↔ 모든 파일", keys: "a", run: () => toggleNarrow() }] : []),
     ...(shown?.tooLarge != null ? [{ label: "큰 파일도 diff 보기", run: () => fetchVersions(true) }] : []),
@@ -248,6 +259,8 @@ export function CommitView({
     help,
     mode,
     narrow,
+    svg,
+    picture,
     openFiles: quickOpen.open,
     palette: palette.open,
   });
@@ -739,6 +752,14 @@ export function CommitView({
         case "u":
           toggleMode();
           break;
+        case "z":
+          if (latest.current.picture) setActualSize((v) => !v);
+          else handled = false;
+          break;
+        case "i":
+          if (latest.current.svg) setSvgText((v) => !v);
+          else handled = false;
+          break;
         case "m":
           if (compare?.target != null) toggleMergeBase();
           else handled = false;
@@ -865,7 +886,7 @@ export function CommitView({
         </button>
       </>
     );
-  } else if (shown?.binary) {
+  } else if (shown?.binary && !shown.image) {
     message = "바이너리 파일이라 내용을 비교하지 않는다 (NUL 바이트나 .gitattributes의 binary·-diff).";
   }
 
@@ -954,9 +975,25 @@ export function CommitView({
         >
           ↓
         </button>
-        <button type="button" className="toggle" onClick={toggleMode} title="분할·통합 보기 (u)">
-          {mode === "split" ? "분할" : "통합"}
-        </button>
+        {svg && (
+          <button type="button" className="toggle" onClick={() => setSvgText((v) => !v)} title="SVG: 그림 ↔ 글 diff (i)">
+            {svgText ? "글" : "그림"}
+          </button>
+        )}
+        {picture && (
+          <button type="button" className="toggle" onClick={() => setActualSize((v) => !v)} title="그림: 맞춤 ↔ 실제 크기 (z)">
+            {actualSize ? "1:1" : "맞춤"}
+          </button>
+        )}
+        {picture ? (
+          <button type="button" className="toggle" onClick={toggleMode} title="그림: 나란히 ↔ 겹쳐 밀어 보기 (u)">
+            {mode === "split" ? "나란히" : "밀어 보기"}
+          </button>
+        ) : (
+          <button type="button" className="toggle" onClick={toggleMode} title="분할·통합 보기 (u)">
+            {mode === "split" ? "분할" : "통합"}
+          </button>
+        )}
         <button type="button" className="icon" onClick={() => setHelp(true)} aria-label="단축키 (?)" title="단축키 (?)">
           ?
         </button>
@@ -1080,6 +1117,9 @@ export function CommitView({
           <div className="diff-body" onContextMenu={diffMenu}>
             {/* CodeMirror가 직접 다루는 자리. React 자식과 섞지 않는다. */}
             <div className="diff-editor" ref={diffParent} />
+            {picture && file && shown?.image && !message && (
+              <ImageDiff key={fileKey} repo={repo} file={file} image={shown.image} mode={mode} actual={actualSize} />
+            )}
             {message && (
               <div className={isError(current) ? "blame-message error" : "blame-message"}>
                 <p>{message}</p>
