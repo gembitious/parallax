@@ -78,6 +78,7 @@ pub fn run() {
             git::reflog,
             git::refs_list,
             git::ref_tracking,
+            git::authors_list,
             git::grep_open,
             git::grep_cancel,
             git::file_versions,

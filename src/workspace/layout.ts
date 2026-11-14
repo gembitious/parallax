@@ -21,7 +21,8 @@ export type SavedEntry =
   | { view: "graph"; repo: string; focus: string | null }
   | { view: "search"; repo: string; rev: string | null; query: string }
   | { view: "reflog"; repo: string; which: ReflogWhich }
-  | { view: "refs"; repo: string; show: RefKind };
+  | { view: "refs"; repo: string; show: RefKind }
+  | { view: "authors"; repo: string; path: string | null };
 
 export type SavedTab = {
   stack: SavedEntry[];
@@ -131,6 +132,8 @@ function saveEntry(entry: StackEntry, line: number | null | undefined): SavedEnt
       return { view: "reflog", repo: entry.repo, which: entry.which };
     case "refs":
       return { view: "refs", repo: entry.repo, show: entry.show };
+    case "authors":
+      return { view: "authors", repo: entry.repo, path: entry.path };
   }
 }
 
@@ -190,6 +193,10 @@ export function readEntry(v: Json): SavedEntry | null {
     case "refs":
       return isString(v.repo) && (v.show === "branch" || v.show === "remote" || v.show === "tag")
         ? { view: "refs", repo: v.repo, show: v.show }
+        : null;
+    case "authors":
+      return isString(v.repo) && (v.path === null || isString(v.path))
+        ? { view: "authors", repo: v.repo, path: v.path }
         : null;
     default:
       return null;

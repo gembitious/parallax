@@ -556,6 +556,29 @@ fn ref_tracking_output() {
 }
 
 #[test]
+fn authors_log_output() {
+    use plx_core::authors::Tally;
+    // 작성자 보기(M18)의 `git log -z --format=%aN%x00%aE%x00%at` 출력. 저장소가 정한 이름·메일이 든다.
+    let seeds: Vec<Vec<u8>> = repos()
+        .iter()
+        .map(|repo| git(repo, &["log", "-z", "--format=%aN%x00%aE%x00%at", "HEAD"]))
+        .chain([b"\xea\xb9\x80\0kim@x\0-1\0A\0a@x\0999999999999999999999\0".to_vec()])
+        .collect();
+    fuzz("authors-log", &seeds, |input, rng| {
+        let mut tally = Tally::new();
+        for chunk in chunks(input, rng) {
+            tally.feed(chunk);
+        }
+        let seen = tally.commits();
+        if let Ok((commits, authors)) = tally.finish() {
+            assert_eq!(commits, seen);
+            assert_eq!(authors.iter().map(|a| a.commits).sum::<u32>(), commits);
+            assert!(authors.iter().all(|a| a.first <= a.last && a.commits > 0));
+        }
+    });
+}
+
+#[test]
 fn cli_install_files() {
     use plx_core::cli_install::{
         first_in_path, path_has_dir, path_with_dir, path_with_dir_before, shim_script, shim_target,

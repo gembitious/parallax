@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use plx_core::ai_notes::{AiAttribution, AiItem, AiNotes};
+use plx_core::authors::{self, Authors, Scope as AuthorScope};
 use plx_core::blame::BlameOptions;
 use plx_core::blame_session::{SessionEvent, Sessions};
 use plx_core::cache::DiskCache;
@@ -719,6 +720,22 @@ pub async fn refs_list(git: State<'_, Arc<GitState>>, repo: String) -> Result<Re
     blocking(git, move |git| {
         let repo = git.repos.for_path(Path::new(&repo))?;
         refs::list(&repo)
+    })
+    .await
+}
+
+/// 작성자 보기(M18): 작성자마다 커밋 수와 처음·마지막 커밋(`git log` 한 번, 결과는 시작점이 같으면 캐시).
+/// `path`는 저장소 기준 경로(없으면 저장소 전체).
+#[tauri::command]
+pub async fn authors_list(
+    git: State<'_, Arc<GitState>>,
+    repo: String,
+    scope: AuthorScope,
+    path: Option<String>,
+) -> Result<Authors, String> {
+    blocking(git, move |git| {
+        let repo = git.repos.for_path(Path::new(&repo))?;
+        authors::list(&repo, scope, path.as_deref(), git.cache.as_deref())
     })
     .await
 }

@@ -226,6 +226,7 @@ export function buildMenus(src: MenuSources): BarMenu[] {
     ...fromCommand(ws("reflog")),
     ...fromCommand(ws("stash")),
     ...fromCommand(ws("refs")),
+    ...fromCommand(ws("authors")),
     ...fromCommand(ws("browse")),
     ...fromCommand(ws("browseWorktree")),
     ...fromCommand(ws("compare")),

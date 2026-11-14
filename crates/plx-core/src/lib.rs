@@ -4,6 +4,7 @@
 //! UI(Tauri)에 의존하지 않으며, 모든 모듈은 단위 테스트를 가진다.
 
 pub mod ai_notes;
+pub mod authors;
 pub mod blame;
 pub mod blame_session;
 pub mod cache;

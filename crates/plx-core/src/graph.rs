@@ -702,7 +702,8 @@ type Loaded = (
 /// 검색을 새 검색이 멈췄을 때의 오류(화면은 무시한다)
 pub const CANCELLED: &str = "취소했다";
 
-/// 그래프 행 거르기([`GraphSessions::search_log`]): 경로를 바꾼 커밋, 코드가 생기거나 사라진 커밋, 또는 둘 다
+/// 그래프 행 거르기([`GraphSessions::search_log`]): 경로를 바꾼 커밋, 코드가 생기거나 사라진 커밋, 작성자, 메시지,
+/// 작성 기간. 준 것을 모두 만족하는 커밋이다.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LogFilter {
@@ -711,6 +712,18 @@ pub struct LogFilter {
     pub path: Option<String>,
     #[serde(default)]
     pub pickaxe: Option<Pickaxe>,
+    /// 작성자(`이름 <메일>`, mailmap을 따른다)에 이 글이 든 커밋(`--author`, 정규식이 아니라 글 그대로)
+    #[serde(default)]
+    pub author: Option<String>,
+    /// 메시지에 이 글이 든 커밋(`--grep`, 글 그대로)
+    #[serde(default)]
+    pub message: Option<String>,
+    /// 이 날짜 뒤에 작성한 커밋(`--since`, git의 날짜: `2026-01-01`, `2 weeks ago`)
+    #[serde(default)]
+    pub since: Option<String>,
+    /// 이 날짜 전에 작성한 커밋(`--until`)
+    #[serde(default)]
+    pub until: Option<String>,
 }
 
 /// 코드 찾기(git의 pickaxe)
@@ -729,23 +742,61 @@ impl LogFilter {
         if self.path.as_deref().is_some_and(|p| p.trim().is_empty()) {
             return Err("빈 경로다".to_owned());
         }
+        let one_line = |text: &str| !text.contains('\0') && !text.contains('\n');
+        for (name, value) in [
+            ("작성자", &self.author),
+            ("메시지", &self.message),
+            ("날짜", &self.since),
+            ("날짜", &self.until),
+        ] {
+            match value.as_deref() {
+                Some(text) if text.trim().is_empty() => return Err(format!("{name}가 비었다")),
+                Some(text) if !one_line(text) => return Err(format!("{name}는 한 줄이어야 한다")),
+                _ => {}
+            }
+        }
         match &self.pickaxe {
             Some(p) if p.text.is_empty() => Err("찾을 코드가 비었다".to_owned()),
-            Some(p) if p.text.contains('\0') || p.text.contains('\n') => {
-                Err("찾을 코드는 한 줄이어야 한다".to_owned())
+            Some(p) if !one_line(&p.text) => Err("찾을 코드는 한 줄이어야 한다".to_owned()),
+            None if self.path.is_none()
+                && self.author.is_none()
+                && self.message.is_none()
+                && self.since.is_none()
+                && self.until.is_none() =>
+            {
+                Err("찾을 것이 없다".to_owned())
             }
-            None if self.path.is_none() => Err("찾을 것이 없다".to_owned()),
             _ => Ok(()),
         }
     }
 
-    /// `git log`에 줄 인자(경로 뺀 것)
+    /// `git log`에 줄 인자(경로 뺀 것). 작성자·메시지는 글 그대로(`-F`) 찾고, 코드 찾기가 없을 때만 대소문자를 가리지
+    /// 않는다(`-i`는 `-S`·`-G`도 대소문자를 가리지 않게 한다: 코드 이름은 가린다, M12).
     pub fn args(&self) -> Vec<String> {
-        match &self.pickaxe {
+        let mut out = match &self.pickaxe {
             Some(Pickaxe { text, regex: false }) => vec![format!("-S{text}")],
             Some(Pickaxe { text, regex: true }) => vec![format!("-G{text}")],
             None => Vec::new(),
+        };
+        if let Some(author) = &self.author {
+            out.push(format!("--author={}", author.trim()));
         }
+        if let Some(message) = &self.message {
+            out.push(format!("--grep={}", message.trim()));
+        }
+        if self.author.is_some() || self.message.is_some() {
+            out.push("--fixed-strings".to_owned());
+            if self.pickaxe.is_none() {
+                out.push("--regexp-ignore-case".to_owned());
+            }
+        }
+        if let Some(since) = &self.since {
+            out.push(format!("--since={}", since.trim()));
+        }
+        if let Some(until) = &self.until {
+            out.push(format!("--until={}", until.trim()));
+        }
+        out
     }
 
     fn add_args(&self, command: &mut std::process::Command) {
@@ -1487,7 +1538,7 @@ impl GraphSessions {
     pub fn search_path(&self, id: u64, path: &str) -> Result<Vec<usize>, String> {
         let filter = LogFilter {
             path: Some(path.to_owned()),
-            pickaxe: None,
+            ..LogFilter::default()
         };
         self.search_log(id, &filter, |_| true)
     }

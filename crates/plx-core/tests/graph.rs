@@ -657,11 +657,11 @@ fn search_code_like_git_log() {
         for word in added_words(&repo, 6) {
             for regex in [false, true] {
                 filters.push(LogFilter {
-                    path: None,
                     pickaxe: Some(Pickaxe {
                         text: word.clone(),
                         regex,
                     }),
+                    ..LogFilter::default()
                 });
             }
             let path = git_text(&repo, &["ls-files"])
@@ -675,17 +675,54 @@ fn search_code_like_git_log() {
                     text: word,
                     regex: false,
                 }),
+                ..LogFilter::default()
             });
         }
         for (text, regex) in [("^[a-z]+", true), ("없는 코드 xyz", false), ("a.b", false)] {
             filters.push(LogFilter {
-                path: None,
                 pickaxe: Some(Pickaxe {
                     text: text.to_owned(),
                     regex,
                 }),
+                ..LogFilter::default()
             });
         }
+        // 작성자·메시지·기간(M18): 작성자는 `이름 <메일>`과 대소문자를 바꾼 메일, 코드 찾기와 함께(대소문자를 가린다)
+        let people = git_text(&repo, &["log", "--format=%aN <%aE>", "HEAD", "--branches"]);
+        let mut people: Vec<&str> = people.lines().collect();
+        people.sort_unstable();
+        people.dedup();
+        for person in &people {
+            filters.push(LogFilter {
+                author: Some(person.to_string()),
+                ..LogFilter::default()
+            });
+            filters.push(LogFilter {
+                author: Some(person.to_uppercase()),
+                since: Some("2001-01-01".to_owned()),
+                ..LogFilter::default()
+            });
+        }
+        let word = added_words(&repo, 1).pop().unwrap();
+        filters.push(LogFilter {
+            author: Some(people[0].to_uppercase()),
+            pickaxe: Some(Pickaxe {
+                text: word,
+                regex: false,
+            }),
+            ..LogFilter::default()
+        });
+        let subject = git_text(&repo, &["log", "-1", "--format=%s"]);
+        let first_word = subject.split_whitespace().next().unwrap().to_lowercase();
+        filters.push(LogFilter {
+            message: Some(first_word),
+            until: Some("2100-01-01".to_owned()),
+            ..LogFilter::default()
+        });
+        filters.push(LogFilter {
+            message: Some("[(.".to_owned()),
+            ..LogFilter::default()
+        });
         for filter in filters {
             let mut args = vec![
                 "log".to_owned(),
@@ -717,16 +754,24 @@ fn search_code_like_git_log() {
 
         // 고칠 수 없는 입력은 git을 띄우기 전에, 틀린 정규식은 git의 오류로 끝난다.
         let pickaxe = |text: &str, regex| LogFilter {
-            path: None,
             pickaxe: Some(Pickaxe {
                 text: text.to_owned(),
                 regex,
             }),
+            ..LogFilter::default()
         };
         for bad in [
             pickaxe("", false),
             pickaxe("두\n줄", false),
             LogFilter::default(),
+            LogFilter {
+                author: Some("  ".to_owned()),
+                ..LogFilter::default()
+            },
+            LogFilter {
+                since: Some("두\n줄".to_owned()),
+                ..LogFilter::default()
+            },
         ] {
             assert!(sessions.search_log(id, &bad, |_| true).is_err(), "{bad:?}");
         }

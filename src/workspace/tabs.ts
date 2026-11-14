@@ -42,5 +42,7 @@ export function tabLabel(entry: StackEntry): TabLabel {
       return { name: "reflog", detail: null, title };
     case "refs":
       return { name: "브랜치", detail: null, title };
+    case "authors":
+      return { name: "작성자", detail: entry.path ? lastName(entry.path) : null, title };
   }
 }
