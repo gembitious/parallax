@@ -375,7 +375,7 @@ export function AuthorsView({ repo, path, visible, active, slot, depth, onShown,
         </span>
         <span className="file-path mono" title={path ? `${repoOf()} · ${path}` : repoOf()}>
           <span className="file-name">{path ?? lastName(repoOf())}</span>
-          {path && <span className="muted"> 을(를) 바꾼 커밋</span>}
+          {path && <span className="muted">을(를) 바꾼 커밋</span>}
         </span>
         {depth > 1 && (
           <span className="badge" title="q로 앞 화면으로 돌아간다">

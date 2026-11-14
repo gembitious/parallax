@@ -259,12 +259,20 @@ function GraphPane({
         run: () => changeScope(s.scope),
       }),
     ),
-    { label: "검색 (메시지·작성자·sha, path:경로, code:코드)", keys: "/", run: () => openSearch() },
+    { label: "검색 (메시지·작성자·sha, path:경로, code:코드, author:작성자, since:날짜)", keys: "/", run: () => openSearch() },
     {
       label: "코드를 넣거나 지운 커밋 찾기…",
       detail: "검색 칸에 code: (git log -S) · regex:는 -G",
       run: () => {
         setSearch({ open: true, input: "code:" });
+        searchRef.current?.focus();
+      },
+    },
+    {
+      label: "작성자의 커밋 찾기…",
+      detail: "검색 칸에 author: · since:·until:로 기간",
+      run: () => {
+        setSearch({ open: true, input: "author:" });
         searchRef.current?.focus();
       },
     },
@@ -882,7 +890,7 @@ function GraphPane({
           }),
         ),
         "separator",
-        { label: "검색 (메시지·작성자·sha, path:경로, code:코드)", keys: "/", run: openSearch },
+        { label: "검색 (메시지·작성자·sha, path:경로, code:코드, author:작성자, since:날짜)", keys: "/", run: openSearch },
         { label: "가속 설정 (commit-graph·Bloom 필터)", detail: "그래프·히스토리를 빠르게", run: () => setAccelRequest((n) => n + 1) },
         { label: "에디터로 열기", keys: "o", detail: "작업트리 폴더", run: () => void openEditor() },
       ],
