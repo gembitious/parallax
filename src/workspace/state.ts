@@ -176,6 +176,8 @@ function restoreEntry(saved: SavedEntry): StackEntry {
       return { key, view: "reflog", repo: saved.repo, which: saved.which, via: "reflog" };
     case "refs":
       return { key, view: "refs", repo: saved.repo, show: saved.show, via: "refs" };
+    case "authors":
+      return { key, view: "authors", repo: saved.repo, path: saved.path, via: "authors" };
   }
 }
 
@@ -312,7 +314,7 @@ function blameEntry(navigation: Extract<Navigation, { kind: "parent" | "older" |
 }
 
 function panelEntry(
-  navigation: Extract<Navigation, { kind: "commit" | "history" | "graph" | "search" | "reflog" | "refs" }>,
+  navigation: Extract<Navigation, { kind: "commit" | "history" | "graph" | "search" | "reflog" | "refs" | "authors" }>,
   from: Pane,
 ): PanelEntry {
   const key = newKey();
@@ -347,6 +349,8 @@ function panelEntry(
       return { key, view: "reflog", repo: navigation.repo, which: navigation.which, via: "reflog", from };
     case "refs":
       return { key, view: "refs", repo: navigation.repo, show: navigation.show, via: "refs", from };
+    case "authors":
+      return { key, view: "authors", repo: navigation.repo, path: navigation.path, via: "authors", from };
   }
 }
 
@@ -377,6 +381,8 @@ function copyEntry(entry: StackEntry, line: number | null | undefined): StackEnt
       return { key, view: "reflog", repo: entry.repo, which: entry.which, via: "reflog" };
     case "refs":
       return { key, view: "refs", repo: entry.repo, show: entry.show, via: "refs" };
+    case "authors":
+      return { key, view: "authors", repo: entry.repo, path: entry.path, via: "authors" };
   }
 }
 
@@ -666,7 +672,8 @@ export function workspaceReducer(state: Workspace, action: WorkspaceAction): Wor
           navigation.kind === "graph" ||
           navigation.kind === "search" ||
           navigation.kind === "reflog" ||
-          navigation.kind === "refs"
+          navigation.kind === "refs" ||
+          navigation.kind === "authors"
             ? navigation.repo
             : navigation.target.repo;
         const base = { ...openWorkspace(repo), shown: state.shown };
@@ -676,7 +683,8 @@ export function workspaceReducer(state: Workspace, action: WorkspaceAction): Wor
           navigation.kind === "graph" ||
           navigation.kind === "search" ||
           navigation.kind === "reflog" ||
-          navigation.kind === "refs"
+          navigation.kind === "refs" ||
+          navigation.kind === "authors"
         ) {
           return pushPanel(base, panelEntry(navigation, "editor"), false);
         }

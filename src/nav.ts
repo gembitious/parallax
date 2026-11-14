@@ -32,6 +32,8 @@ export type Navigation = (
   | { kind: "reflog"; repo: string; which: ReflogWhich }
   /** 브랜치·태그 목록(M14): 로컬 브랜치, 원격 브랜치, 태그 가운데 처음 보일 것 */
   | { kind: "refs"; repo: string; show: RefKind }
+  /** 작성자 보기(M18): 작성자마다 커밋 수. `path`가 있으면 그 파일·폴더를 바꾼 커밋만 */
+  | { kind: "authors"; repo: string; path: string | null }
   /** 리비전 둘러보기(M7-4): 파일 트리를 그 리비전의 트리로 바꾼다(화면을 열지 않는다. 작업 공간이 받는다) */
   | { kind: "browse"; repo: string; rev: string }
 ) & {
@@ -44,6 +46,9 @@ export type ReflogWhich = "head" | "stash";
 
 /** 브랜치·태그 목록의 종류(plx-core/src/refs.rs Kind) */
 export type RefKind = "branch" | "remote" | "tag";
+
+/** 작성자 보기에서 세는 커밋(plx-core/src/authors.rs Scope): HEAD에서 닿는 것, 모든 브랜치·원격·태그에서 닿는 것 */
+export type AuthorScope = "head" | "all";
 
 /** 두 지점의 비교(plx-core/src/changes.rs): `base` 리비전 ↔ `target` 리비전(null이면 작업트리) */
 export type Compare = {
@@ -95,7 +100,7 @@ export type PlxRequest = {
 export type Shown = { request: PlxRequest; receivedMs: number };
 
 /** 탐색 스택의 화면 하나. 아래 화면은 숨긴 채 살려 둬 뒤로 오면 커서·스크롤이 그대로다. */
-export type StackEntry = BlameEntry | CommitEntry | HistoryEntry | GraphEntry | SearchEntry | ReflogStackEntry | RefsStackEntry;
+export type StackEntry = BlameEntry | CommitEntry | HistoryEntry | GraphEntry | SearchEntry | ReflogStackEntry | RefsStackEntry | AuthorsStackEntry;
 
 export type BlameEntry = {
   key: number;
@@ -186,6 +191,17 @@ export type RefsStackEntry = {
   request?: number;
 };
 
+export type AuthorsStackEntry = {
+  key: number;
+  view: "authors";
+  /** 저장소 안의 아무 경로 */
+  repo: string;
+  /** 센 파일·폴더(저장소 기준). 없으면 저장소 전체 */
+  path: string | null;
+  via: "authors";
+  request?: number;
+};
+
 /** 탐색 스택(탭 하나, 패널)이 이보다 깊어지면 가장 아래 화면부터 버린다. */
 export const MAX_STACK = 30;
 
@@ -207,6 +223,7 @@ export function titleOf(entry: StackEntry): string {
   // 화면 안에서 HEAD reflog ↔ stash를 바꾸므로 이름은 하나다(stash도 refs/stash의 reflog다).
   if (entry.view === "reflog") return `reflog ${lastName(entry.repo)}`;
   if (entry.view === "refs") return `브랜치·태그 ${lastName(entry.repo)}`;
+  if (entry.view === "authors") return `작성자 ${entry.path ? entry.path : lastName(entry.repo)}`;
   if (entry.view === "search") return `검색 ${lastName(entry.repo)}${entry.rev ? ` @${revName(entry.rev)}` : ""}`;
   const { target } = entry;
   const at = target.rev ? ` @${shortSha(target.rev)}` : "";

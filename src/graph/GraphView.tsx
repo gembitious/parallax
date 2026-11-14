@@ -14,7 +14,7 @@ import { subscribeDark } from "../settings/store";
 import { drawRows, graphWidth, readPalette, ROW_HEIGHT, type Palette, type Visible } from "./draw";
 import { reloadFocus, type Focus } from "./focus";
 import { CHUNK, RowCache, rowWidth } from "./rows";
-import { filterLabel, nextRow, parseQuery, rowMatches, sameFilter, type LogFilter, type Query } from "./search";
+import { filterKind, filterLabel, nextRow, parseQuery, rowMatches, sameFilter, type LogFilter, type Query } from "./search";
 import { CANCELLED, openGraph, type GraphHandle } from "./session";
 import { refsMoved, watchRepo } from "../watch";
 import { WorktreePicker } from "../worktree/WorktreePicker";
@@ -760,7 +760,8 @@ function GraphPane({
     };
     if (query.kind === "log") {
       const filter = query.filter;
-      const none = () => showToast(`${filterLabel(filter)}: ${filter.pickaxe ? "넣거나 지운" : "바꾼"} 커밋이 없다`);
+      const none = () =>
+        showToast(`${filterLabel(filter)}: ${filter.pickaxe ? "넣거나 지운 커밋이" : filter.path ? "바꾼 커밋이" : "맞는 커밋이"} 없다`);
       if (last?.kind === "log" && last.done && sameFilter(last.filter, filter)) {
         const row = nextRow(last.rows, from, forward);
         if (row === null) none();
@@ -1137,7 +1138,7 @@ function GraphPane({
             ref={searchRef}
             type="search"
             value={search.input}
-            placeholder="메시지·작성자·sha · path:경로 · code:넣거나 지운 글 · regex:바뀐 줄 (Enter 다음, Shift+Enter 이전, Esc 닫기)"
+            placeholder="메시지·작성자·sha · path:경로 · code:넣거나 지운 글 · regex:바뀐 줄 · author:작성자 · since:날짜 (Enter 다음, Shift+Enter 이전, Esc 닫기)"
             aria-label="그래프 검색"
             onChange={(e) => setSearch({ open: true, input: e.target.value })}
             onKeyDown={(e) => {
@@ -1154,7 +1155,7 @@ function GraphPane({
           />
           <span className="search-status" role="status">
             {found?.kind === "log"
-              ? `${found.filter.pickaxe ? "코드" : "경로"} 일치 ${formatCount(found.rows.length)}개${found.done ? "" : " · 찾는 중…"}`
+              ? `${filterKind(found.filter)} 일치 ${formatCount(found.rows.length)}개${found.done ? "" : " · 찾는 중…"}`
               : searching
                 ? "찾는 중…"
                 : null}

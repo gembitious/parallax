@@ -144,6 +144,16 @@ describe("배치 남기기·되살리기", () => {
     expect(lines(readLayout(history(7)))).toEqual({ start: 3, end: 9 });
   });
 
+  it("작성자 보기도 패널에 남기고 되살린다(경로 포함)", () => {
+    const s = run(emptyWorkspace("/repo"), nav({ kind: "authors", repo: "/repo", path: "src/한글" }, { pane: "editor", tab: -1 }));
+    const layout = readLayout(JSON.parse(JSON.stringify(toLayout(s))))!;
+    expect(layout.panel).toEqual([{ view: "authors", repo: "/repo", path: "src/한글", from: "editor" }]);
+    const restored = restoreWorkspace("/repo", layout);
+    expect(restored.panel.map((e) => e.view === "authors" && e.path)).toEqual(["src/한글"]);
+    const broken = { ...layout, panel: [{ view: "authors", repo: "/repo", path: 3, from: "panel" }] };
+    expect(readLayout(JSON.parse(JSON.stringify(broken)))?.panel ?? []).toEqual([]);
+  });
+
   it("남길 것이 없으면 null", () => {
     expect(toLayout(emptyWorkspace("/repo"))).toBeNull();
     expect(toLayout(emptyWorkspace())).toBeNull();

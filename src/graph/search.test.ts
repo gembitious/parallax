@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { codeQuery, filterLabel, nextRow, parseQuery, rowMatches, sameFilter } from "./search";
+import { authorQuery, codeQuery, filterKind, filterLabel, nextRow, parseQuery, rowMatches, sameFilter } from "./search";
 import type { GraphRow } from "./types";
 
 describe("parseQuery", () => {
@@ -22,6 +22,52 @@ describe("parseQuery", () => {
     expect(parseQuery("code: path:src")).toEqual(log(null, { text: "path:src", regex: false }));
     expect(parseQuery("code:   ")).toBeNull();
     expect(parseQuery("code:x path:  ")).toEqual(log(null, { text: "x", regex: false }));
+  });
+
+  it("adds author, message and date filters (M18)", () => {
+    expect(parseQuery("author:김철수 <kim@example.com>")).toEqual({
+      kind: "log",
+      filter: { path: null, pickaxe: null, author: "김철수 <kim@example.com>" },
+    });
+    expect(parseQuery("작성자: kim path:src/")).toEqual({
+      kind: "log",
+      filter: { path: "src/", pickaxe: null, author: "kim" },
+    });
+    expect(parseQuery("since:2 weeks ago until: 2026-11-01")).toEqual({
+      kind: "log",
+      filter: { path: null, pickaxe: null, since: "2 weeks ago", until: "2026-11-01" },
+    });
+    // 거르기 앞의 글은 메시지에서 찾는다
+    expect(parseQuery("고침 이후:2026-01-01")).toEqual({
+      kind: "log",
+      filter: { path: null, pickaxe: null, message: "고침", since: "2026-01-01" },
+    });
+    // 코드 찾기 뒤에 어느 차례로든 이어 붙인다(값은 다음 거르기까지)
+    expect(parseQuery("code:fn main() author:Lee Kim path:src")).toEqual({
+      kind: "log",
+      filter: { path: "src", pickaxe: { text: "fn main()", regex: false }, author: "Lee Kim" },
+    });
+    expect(parseQuery("re:a|b BEFORE:2020-01-01")).toEqual({
+      kind: "log",
+      filter: { path: null, pickaxe: { text: "a|b", regex: true }, until: "2020-01-01" },
+    });
+    // 값이 빈 거르기만 있으면 찾을 것이 없다. 빈 거르기는 버린다.
+    expect(parseQuery("author:   ")).toBeNull();
+    expect(parseQuery("since: author:kim")).toEqual({ kind: "log", filter: { path: null, pickaxe: null, author: "kim" } });
+    expect(parseQuery("fix author:")).toEqual({ kind: "log", filter: { path: null, pickaxe: null, message: "fix" } });
+    // 거르기 이름이 아닌 `글:`은 그대로 메시지·작성자 검색
+    expect(parseQuery("fix: crash")).toEqual({ kind: "text", text: "fix: crash" });
+    expect(authorQuery("Kim", "k@x", null)).toBe("author:Kim <k@x>");
+    expect(parseQuery(authorQuery("Kim Lee", "k@x", "src/a b.ts"))).toEqual({
+      kind: "log",
+      filter: { path: "src/a b.ts", pickaxe: null, author: "Kim Lee <k@x>" },
+    });
+    expect(filterLabel({ path: "src", pickaxe: null, author: "kim", since: "2026-01-01", message: "fix" })).toBe(
+      "메시지 fix · 작성자 kim · 2026-01-01 이후 · 경로 src",
+    );
+    expect(filterKind({ path: "src", pickaxe: null, author: "kim" })).toBe("작성자");
+    expect(sameFilter({ path: null, pickaxe: null, author: "a" }, { path: null, pickaxe: null, author: "b" })).toBe(false);
+    expect(sameFilter({ path: null, pickaxe: null, author: "a" }, { path: null, pickaxe: null, author: "a" })).toBe(true);
   });
 
   it("names and compares filters", () => {

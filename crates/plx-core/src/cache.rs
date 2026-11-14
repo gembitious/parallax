@@ -55,6 +55,17 @@ impl CacheKey {
         }
     }
 
+    /// 작성자 보기([`crate::authors`]). `tips`는 시작점의 지문(HEAD 커밋, 또는 모든 참조와 그 끝), `path`는 센 경로
+    /// (빈 글이면 저장소 전체), `settings`는 [`crate::repo::Repo::history_settings`](mailmap).
+    pub fn authors(repo: &Path, tips: &str, path: &str, settings: &str) -> CacheKey {
+        CacheKey {
+            text: format!(
+                "{FORMAT}\nauthors\n{}\n{tips}\n{path}\n{settings}",
+                repo.display()
+            ),
+        }
+    }
+
     /// `start` 커밋의 `path` 파일 `first`..=`last`줄의 라인 히스토리.
     /// `settings`는 [`crate::repo::Repo::line_history_settings`].
     pub fn line_history(

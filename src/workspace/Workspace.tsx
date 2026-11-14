@@ -28,6 +28,7 @@ import { openInEditor } from "../editor";
 import { GraphView } from "../graph/GraphView";
 import { ReflogView } from "../reflog/ReflogView";
 import { RefsView } from "../refs/RefsView";
+import { AuthorsView } from "../authors/AuthorsView";
 import { SearchView } from "../search/SearchView";
 import { Help } from "../Help";
 import { HistoryView } from "../history/HistoryView";
@@ -603,6 +604,12 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
     if (!repo) return;
     dispatch({ type: "navigate", navigation: { kind: "refs", repo, show: "branch" }, from: { pane: "editor", tab: -1 } });
   };
+  /** 작성자 보기(아래 패널). `path`가 있으면 그 파일·폴더를 바꾼 커밋만 센다 */
+  const openAuthors = (path: string | null = null) => {
+    const { repo } = latest.current.state;
+    if (!repo) return;
+    dispatch({ type: "navigate", navigation: { kind: "authors", repo, path }, from: { pane: "editor", tab: -1 } });
+  };
   /** 두 리비전 비교(고르기 창에서 고른 것, 아래 패널) */
   const openCompare = (compare: Compare) => {
     const { repo } = latest.current.state;
@@ -707,6 +714,13 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
       detail: "upstream 대비 앞섬·뒤처짐 (아래 패널)",
       app: true,
       run: openRefs,
+    },
+    {
+      id: "authors",
+      label: "작성자",
+      detail: "누가 얼마나 썼나 (아래 패널)",
+      app: true,
+      run: () => openAuthors(),
     },
     {
       id: "browse",
@@ -1077,6 +1091,8 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
           <ReflogView {...common} repo={entry.repo} which={entry.which} />
         ) : entry.view === "refs" ? (
           <RefsView {...common} repo={entry.repo} show={entry.show} />
+        ) : entry.view === "authors" ? (
+          <AuthorsView {...common} repo={entry.repo} path={entry.path} />
         ) : (
           <CommitView
             {...common}
@@ -1275,6 +1291,7 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
                 disabled: repo === null,
                 run: () => repo !== null && openHistory(repo, path, rev, place),
               },
+              { label: "작성자", detail: "이 파일을 바꾼 사람", disabled: repo === null, run: () => openAuthors(path) },
               ...(rev === null
                 ? [{ label: "작업트리 변경", detail: "이 파일을 골라서", disabled: repo === null, run: () => openChanges(path) }]
                 : []),
@@ -1305,6 +1322,7 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
         { label: "커밋 그래프", keys: "G", run: openGraph },
         { label: "작업트리 변경", keys: "D", detail: "커밋하지 않은 것", run: () => openChanges() },
         { label: "브랜치·태그", detail: "앞섬·뒤처짐", run: openRefs },
+        { label: "작성자", detail: "누가 얼마나 썼나", run: () => openAuthors() },
         { label: "폴더 히스토리", detail: "저장소 전체", run: () => openHistory(repo, ".", null, fromActive()) },
         "separator",
         { label: "리비전 둘러보기…", detail: "파일 트리를 그 커밋 시점으로", run: () => setPickingRev(true) },
@@ -1402,6 +1420,7 @@ export function WorkspaceView({ state, dispatch, reload, navigate, onShown, hide
                   dispatch({ type: "open", repo: state.repo!, path, missing, preview: false, side: true, rev: treeRev?.sha ?? null })
                 }
                 onHistory={(path) => openHistory(state.repo!, path, treeRev?.sha ?? null, fromActive())}
+                onAuthors={(path) => openAuthors(path)}
                 onLeave={leaveTree}
               />
             </aside>

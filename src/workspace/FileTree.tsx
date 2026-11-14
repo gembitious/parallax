@@ -40,11 +40,13 @@ type Props = {
   onOpenSide(path: string, missing: boolean): void;
   /** 우클릭 메뉴: 파일(폴더면 그 아래) 히스토리 */
   onHistory(path: string): void;
+  /** 우클릭 메뉴: 그 파일·폴더를 바꾼 사람들(작성자 보기) */
+  onAuthors(path: string): void;
   /** Esc·q: 에디터(또는 패널)로 돌아간다 */
   onLeave(): void;
 };
 
-export function FileTree({ repo, rev, focused, focusTick, status, activeFile, onOpen, onOpenSide, onHistory, onLeave }: Props) {
+export function FileTree({ repo, rev, focused, focusTick, status, activeFile, onOpen, onOpenSide, onHistory, onAuthors, onLeave }: Props) {
   const [listings, setListings] = useState<ReadonlyMap<string, DirListing>>(() => new Map());
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const [selected, setSelected] = useState<string | null>(null);
@@ -172,6 +174,7 @@ export function FileTree({ repo, rev, focused, focusTick, status, activeFile, on
       return [
         { label: row.open ? "접기" : "펼치기", run: () => apply({ kind: "toggle", path: row.path }) },
         { label: "폴더 히스토리", detail: "이 아래를 바꾼 커밋", run: () => onHistory(row.path) },
+        { label: "작성자", detail: "이 아래를 바꾼 사람", run: () => onAuthors(row.path) },
         "separator",
         ...copies,
       ];
@@ -182,6 +185,7 @@ export function FileTree({ repo, rev, focused, focusTick, status, activeFile, on
       { label: "옆에 열기", keys: `${MOD}Enter`, detail: "오른쪽 에디터 그룹", run: () => onOpenSide(row.path, row.missing) },
       "separator",
       { label: "파일 히스토리", run: () => onHistory(row.path) },
+      { label: "작성자", detail: "이 파일을 바꾼 사람", run: () => onAuthors(row.path) },
       {
         label: "에디터로 열기",
         detail: row.missing ? "작업트리에서 지운 파일" : undefined,

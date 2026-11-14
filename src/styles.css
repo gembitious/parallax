@@ -2926,6 +2926,41 @@ mark.quick-open-hit {
   opacity: 0.55;
 }
 
+/* 작성자 보기(M18): 이름(메일), 커밋 수 막대, 수, 마지막 커밋 */
+.authors-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.authors-email {
+  font-size: 11px;
+}
+
+.authors-bar {
+  flex-shrink: 0;
+  width: 120px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.authors-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+.authors-count {
+  flex-shrink: 0;
+  width: 56px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 /* 멈춰 있는 merge·rebase 등(M15): 상태 막대의 이름표. 충돌이 남았으면 충돌 색 */
 button.status-item.status-progress {
   color: var(--fg);

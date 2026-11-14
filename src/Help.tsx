@@ -34,13 +34,14 @@ const WORKSPACE: Key[] = [
   { keys: "D", what: "작업트리 변경", note: "커밋하지 않은 것을 HEAD와 견준다 · 파일을 고치면 바로 다시 견준다" },
   { keys: "HEAD reflog · stash 목록", what: "HEAD가 거쳐 간 커밋과 stash", note: "명령 팔레트·보기 메뉴 · 리셋으로 잃은 커밋도 찾는다" },
   { keys: "브랜치·태그", what: "브랜치·원격·태그 목록", note: "명령 팔레트·보기 메뉴 · upstream 대비 앞섬↑·뒤처짐↓, 체크아웃한 워크트리" },
+  { keys: "작성자", what: "누가 얼마나 썼나", note: "명령 팔레트·보기 메뉴 · 트리의 파일·폴더 우클릭은 그 경로만" },
   { keys: "두 리비전 비교…", what: "브랜치·태그·커밋 둘을 견준다", note: "명령 팔레트·보기 메뉴 · 그래프에서는 m으로 표시하고 d" },
 ];
 
 /** 파일 트리에는 없는 화면 키(에디터로 열기, 워크트리, 뒤로) */
 const TREE_SKIPS = new Set(["o", "W", "q"]);
 
-export type HelpView = "workspace" | "blame" | "commit" | "history" | "graph" | "search" | "reflog" | "refs";
+export type HelpView = "workspace" | "blame" | "commit" | "history" | "graph" | "search" | "reflog" | "refs" | "authors";
 
 const TITLES: Record<HelpView, string> = {
   workspace: "파일 트리",
@@ -51,6 +52,7 @@ const TITLES: Record<HelpView, string> = {
   search: "저장소 검색",
   reflog: "reflog · stash",
   refs: "브랜치 · 태그",
+  authors: "작성자",
 };
 
 const KEYS: Record<HelpView, Key[]> = {
@@ -123,6 +125,11 @@ const KEYS: Record<HelpView, Key[]> = {
       what: "그 글을 넣거나 지운 커밋 (git log -S)",
       note: "regex:식은 바뀐 줄이 정규식에 맞는 커밋(-G) · 뒤에 path:경로를 붙여 좁힌다 · 찾는 동안 온 것부터",
     },
+    {
+      keys: "/ author:이름",
+      what: "그 사람이 쓴 커밋",
+      note: "since:날짜·until:날짜(2026-01-01, 2 weeks ago)로 기간 · 거르기 앞에 친 글은 메시지에서 찾는다 · 이어 붙인다",
+    },
     { keys: "n / N", what: "다음·이전 검색 결과" },
     { keys: "m", what: "비교 기준으로 표시", note: `${MOD}클릭으로도 · 다시 누르거나 Esc로 지운다` },
     { keys: "F", what: "이 커밋의 파일에서 찾기", note: "저장소 검색을 이 리비전으로" },
@@ -163,6 +170,14 @@ const KEYS: Record<HelpView, Key[]> = {
     { keys: "y", what: "커밋 sha 복사", note: "우클릭에 이름 복사, 다른 워크트리로 옮기기" },
     { keys: "s", what: "브랜치 → 원격 → 태그" },
     { keys: "/", what: "거르기", note: "이름·sha·요약·작성자·upstream · Esc로 지운다" },
+  ],
+  authors: [
+    { keys: "j / k", what: "다음·이전 사람", note: "merge는 세지 않는다 · 이름·메일은 .mailmap을 따른다" },
+    { keys: "Enter · G", what: "이 사람의 커밋을 그래프에서", note: "그래프 검색 author: · n/N으로 옮겨 다닌다" },
+    { keys: "y", what: "이름 <메일> 복사", note: "우클릭에 메일 복사" },
+    { keys: "s", what: "HEAD ↔ 모든 브랜치", note: "모든 브랜치·원격 브랜치·태그에서 닿는 커밋" },
+    { keys: "t", what: "커밋 수 ↔ 최근 차례" },
+    { keys: "/", what: "거르기", note: "이름·메일 · Esc로 지운다" },
   ],
 };
 
